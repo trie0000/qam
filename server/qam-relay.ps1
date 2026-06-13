@@ -231,8 +231,18 @@ function Invoke-Route { param($Ctx)
             return
         }
         '^/qam/fetch$' {
-            try { Send-Json $Ctx (Invoke-QualysFetch (Get-Body $req | ConvertFrom-Json)) }
-            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            # Qualys 応答 XML は巨大になり得る(Host 1000件等)。ConvertTo-Json で包むと PS5.1 が
+            # 落ちるので、XML は生 body、status / nextUrl は応答ヘッダで返す。
+            try {
+                $res = Invoke-QualysFetch (Get-Body $req | ConvertFrom-Json)
+                $r = $Ctx.Response; Set-Cors $r
+                $r.Headers['X-QAM-Status'] = [string]$res.status
+                if ($res.nextUrl) { $r.Headers['X-QAM-Next'] = [Uri]::EscapeDataString([string]$res.nextUrl) }
+                $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$res.xml)
+                $r.StatusCode = $(if ($res.ok) { 200 } else { 502 })
+                $r.ContentType = 'application/xml; charset=utf-8'
+                $r.ContentLength64 = $bytes.Length; $r.OutputStream.Write($bytes, 0, $bytes.Length); $r.OutputStream.Close()
+            } catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
             return
         }
         '^/qam/file/list$' {
@@ -246,18 +256,23 @@ function Invoke-Route { param($Ctx)
             Send-Json $Ctx @{ ok = $true }; return
         }
         '^/qam/file$' {
+            # 大きなファイル本体は JSON で包まず生 body で授受する。PS5.1 の ConvertTo/From-Json
+            # (JavaScriptSerializer) は大きな文字列で失敗する（"System.String 型に変換できません"）ため。
+            # path / append はクエリで渡す。
             if ($req.HttpMethod -eq 'POST') {
-                $b = Get-Body $req | ConvertFrom-Json
-                $p = Resolve-SafePath $b.path
+                $p = Resolve-SafePath $q['path']
                 $dir = Split-Path $p -Parent
                 if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-                if ($b.append) { Add-Content -LiteralPath $p -Value $b.content -Encoding UTF8 -NoNewline }
-                else { Set-Content -LiteralPath $p -Value $b.content -Encoding UTF8 -NoNewline }
+                $content = Get-Body $req
+                if ($q['append'] -eq '1') { Add-Content -LiteralPath $p -Value $content -Encoding UTF8 -NoNewline }
+                else { Set-Content -LiteralPath $p -Value $content -Encoding UTF8 -NoNewline }
                 Send-Json $Ctx @{ ok = $true }; return
             }
             $p = Resolve-SafePath $q['path']
-            if (-not (Test-Path -LiteralPath $p)) { Send-Json $Ctx @{ content = $null } 404; return }
-            Send-Json $Ctx @{ content = (Get-Content -LiteralPath $p -Raw -Encoding UTF8) }; return
+            if (-not (Test-Path -LiteralPath $p)) { Send-Bytes $Ctx ([byte[]]@()) 'application/json; charset=utf-8' 404; return }
+            $raw = Get-Content -LiteralPath $p -Raw -Encoding UTF8
+            if ($null -eq $raw) { $raw = '' }
+            Send-Text $Ctx $raw 'application/json; charset=utf-8'; return
         }
         '^/qam/config$' {
             if ($req.HttpMethod -eq 'POST') {
