@@ -137,16 +137,26 @@ function Invoke-QualysLogin { param($Body)
         $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
         $resp = $client.PostAsync("$base/api/2.0/fo/session/login/", $content).Result
         $body = $resp.Content.ReadAsStringAsync().Result
+        # Cookie は Set-Cookie ヘッダから直接拾う（CookieContainer に入らない環境対策）。
         $cookieVal = $null
-        foreach ($c in $handler.CookieContainer.GetCookies((New-Object System.Uri($base)))) {
-            if ($c.Name -eq 'QualysSession') { $cookieVal = $c.Value }
+        $setc = $null
+        if ($resp.Headers.TryGetValues('Set-Cookie', [ref]$setc)) {
+            foreach ($sc in $setc) { $mm = [regex]::Match($sc, 'QualysSession=([^;]+)'); if ($mm.Success) { $cookieVal = $mm.Groups[1].Value } }
+        }
+        if (-not $cookieVal) {
+            foreach ($c in $handler.CookieContainer.GetCookies((New-Object System.Uri($base)))) { if ($c.Name -eq 'QualysSession') { $cookieVal = $c.Value } }
         }
         if ($resp.IsSuccessStatusCode -and $cookieVal) {
             $script:QSession = $cookieVal; $script:QProxy = $Body.proxy; $script:QBase = $base
             return [ordered]@{ ok = $true; status = [int]$resp.StatusCode }
         }
+        $snippet = ($body -replace '\s+', ' ').Trim()
+        if ($snippet.Length -gt 200) { $snippet = $snippet.Substring(0, 200) }
         $err = Get-QamText1 $body '<TEXT>(.*?)</TEXT>'
-        return [ordered]@{ ok = $false; status = [int]$resp.StatusCode; error = $(if ($err) { $err } else { 'ログインに失敗しました' }) }
+        if (-not $err) { $err = "HTTP $([int]$resp.StatusCode): $snippet" }
+        return [ordered]@{ ok = $false; status = [int]$resp.StatusCode; cookieSeen = [bool]$cookieVal; error = $err }
+    } catch {
+        return [ordered]@{ ok = $false; error = "接続エラー: $($_.Exception.Message)" }
     } finally { $client.Dispose(); $handler.Dispose() }
 }
 
