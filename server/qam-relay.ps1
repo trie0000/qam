@@ -166,9 +166,11 @@ function Invoke-QualysLogin { param($Body)
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
         $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string]$Body.pass))"
         $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
-        Write-Host "[qam] login POST $base/api/2.0/fo/session/login/ (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'なし' }))" -ForegroundColor Cyan
+        Write-Host "[qam] login POST $base/api/2.0/fo/session/ (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'なし' }))" -ForegroundColor Cyan
         Add-QamLog "LOGIN start $base (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'none' }))"
-        $resp = $client.PostAsync("$base/api/2.0/fo/session/login/", $content).Result
+        # セッション API のエンドポイントは /api/2.0/fo/session/（action は body の action=login）。
+        # 末尾に login/ を付けると 404 になる（毎回ログイン失敗の原因）。
+        $resp = $client.PostAsync("$base/api/2.0/fo/session/", $content).Result
         $body = $resp.Content.ReadAsStringAsync().Result
         # Cookie は Set-Cookie ヘッダから直接拾う（CookieContainer に入らない環境対策）。
         $cookieVal = $null
@@ -179,8 +181,10 @@ function Invoke-QualysLogin { param($Body)
         if (-not $cookieVal) {
             foreach ($c in $handler.CookieContainer.GetCookies((New-Object System.Uri($base)))) { if ($c.Name -eq 'QualysSession') { $cookieVal = $c.Value } }
         }
-        Write-Host "[qam] login -> HTTP $([int]$resp.StatusCode), cookie=$([bool]$cookieVal)" -ForegroundColor Cyan
-        Add-QamLog "LOGIN done HTTP $([int]$resp.StatusCode), cookie=$([bool]$cookieVal)"
+        $logBody = ($body -replace '\s+', ' ').Trim(); if ($logBody.Length -gt 500) { $logBody = $logBody.Substring(0, 500) + ' …(truncated)' }
+        Write-Host "[qam] login -> HTTP $([int]$resp.StatusCode) $([string]$resp.ReasonPhrase), cookie=$([bool]$cookieVal)" -ForegroundColor Cyan
+        Add-QamLog "LOGIN done HTTP $([int]$resp.StatusCode) $([string]$resp.ReasonPhrase), cookie=$([bool]$cookieVal)"
+        Add-QamLog "LOGIN body: $logBody"
         if ($resp.IsSuccessStatusCode -and $cookieVal) {
             $script:QSession = $cookieVal; $script:QProxy = $Body.proxy; $script:QBase = $base
             return [ordered]@{ ok = $true; status = [int]$resp.StatusCode }
@@ -206,7 +210,7 @@ function Invoke-QualysLogout {
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
         $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
         $content = New-Object System.Net.Http.StringContent('action=logout', [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
-        $resp = $client.PostAsync("$($script:QBase)/api/2.0/fo/session/logout/", $content).Result
+        $resp = $client.PostAsync("$($script:QBase)/api/2.0/fo/session/", $content).Result
         return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode }
     } catch { return [ordered]@{ ok = $false; error = $_.Exception.Message } }
     finally { $client.Dispose(); $handler.Dispose(); $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null }
