@@ -67,3 +67,12 @@ export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfi
   return d;
 };
 export const shutdownRelay = (): Promise<unknown> => postJson('/qam/shutdown', {});
+
+// 中継サーバの死活確認。起動していない/到達不能なら false（数秒でタイムアウト）。
+export async function checkRelay(timeoutMs = 3000): Promise<boolean> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try { return (await fetch(`${RELAY}/qam/health`, { signal: ctrl.signal })).ok; }
+  catch { return false; }
+  finally { clearTimeout(t); }
+}

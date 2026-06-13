@@ -9,7 +9,7 @@ import { renderTable, type ExportMatrix, type FilterRef } from './ui/table';
 import { exportCsv, exportXlsx } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, type CommentApi } from './ui/columns';
-import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout } from './relay';
+import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import {
@@ -563,4 +563,28 @@ async function doShutdown(): Promise<void> {
   document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;color:#7a766c">QAM を終了しました。このタブは閉じて構いません。</div>';
 }
 
-refresh();
+// 中継サーバが起動していなければ警告モーダルを出す（起動後に「再接続」で続行）。
+function showRelayDownModal(): void {
+  const body = el('div', {}, [
+    el('div', { style: 'display:flex;gap:var(--s-3);align-items:flex-start' }, [
+      el('span', { style: 'color:var(--danger);flex:none', html: icon('alert', 20) }),
+      el('div', {}, ['QAM のローカル中継サーバ（127.0.0.1）に接続できません。データの読み書きには中継サーバが必要です。']),
+    ]),
+    el('div', { class: 'qam-count', style: 'margin-top:var(--s-4);user-select:text' }, ['qam-start.bat（または qam-start.ps1）を実行して中継サーバを起動してから、「再接続」を押してください。']),
+  ]);
+  openModal({
+    title: '中継サーバに接続できません',
+    body,
+    primaryLabel: '再接続',
+    onPrimary: async () => {
+      if (await checkRelay()) { toast('中継サーバに接続しました', 'ok'); refresh(); return true; }
+      toast('まだ接続できません。中継サーバの起動を確認してください', 'error'); return false;
+    },
+  });
+}
+
+async function start(): Promise<void> {
+  if (await checkRelay()) { refresh(); return; }
+  showRelayDownModal();
+}
+start();
