@@ -93,6 +93,36 @@ describe('diff', () => {
   });
 });
 
+const USER1 = `<USER_LIST_OUTPUT><USER_LIST>
+  <USER><USER_LOGIN>acme_ab1</USER_LOGIN><USER_ID>63</USER_ID>
+    <CONTACT_INFO><FIRSTNAME><![CDATA[Alex]]></FIRSTNAME><LASTNAME><![CDATA[Kim]]></LASTNAME><EMAIL><![CDATA[a@example.com]]></EMAIL></CONTACT_INFO>
+    <USER_STATUS>Active</USER_STATUS><USER_ROLE>Manager</USER_ROLE></USER>
+</USER_LIST></USER_LIST_OUTPUT>`;
+const USER2 = `<USER_LIST_OUTPUT><USER_LIST>
+  <USER><USER_LOGIN>acme_ab1</USER_LOGIN><USER_ID>63</USER_ID>
+    <CONTACT_INFO><FIRSTNAME><![CDATA[Alex]]></FIRSTNAME><LASTNAME><![CDATA[Kim]]></LASTNAME><EMAIL><![CDATA[a@example.com]]></EMAIL></CONTACT_INFO>
+    <USER_STATUS>Active</USER_STATUS><USER_ROLE>Reader</USER_ROLE></USER>
+  <USER><USER_LOGIN>acme_cd2</USER_LOGIN><USER_ID>64</USER_ID>
+    <CONTACT_INFO><FIRSTNAME><![CDATA[Bo]]></FIRSTNAME><LASTNAME><![CDATA[Lee]]></LASTNAME></CONTACT_INFO>
+    <USER_STATUS>Active</USER_STATUS><USER_ROLE>Scanner</USER_ROLE></USER>
+</USER_LIST></USER_LIST_OUTPUT>`;
+
+describe('user', () => {
+  it('parse: entity=user / key=USER_ID / 役割など', () => {
+    const s = parseQualysXml(USER1);
+    expect(s.entity).toBe('user');
+    expect(s.records['63'].name).toBe('acme_ab1');
+    expect(s.records['63'].scalar.NAME).toBe('Kim Alex');
+    expect(s.records['63'].scalar.USER_ROLE).toBe('Manager');
+  });
+  it('diff: ロール変更と追加ユーザ', () => {
+    const ev = compareSnapshots(parseQualysXml(USER1).records, parseQualysXml(USER2).records, 'user', '2026-06-14T08-00-00');
+    expect(countByChange(ev, 'modified')).toBe(1); // USER_ROLE
+    expect(countByChange(ev, 'added')).toBe(1);     // 64
+    expect(ev.find((e) => e.field === 'USER_ROLE')!.new).toBe('Reader');
+  });
+});
+
 describe('shrinkGuard', () => {
   it('cases', () => {
     expect(shrinkGuard(100, 40, 0.5)).toBe(true);

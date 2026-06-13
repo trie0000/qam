@@ -34,6 +34,13 @@ export function assetColumns(entity: QamEntity, counts: Record<string, number>, 
     c('TRACKING_METHOD', '追跡', sc('TRACKING_METHOD')), c('NETBIOS', 'NetBIOS', sc('NETBIOS')),
     c('LAST_VULN_SCAN_DATETIME', '最終スキャン', (r) => esc(r.info.LAST_VULN_SCAN_DATETIME ?? ''), true), comment,
   ];
+  if (entity === 'user') return [
+    c('key', 'ユーザID', (r) => esc(r.key), true), c('USER_LOGIN', 'ログイン', sc('USER_LOGIN'), true),
+    c('NAME', '氏名', sc('NAME')), c('EMAIL', 'メール', sc('EMAIL')),
+    c('USER_ROLE', 'ロール', sc('USER_ROLE')), c('USER_STATUS', '状態', sc('USER_STATUS')),
+    c('TITLE', '役職', sc('TITLE')),
+    c('LAST_LOGIN_DATE', '最終ログイン', (r) => esc(r.info.LAST_LOGIN_DATE ?? ''), true), comment,
+  ];
   return [
     c('key', 'ドメイン', (r) => esc(r.key)), c('NETWORK_NAME', 'ネットワーク', sc('NETWORK_NAME')),
     c('NETBLOCK', 'ネットブロック', stc('NETBLOCK')), comment,

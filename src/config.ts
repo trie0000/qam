@@ -16,6 +16,7 @@ export const ENTITIES: { key: QamEntity; label: string }[] = [
   { key: 'group', label: 'AssetGroup' },
   { key: 'host', label: 'Host' },
   { key: 'domain', label: 'Domain' },
+  { key: 'user', label: 'User' },
 ];
 
 export const today = (): string => new Date().toISOString().slice(0, 10);

@@ -1,6 +1,6 @@
 // QAM 共通型。parse/diff/store/UI で共有する。
 
-export type QamEntity = 'group' | 'host' | 'domain';
+export type QamEntity = 'group' | 'host' | 'domain' | 'user';
 export type QamChange = 'added' | 'modified' | 'deleted';
 
 // 1 資産の正規化レコード。scalar/set が差分対象、info は表示用（差分しない）。

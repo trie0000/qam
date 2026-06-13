@@ -84,6 +84,30 @@ FQDN は `DNS_DATA/FQDN`、無ければ `DNS`。
 </DOMAIN_LIST>
 ```
 
+## User — `/api/2.0/fo/user/?action=list`
+
+DOCTYPE: `USER_LIST_OUTPUT`（RESPONSE/DATETIME ラッパは無い）。
+
+```xml
+<USER_LIST_OUTPUT>
+ <USER_LIST>
+  <USER>
+   <USER_LOGIN>acme_ab1</USER_LOGIN>
+   <USER_ID>63</USER_ID>
+   <CONTACT_INFO>
+    <FIRSTNAME><![CDATA[..]]></FIRSTNAME><LASTNAME><![CDATA[..]]></LASTNAME>
+    <TITLE><![CDATA[..]]></TITLE><EMAIL><![CDATA[..]]></EMAIL><COMPANY><![CDATA[..]]></COMPANY>
+   </CONTACT_INFO>
+   <USER_STATUS>Active</USER_STATUS>
+   <USER_ROLE>Manager</USER_ROLE>
+   <LAST_LOGIN_DATE>...</LAST_LOGIN_DATE>
+  </USER>
+ </USER_LIST>
+</USER_LIST_OUTPUT>
+```
+注: DATETIME 無しのため取込日時(stamp)は取込時のローカル時刻にフォールバック。
+追跡: USER_LOGIN, NAME(姓 名), EMAIL, TITLE, COMPANY, USER_STATUS, USER_ROLE。info: LAST_LOGIN_DATE（差分対象外）。キー=USER_ID。
+
 ## 正規化マッピング（XML → 内部レコード）
 
 | 内部 | AssetGroup | Host | Domain |

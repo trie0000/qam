@@ -113,6 +113,7 @@ function Invoke-QualysFetch { param($Body)
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
             'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
+            'user'   { $url = "$base/api/2.0/fo/user/?action=list" }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }

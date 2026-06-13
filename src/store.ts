@@ -12,7 +12,7 @@ export interface FileBackend {
   remove(path: string): Promise<void>;
 }
 
-const ENTITIES: QamEntity[] = ['group', 'host', 'domain'];
+const ENTITIES: QamEntity[] = ['group', 'host', 'domain', 'user'];
 const snapPath = (e: QamEntity, stamp: string) => `snapshots/${e}/${stamp}.json`;
 const histPath = (e: QamEntity) => `history/${e}.jsonl`;
 const COMMENTS = 'comments/comments.jsonl';

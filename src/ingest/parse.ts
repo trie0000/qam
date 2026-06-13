@@ -56,6 +56,7 @@ function entityFromRoot(root: string): QamEntity | null {
     case 'HOST_LIST_OUTPUT': return 'host';
     case 'DOMAIN_LIST_OUTPUT':
     case 'DOMAIN_LIST': return 'domain';
+    case 'USER_LIST_OUTPUT': return 'user';
     default: return null;
   }
 }
@@ -113,6 +114,25 @@ function readDomain(d: Element): QamRecord {
   return r;
 }
 
+function readUser(u: Element): QamRecord {
+  const r = newRecord();
+  r.key = text(u, 'USER_ID');
+  const login = text(u, 'USER_LOGIN');
+  const ci = u.getElementsByTagName('CONTACT_INFO')[0] ?? null;
+  const fn = ci ? text(ci, 'FIRSTNAME') : '';
+  const ln = ci ? text(ci, 'LASTNAME') : '';
+  r.scalar.USER_LOGIN = login;
+  r.scalar.NAME = [ln, fn].filter(Boolean).join(' ');
+  r.scalar.EMAIL = ci ? text(ci, 'EMAIL') : '';
+  r.scalar.TITLE = ci ? text(ci, 'TITLE') : '';
+  r.scalar.COMPANY = ci ? text(ci, 'COMPANY') : '';
+  r.scalar.USER_STATUS = text(u, 'USER_STATUS');
+  r.scalar.USER_ROLE = text(u, 'USER_ROLE');
+  r.info.LAST_LOGIN_DATE = text(u, 'LAST_LOGIN_DATE');
+  r.name = login || r.scalar.NAME;
+  return r;
+}
+
 export function parseQualysXml(xml: string, entity?: QamEntity): QamSnapshot {
   // 先頭の BOM と空白/改行を除去（XML 宣言 <?xml は必ず先頭。先頭に空白/改行があると
   // それだけで parsererror になる＝Qualys/Windows 由来ファイルでよくある）。
@@ -145,6 +165,7 @@ export function parseQualysXml(xml: string, entity?: QamEntity): QamSnapshot {
   };
   if (ent === 'group') Array.from(doc.getElementsByTagName('ASSET_GROUP')).forEach((n) => add(readGroup(n)));
   else if (ent === 'host') Array.from(doc.getElementsByTagName('HOST')).forEach((n) => add(readHost(n)));
+  else if (ent === 'user') Array.from(doc.getElementsByTagName('USER')).forEach((n) => add(readUser(n)));
   else Array.from(doc.getElementsByTagName('DOMAIN')).forEach((n) => add(readDomain(n)));
 
   const datetime = (doc.getElementsByTagName('DATETIME')[0]?.textContent ?? '').trim();
