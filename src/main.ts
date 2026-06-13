@@ -236,7 +236,14 @@ function openIngest(): void {
   const seg = el('div', { class: 'qam-chip-row', style: 'margin-bottom:var(--s-5)' });
   const apiBtn = el('button', { class: 'btn btn--sm' }, ['API ダウンロード']);
   const xmlBtn = el('button', { class: 'btn btn--sm' }, ['XML アップロード']);
-  seg.append(apiBtn, xmlBtn); body.append(seg, panel);
+  const prog = el('div', { class: 'qam-progress', style: 'display:none' });
+  seg.append(apiBtn, xmlBtn); body.append(seg, panel, prog);
+
+  const labelOf = (k: QamEntity): string => ENTITIES.find((e) => e.key === k)?.label ?? k;
+  function setProg(msg: string, busy: boolean): void {
+    clear(prog); prog.style.display = 'flex';
+    prog.append(busy ? el('span', { class: 'qam-spin' }) : el('span', { html: icon('check', 16) }), el('span', { class: 'qam-prog-msg' }, [msg]));
+  }
 
   function showApi(): void {
     apiBtn.className = 'btn btn--sm btn--primary'; xmlBtn.className = 'btn btn--sm';
@@ -246,20 +253,22 @@ function openIngest(): void {
     ENTITIES.forEach((e) => sel.append(el('option', { value: e.key }, [e.label])));
     const go = el('button', { class: 'btn btn--primary', html: `${icon('download', 16)}<span>ダウンロードして取込</span>` });
     go.addEventListener('click', async () => {
-      go.setAttribute('disabled', 'true');
+      go.setAttribute('disabled', 'true'); sel.setAttribute('disabled', 'true');
       try {
         const cfg = await getConfig();
         const creds = { base: cfg.qualysBase, user: cfg.qualysUser, pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
-        if (!creds.base || !creds.user) { toast('設定で Qualys 接続先とアカウントを入力してください', 'error'); return; }
+        if (!creds.base || !creds.user) { setProg('設定で Qualys 接続先とアカウントを入力してください', false); toast('設定が未入力です', 'error'); return; }
         const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
         for (const k of kinds) {
-          toast(`${k}: ダウンロード中…`, 'info');
-          const dl = await downloadEntity(k, creds);
+          setProg(`${labelOf(k)}: ダウンロード中…`, true);
+          const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
+          setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
           await commitOne(dl.snapshot, dl.raw);
         }
+        setProg('完了しました', false);
         refresh();
-      } catch (e) { toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
-      finally { go.removeAttribute('disabled'); }
+      } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
+      finally { go.removeAttribute('disabled'); sel.removeAttribute('disabled'); }
     });
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['取得対象']), sel]), go);
   }
@@ -272,10 +281,14 @@ function openIngest(): void {
       if (!file.files?.length) { toast('XML ファイルを選択してください', 'error'); return; }
       go.setAttribute('disabled', 'true');
       try {
+        setProg('解析中…', true);
         const text = await file.files[0].text();
-        await commitOne(parseQualysXml(text), text);
+        const snap = parseQualysXml(text);
+        setProg(`${labelOf(snap.entity)}: 差分計算・保存中…（${Object.keys(snap.records).length.toLocaleString()} 件）`, true);
+        await commitOne(snap, text);
+        setProg('完了しました', false);
         refresh();
-      } catch (e) { toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
+      } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
       finally { go.removeAttribute('disabled'); }
     });
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['Qualys 一覧 XML（種別は自動判定）']), file]), go);

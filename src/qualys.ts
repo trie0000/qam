@@ -7,8 +7,9 @@ import type { QamEntity, QamRecords, QamSnapshot } from './types';
 export interface QualysCreds { base: string; user: string; pass: string; proxy: string }
 
 export interface DownloadResult { snapshot: QamSnapshot; raw: string; pages: number }
+export type DownloadProgress = (p: { page: number; records: number }) => void;
 
-export async function downloadEntity(kind: QamEntity, creds: QualysCreds): Promise<DownloadResult> {
+export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProgress?: DownloadProgress): Promise<DownloadResult> {
   let res = await fetchQualys({ kind, base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy });
   if (!res.ok) throw new Error(`Qualys 取得失敗 (status ${res.status})${res.error ? ': ' + res.error : ''}`);
 
@@ -18,6 +19,7 @@ export async function downloadEntity(kind: QamEntity, creds: QualysCreds): Promi
   Object.assign(records, first.records);
   rawPages.push(res.xml);
   const datetime = first.datetime;
+  onProgress?.({ page: 1, records: Object.keys(records).length });
 
   let next = res.nextUrl;
   let guard = 0;
@@ -27,6 +29,7 @@ export async function downloadEntity(kind: QamEntity, creds: QualysCreds): Promi
     Object.assign(records, parseQualysXml(res.xml, kind).records);
     rawPages.push(res.xml);
     next = res.nextUrl;
+    onProgress?.({ page: rawPages.length, records: Object.keys(records).length });
   }
   return { snapshot: { entity: kind, datetime, records }, raw: rawPages.join('\n<!-- page -->\n'), pages: rawPages.length };
 }
