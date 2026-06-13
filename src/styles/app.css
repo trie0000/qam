@@ -42,7 +42,11 @@ body {
 /* ---------- topbar ---------- */
 .qam-topbar { display: flex; align-items: center; gap: var(--s-4); padding: 0 var(--gutter);
   border-bottom: 1px solid var(--line); background: var(--paper-2); }
-.qam-topbar .qam-brand { font-weight: 600; font-size: var(--fs-lg); margin-right: auto; letter-spacing: .02em; }
+.qam-brandwrap { display: flex; align-items: baseline; gap: var(--s-3); margin-right: auto; }
+.qam-badge { align-self: center; width: 24px; height: 24px; border-radius: var(--r-2); background: var(--accent);
+  color: #fff; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px; flex: 0 0 auto; }
+.qam-topbar .qam-brand { font-weight: 600; font-size: var(--fs-lg); letter-spacing: .02em; }
+.qam-subtitle { color: var(--ink-4); font-size: var(--fs-sm); }
 .qam-topbar .qam-build { font-size: var(--fs-xs); color: var(--ink-4); font-family: var(--font-mono); margin-right: var(--s-4); }
 
 /* ---------- left pane ---------- */

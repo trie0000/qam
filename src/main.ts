@@ -7,7 +7,7 @@ import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
 import { renderTable } from './ui/table';
 import { assetColumns, historyColumns } from './ui/columns';
-import { backend, getConfig, setConfig, shutdownRelay } from './relay';
+import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import {
@@ -45,7 +45,11 @@ function iconBtn(name: string, label: string, on: () => void): HTMLElement {
 const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('upload', 16)}<span>取込</span>` });
 ingestBtn.addEventListener('click', openIngest);
 topbar.append(
-  el('span', { class: 'qam-brand' }, ['QAM']),
+  el('div', { class: 'qam-brandwrap' }, [
+    el('span', { class: 'qam-badge' }, ['N']),
+    el('span', { class: 'qam-brand' }, ['QAM']),
+    el('span', { class: 'qam-subtitle' }, ['Qualys Asset Management']),
+  ]),
   el('span', { class: 'qam-build' }, [`build ${BUILD}`]),
   ingestBtn,
   iconBtn('refresh', '更新', refresh),
@@ -259,11 +263,19 @@ function openIngest(): void {
         const creds = { base: cfg.qualysBase, user: cfg.qualysUser, pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
         if (!creds.base || !creds.user) { setProg('設定で Qualys 接続先とアカウントを入力してください', false); toast('設定が未入力です', 'error'); return; }
         const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
-        for (const k of kinds) {
-          setProg(`${labelOf(k)}: ダウンロード中…`, true);
-          const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
-          setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
-          await commitOne(dl.snapshot, dl.raw);
+        setProg('Qualys にログイン中…', true);
+        const lg = await qualysLogin(creds);
+        if (!lg.ok) throw new Error('Qualys ログイン失敗' + (lg.error ? ': ' + lg.error : ` (status ${lg.status ?? '?'})`));
+        try {
+          for (const k of kinds) {
+            setProg(`${labelOf(k)}: ダウンロード中…`, true);
+            const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
+            setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
+            await commitOne(dl.snapshot, dl.raw);
+          }
+        } finally {
+          setProg('Qualys からログアウト中…', true);
+          await qualysLogout().catch(() => undefined);
         }
         setProg('完了しました', false);
         refresh();

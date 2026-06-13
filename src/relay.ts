@@ -29,6 +29,10 @@ export const backend: FileBackend = {
 export interface FetchResult { ok: boolean; status: number; nextUrl: string | null; xml: string; error?: string }
 export const fetchQualys = (body: Record<string, unknown>): Promise<FetchResult> => postJson('/qam/fetch', body);
 
+export interface SessionResult { ok: boolean; status?: number; error?: string }
+export const qualysLogin = (creds: { base: string; user: string; pass: string; proxy: string }): Promise<SessionResult> => postJson('/qam/qualys/login', creds);
+export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/logout', {});
+
 export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number }
 export const getConfig = (): Promise<RelayConfig> => fetch(`${RELAY}/qam/config`).then((r) => r.json());
 export const setConfig = (patch: Partial<RelayConfig>): Promise<RelayConfig> => postJson('/qam/config', patch);

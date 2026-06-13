@@ -114,15 +114,28 @@ function readDomain(d: Element): QamRecord {
 }
 
 export function parseQualysXml(xml: string, entity?: QamEntity): QamSnapshot {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  // 先頭の BOM と空白/改行を除去（XML 宣言 <?xml は必ず先頭。先頭に空白/改行があると
+  // それだけで parsererror になる＝Qualys/Windows 由来ファイルでよくある）。
+  const cleaned = xml.replace(/^﻿/, '').replace(/^\s+/, '');
+  const doc = new DOMParser().parseFromString(cleaned, 'application/xml');
   const root = doc.documentElement;
-  if (!root) throw new Error('XML を解析できませんでした');
+  if (!root) throw new Error('XML を解析できませんでした（空ファイル？）');
   const rootName = root.nodeName;
-  if (rootName.toLowerCase() === 'parsererror' || root.getElementsByTagName('parsererror').length) {
-    throw new Error('XML を解析できませんでした');
+  const pe = doc.getElementsByTagName('parsererror')[0];
+  if (rootName.toLowerCase() === 'parsererror' || pe) {
+    const detail = ((pe ? pe.textContent : rootName) || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error('XML を解析できませんでした: ' + detail);
   }
-  const ent = entity ?? entityFromRoot(rootName);
-  if (!ent) throw new Error(`未知の XML ルート要素です: ${root.nodeName}`);
+  // Qualys はエラーを HTTP 200 + <SIMPLE_RETURN> で返すことがある（認証/権限エラー等）。
+  // 0 件として黙って取り込むと「反映されない」になるので、本文を出して中断する。
+  if (rootName === 'SIMPLE_RETURN') {
+    const t = doc.getElementsByTagName('TEXT')[0];
+    throw new Error('Qualys エラー応答: ' + (t && t.textContent ? t.textContent.trim() : 'エラーが返されました'));
+  }
+  const detected = entityFromRoot(rootName);
+  if (!detected) throw new Error(`未対応の XML ルート要素です: ${rootName}`);
+  if (entity && entity !== detected) throw new Error(`種別が一致しません（要求: ${entity} / 実際: ${detected}）`);
+  const ent = detected;
 
   const records: QamRecords = {};
   const add = (r: QamRecord) => {

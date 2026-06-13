@@ -54,6 +54,8 @@ if (-not $BundleDir) { $BundleDir = if ($env:QAM_BUNDLE_DIR) { $env:QAM_BUNDLE_D
 if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
 $DataFull = (Resolve-Path -LiteralPath $DataDir).Path
 $script:QamStop = $false
+# Qualys セッション（login で取得し fetch で使い回し、logout で破棄）。
+$script:QSession = $null; $script:QProxy = $null; $script:QBase = $null
 
 # ─── HTTP ヘルパ ─────────────────────────────────────────────────────────────
 function Set-Cors { param($Resp)
@@ -85,10 +87,18 @@ function Resolve-SafePath { param([string]$Rel)
 }
 
 # ─── Qualys プロキシ取得 ─────────────────────────────────────────────────────
+function Get-QamText1 { param([string]$Xml, [string]$Pattern)
+    $m = [regex]::Match($Xml, $Pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
+    if ($m.Success) { return ($m.Groups[1].Value -replace '<!\[CDATA\[', '' -replace '\]\]>', '').Trim() }
+    return $null
+}
+
+# Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
 function Invoke-QualysFetch { param($Body)
+    $proxy = if ($script:QSession) { $script:QProxy } else { $Body.proxy }
+    $base = if ($Body.base) { ([string]$Body.base).TrimEnd('/') } elseif ($script:QBase) { $script:QBase } else { '' }
     $url = $Body.url
     if (-not $url) {
-        $base = $Body.base.TrimEnd('/')
         switch ($Body.kind) {
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
             'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
@@ -97,21 +107,63 @@ function Invoke-QualysFetch { param($Body)
         }
     }
     $handler = New-Object System.Net.Http.HttpClientHandler
-    if ($Body.proxy) { $handler.Proxy = New-Object System.Net.WebProxy($Body.proxy); $handler.UseProxy = $true }
+    if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
     $client = New-Object System.Net.Http.HttpClient($handler)
     try {
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
-        if ($Body.user) {
+        if ($script:QSession) {
+            $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
+        } elseif ($Body.user) {
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         $resp = $client.GetAsync($url).Result
         $xml = $resp.Content.ReadAsStringAsync().Result
-        $next = $null
-        $m = [regex]::Match($xml, '<URL><!\[CDATA\[(.*?)\]\]></URL>')
-        if ($m.Success) { $next = $m.Groups[1].Value }
+        $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
         return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; nextUrl = $next; xml = $xml }
     } finally { $client.Dispose(); $handler.Dispose() }
+}
+
+# session login: Cookie(QualysSession) を取得して保持。
+function Invoke-QualysLogin { param($Body)
+    $base = ([string]$Body.base).TrimEnd('/')
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.CookieContainer = New-Object System.Net.CookieContainer
+    if ($Body.proxy) { $handler.Proxy = New-Object System.Net.WebProxy($Body.proxy); $handler.UseProxy = $true }
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    try {
+        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
+        $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string]$Body.pass))"
+        $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
+        $resp = $client.PostAsync("$base/api/2.0/fo/session/login/", $content).Result
+        $body = $resp.Content.ReadAsStringAsync().Result
+        $cookieVal = $null
+        foreach ($c in $handler.CookieContainer.GetCookies((New-Object System.Uri($base)))) {
+            if ($c.Name -eq 'QualysSession') { $cookieVal = $c.Value }
+        }
+        if ($resp.IsSuccessStatusCode -and $cookieVal) {
+            $script:QSession = $cookieVal; $script:QProxy = $Body.proxy; $script:QBase = $base
+            return [ordered]@{ ok = $true; status = [int]$resp.StatusCode }
+        }
+        $err = Get-QamText1 $body '<TEXT>(.*?)</TEXT>'
+        return [ordered]@{ ok = $false; status = [int]$resp.StatusCode; error = $(if ($err) { $err } else { 'ログインに失敗しました' }) }
+    } finally { $client.Dispose(); $handler.Dispose() }
+}
+
+# session logout: 保持中のセッションを破棄（取得後は必ず呼ぶ）。
+function Invoke-QualysLogout {
+    if (-not $script:QSession) { return [ordered]@{ ok = $true; note = 'no session' } }
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    if ($script:QProxy) { $handler.Proxy = New-Object System.Net.WebProxy($script:QProxy); $handler.UseProxy = $true }
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    try {
+        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
+        $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
+        $content = New-Object System.Net.Http.StringContent('action=logout', [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
+        $resp = $client.PostAsync("$($script:QBase)/api/2.0/fo/session/logout/", $content).Result
+        return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode }
+    } catch { return [ordered]@{ ok = $false; error = $_.Exception.Message } }
+    finally { $client.Dispose(); $handler.Dispose(); $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null }
 }
 
 # ─── ルーティング ────────────────────────────────────────────────────────────
@@ -132,6 +184,16 @@ function Invoke-Route { param($Ctx)
             if (-not (Test-Path -LiteralPath $f)) { Send-Json $Ctx @{ error = 'bundle not built'; hint = 'npm run build' } 404; return }
             $ct = if ($f -match '\.js$') { 'text/javascript; charset=utf-8' } else { 'text/plain; charset=utf-8' }
             Send-Bytes $Ctx ([IO.File]::ReadAllBytes($f)) $ct; return
+        }
+        '^/qam/qualys/login$' {
+            try { Send-Json $Ctx (Invoke-QualysLogin (Get-Body $req | ConvertFrom-Json)) }
+            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            return
+        }
+        '^/qam/qualys/logout$' {
+            try { Send-Json $Ctx (Invoke-QualysLogout) }
+            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            return
         }
         '^/qam/fetch$' {
             try { Send-Json $Ctx (Invoke-QualysFetch (Get-Body $req | ConvertFrom-Json)) }
