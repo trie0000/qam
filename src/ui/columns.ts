@@ -43,22 +43,25 @@ function commentCell(entity: QamEntity, id: string, api: CommentApi): HTMLElemen
 
   function edit(latest: QamComment | null): void {
     clear(cell);
-    const ta = el('textarea', { class: 'qam-comment-edit', placeholder: '改廃作業のメモ（⌘/Ctrl+Enterで保存）' }) as HTMLTextAreaElement;
+    const ta = el('textarea', { class: 'qam-comment-edit', placeholder: 'メモ（フォーカスを外すと保存・Escで取消）' }) as HTMLTextAreaElement;
     ta.value = latest?.text ?? '';
-    const save = el('button', { class: 'btn btn--xs btn--primary', title: '保存', html: icon('check', 13) });
-    const cancel = el('button', { class: 'btn btn--xs', title: 'キャンセル', html: icon('x', 13) });
-    [ta, save, cancel].forEach((n) => n.addEventListener('click', stop));
-    cancel.addEventListener('click', view);
-    const doSave = async (): Promise<void> => {
+    ta.addEventListener('click', stop);
+    // ボタンは置かず、フォーカスを外したら自動保存。Esc で取消、⌘/Ctrl+Enter で確定(=blur)。
+    let closed = false;
+    const finish = async (commit: boolean): Promise<void> => {
+      if (closed) return; closed = true;
       const t = ta.value.trim();
-      if (!t) { view(); return; } // 空は保存しない（既存の削除はスレッド側で）
-      save.setAttribute('disabled', 'true');
-      try { api.byId[id] = await api.save(entity, id, latest?.ts ?? null, t); view(); }
-      catch { save.removeAttribute('disabled'); }
+      if (commit && t && t !== (latest?.text ?? '')) {
+        try { api.byId[id] = await api.save(entity, id, latest?.ts ?? null, t); } catch { /* 失敗時は表示に戻すだけ */ }
+      }
+      view();
     };
-    save.addEventListener('click', doSave);
-    ta.addEventListener('keydown', (e) => { if (!e.isComposing && (e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doSave(); } });
-    cell.append(ta, el('div', { class: 'qam-comment-editbar' }, [save, cancel]));
+    ta.addEventListener('blur', () => { void finish(true); });
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); void finish(false); }
+      else if (!e.isComposing && (e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); ta.blur(); }
+    });
+    cell.append(ta);
     ta.focus();
   }
 

@@ -77,7 +77,7 @@ function iconBtn(name: string, label: string, on: () => void | Promise<void>): H
   b.addEventListener('click', () => { Promise.resolve().then(on).catch((e) => toast(`${label}でエラー: ${(e as Error).message}`, 'error')); });
   return b;
 }
-const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('upload', 16)}<span>取込</span>` });
+const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('inbox', 16)}<span>取込</span>` });
 ingestBtn.addEventListener('click', () => { try { openIngest(); } catch (e) { toast(`取込でエラー: ${(e as Error).message}`, 'error'); } });
 topbar.append(
   el('div', { class: 'qam-brandwrap' }, [
@@ -406,19 +406,26 @@ async function openThread(entity: QamEntity, id: string): Promise<void> {
 }
 
 // ---- ingest ----
-async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string): Promise<void> {
+// 重複確認の方針を取込ラン内で共有（「すべて」取込で一件ごとに聞かず最初の1回だけ確認）。
+interface DupPolicy { decided: boolean; proceed: boolean }
+async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string, dup?: DupPolicy): Promise<void> {
   const cfg = await getConfig();
-  // 取込日時 = XML の DATETIME 由来。重複チェック: 同 stamp=上書き確認 / 同日=追加確認。
+  // 取込日時 = XML の DATETIME 由来。重複チェック: 同 stamp=上書き / 同日=別取込として追加。
   const stamp = datetimeToStamp(snap.datetime);
   const existing = await getSnapshotStamps(backend, snap.entity);
-  if (existing.includes(stamp)) {
-    if (!(await confirmModal('既に取込済み（同じ取込日時）', `${snap.entity} の ${fmtStamp(stamp)} は既に取り込まれています。上書きしますか？`))) {
-      toast(`${snap.entity}: 取込を中止しました`, 'info'); return;
+  const sameStamp = existing.includes(stamp);
+  const sameDay = !sameStamp && existing.some((s) => dateOfStamp(s) === dateOfStamp(stamp));
+  if (sameStamp || sameDay) {
+    let proceed: boolean;
+    if (dup?.decided) {
+      proceed = dup.proceed; // ラン内で確認済み → 同じ判断を引き継ぐ（再確認しない）
+    } else {
+      proceed = sameStamp
+        ? await confirmModal('既に取込済み（同じ取込日時）', `${fmtStamp(stamp)} は既に取り込まれています。上書きしますか？（このラン内の重複は以降確認しません）`)
+        : await confirmModal('同じ日に取込済み', `${dateOfStamp(stamp)} に取込済みです。別の取込として追加しますか？（前のスナップショットは残ります。このラン内の重複は以降確認しません）`);
+      if (dup) { dup.decided = true; dup.proceed = proceed; }
     }
-  } else if (existing.some((s) => dateOfStamp(s) === dateOfStamp(stamp))) {
-    if (!(await confirmModal('同じ日に取込済み', `${snap.entity} は ${dateOfStamp(stamp)} に取込済みです。別の取込として追加しますか？（前のスナップショットは残ります）`))) {
-      toast(`${snap.entity}: 取込を中止しました`, 'info'); return;
-    }
+    if (!proceed) { toast(`${snap.entity}: 取込を中止しました`, 'info'); return; }
   }
   const opts = { stamp, guardRatio: GUARD_RATIO, retentionDays: cfg.retentionDays || 90, rawXml: raw };
   let res = await ingestSnapshot(backend, snap as any, opts);
@@ -461,7 +468,7 @@ function openIngest(): void {
     apiBtn.className = 'btn btn--sm btn--primary'; xmlBtn.className = 'btn btn--sm';
     clear(panel);
     const sel = el('select', { class: 'in' }) as HTMLSelectElement;
-    sel.append(el('option', { value: 'all' }, ['すべて (AssetGroup / Host / Domain)']));
+    sel.append(el('option', { value: 'all' }, ['すべて']));
     ENTITIES.forEach((e) => sel.append(el('option', { value: e.key }, [e.label])));
     const go = el('button', { class: 'btn btn--primary', html: `${icon('download', 16)}<span>ダウンロードして取込</span>` });
     go.addEventListener('click', async () => {
@@ -481,11 +488,12 @@ function openIngest(): void {
           if (!useSession) toast('セッションログイン不可のため Basic 認証で続行します' + (lg.error ? `（${lg.error}）` : ''), 'info');
         } catch { useSession = false; }
         try {
+          const dup: DupPolicy = { decided: false, proceed: false }; // 重複確認はラン内で最初の1回だけ
           for (const k of kinds) {
             setProg(`${labelOf(k)}: ダウンロード中…`, true);
             const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
             setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
-            await commitOne(dl.snapshot, dl.raw);
+            await commitOne(dl.snapshot, dl.raw, dup);
           }
         } finally {
           if (useSession) { setProg('Qualys からログアウト中…', true); await qualysLogout().catch(() => undefined); }

@@ -186,9 +186,6 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-comment-thread svg { width: 13px; height: 13px; }
 .qam-comment-edit { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-sm); resize: vertical; min-height: 46px;
   color: var(--ink); background: var(--paper); border: 1px solid var(--accent); border-radius: var(--r-1); padding: var(--s-2); }
-.qam-comment-editbar { display: flex; gap: var(--s-1); margin-top: var(--s-1); }
-.btn--xs { height: 22px; padding: 0 var(--s-2); font-size: var(--fs-xs); }
-.btn--xs svg { width: 13px; height: 13px; }
 
 /* ---------- status tags ---------- */
 .qam-tag { display: inline-block; padding: 1px var(--s-3); border-radius: var(--r-1); font-family: var(--font-mono);
