@@ -22,13 +22,18 @@ export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProg
   onProgress?.({ page: 1, records: Object.keys(records).length });
 
   let next = res.nextUrl;
+  const seen = new Set<string>([next ?? '']);
   let guard = 0;
   while (next && guard++ < 2000) {
     res = await fetchQualys({ url: next, user: creds.user, pass: creds.pass, proxy: creds.proxy });
     if (!res.ok) throw new Error(`Qualys 取得失敗(ページ ${guard}) (status ${res.status})`);
     Object.assign(records, parseQualysXml(res.xml, kind).records);
     rawPages.push(res.xml);
-    next = res.nextUrl;
+    const nx = res.nextUrl;
+    // 次ページURLが進まない/既出なら暴走(同一ページの無限取得)とみなし停止。
+    if (nx && seen.has(nx)) break;
+    if (nx) seen.add(nx);
+    next = nx;
     onProgress?.({ page: rawPages.length, records: Object.keys(records).length });
   }
   return { snapshot: { entity: kind, datetime, records }, raw: rawPages.join('\n<!-- page -->\n'), pages: rawPages.length };
