@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { toCsv, buildXlsx, type Sheet } from '../src/export';
+import { toCsv, buildXlsx, buildXlsxBook, type Sheet } from '../src/export';
 
 const sheet: Sheet = {
   name: '資産一覧',
@@ -30,5 +30,19 @@ describe('export', () => {
     expect(txt).toContain('autoFilter');        // オートフィルタ
     expect(txt).toContain('FF4E7A51');           // ヘッダ塗り色
     expect(txt).toContain('state="frozen"');    // 見出し行固定
+  });
+
+  it('複数シートのブック: シート分・各worksheetを含む', () => {
+    const book = buildXlsxBook([
+      { name: 'AssetGroup', headers: ['ID'], rows: [['1']] },
+      { name: 'Host', headers: ['ID'], rows: [['h1']] },
+      { name: 'User', headers: ['ログイン'], rows: [['acme_zz9']] },
+    ]);
+    const txt = new TextDecoder().decode(book);
+    expect(txt).toContain('name="AssetGroup"');
+    expect(txt).toContain('name="Host"');
+    expect(txt).toContain('name="User"');
+    expect(txt).toContain('worksheets/sheet3.xml'); // 3シート目の rels/contenttype
+    expect(txt).toContain('acme_zz9');
   });
 });

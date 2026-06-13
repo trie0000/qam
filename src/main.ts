@@ -5,8 +5,8 @@ import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
-import { renderTable, type ExportMatrix, type FilterRef } from './ui/table';
-import { exportCsv, exportXlsx } from './export';
+import { renderTable, cellText, type ExportMatrix, type FilterRef } from './ui/table';
+import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, type CommentApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout, checkRelay } from './relay';
@@ -79,6 +79,8 @@ function iconBtn(name: string, label: string, on: () => void | Promise<void>): H
 }
 const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('inbox', 16)}<span>取込</span>` });
 ingestBtn.addEventListener('click', () => { try { openIngest(); } catch (e) { toast(`取込でエラー: ${(e as Error).message}`, 'error'); } });
+const exportAllBtn = el('button', { class: 'btn btn--sm', title: '全種別の最新スナップショットを1つのExcelに出力（種別ごとにシート分け）', html: `${icon('download', 16)}<span>全資産Excel</span>` });
+exportAllBtn.addEventListener('click', () => { Promise.resolve().then(exportAllAssets).catch((e) => toast(`全資産Excel出力でエラー: ${(e as Error).message}`, 'error')); });
 topbar.append(
   el('div', { class: 'qam-brandwrap' }, [
     el('span', { class: 'qam-badge' }, ['N']),
@@ -87,6 +89,7 @@ topbar.append(
   ]),
   el('span', { class: 'qam-build' }, [`build ${BUILD}`]),
   ingestBtn,
+  exportAllBtn,
   iconBtn('refresh', '更新', refresh),
   iconBtn('settings', '設定', openSettings),
   iconBtn('logout', '終了', doShutdown),
@@ -231,6 +234,23 @@ function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef
   renderChips();
 }
 let filterOutsideBound = false;
+
+// 全資産一括 Excel: 全種別の最新スナップショットを種別ごとのシートに。フィルタ非適用（全件・全列）。
+async function exportAllAssets(): Promise<void> {
+  const sheets: Sheet[] = [];
+  for (const e of ENTITIES) {
+    const stamps = await getSnapshotStamps(backend, e.key);
+    const stamp = resolveAsof(stamps); // 最新
+    const comments = await commentApi(e.key);
+    const cols = assetColumns(e.key, comments);
+    let rows: QamRecord[] = [];
+    if (stamp) rows = Object.values((await readSnapshot(backend, e.key, stamp))?.records ?? {}) as QamRecord[];
+    sheets.push({ name: e.label, headers: cols.map((c) => c.label || c.id), rows: rows.map((r) => cols.map((c) => cellText(c, r))) });
+  }
+  if (sheets.every((s) => !s.rows.length)) { toast('エクスポートする資産がありません', 'info'); return; }
+  exportXlsxBook(sheets, `QAM_全資産_${stampNow().slice(0, 10)}.xlsx`);
+  toast('全資産Excelを出力しました', 'ok');
+}
 
 // エクスポートボタン（CSV / Excel）。exportRef.fn は renderTable が描画時にセットする。
 function addExportButtons(toolbar: HTMLElement, sheetName: string, exportRef: { fn?: () => ExportMatrix }): void {

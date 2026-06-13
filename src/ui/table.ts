@@ -52,8 +52,8 @@ function loadState(viewId: string): TState {
 }
 const saveState = (viewId: string, s: TState) => localStorage.setItem(LS.table(viewId), JSON.stringify(s));
 
-// セルの表示テキスト（フィルタ照合用）。render が HTML 文字列でもタグを除いた文字列にする。
-function cellText(col: Column, row: any): string {
+// セルの表示テキスト（フィルタ照合・エクスポート用）。render が HTML 文字列でもタグを除いた文字列にする。
+export function cellText(col: Column, row: any): string {
   if (col.sortVal) return col.sortVal(row);
   const v = col.render(row);
   if (typeof v !== 'string') return (v as Node).textContent ?? '';

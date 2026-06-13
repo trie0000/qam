@@ -82,28 +82,46 @@ function sheetXml(sheet: Sheet): string {
     + `</worksheet>`;
 }
 
-function workbookXml(name: string): string {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
-    + `<sheets><sheet name="${xmlEsc(name).slice(0, 31)}" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+// シート名は31字以内・[]:*?/\ 不可・ブック内で一意。安全化して重複は連番付与。
+function sheetNames(names: string[]): string[] {
+  const used = new Set<string>(); const out: string[] = [];
+  names.forEach((raw, i) => {
+    let n = (raw || `Sheet${i + 1}`).replace(/[\[\]:*?/\\]/g, ' ').slice(0, 31) || `Sheet${i + 1}`;
+    while (used.has(n.toLowerCase())) { const suf = `(${i + 1})`; n = n.slice(0, 31 - suf.length) + suf; }
+    used.add(n.toLowerCase()); out.push(n);
+  });
+  return out;
 }
 
-const CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+function workbookXml(names: string[]): string {
+  const sheets = names.map((n, i) => `<sheet name="${xmlEsc(n)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">`
+    + `<sheets>${sheets}</sheets></workbook>`;
+}
+
+function contentTypes(n: number): string {
+  const overrides = Array.from({ length: n }, (_, i) => `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">`
-  + `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`
-  + `<Default Extension="xml" ContentType="application/xml"/>`
-  + `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>`
-  + `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`
-  + `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+    + `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`
+    + `<Default Extension="xml" ContentType="application/xml"/>`
+    + `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>`
+    + overrides
+    + `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+}
 
 const ROOT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
   + `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
 
-const WB_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+function wbRels(n: number): string {
+  const sheets = Array.from({ length: n }, (_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">`
-  + `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>`
-  + `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+    + sheets
+    + `<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+}
 
 // ---- 最小 ZIP（store・無圧縮）。CRC32 を自前計算。 ----
 const CRC_TABLE = (() => {
@@ -162,18 +180,23 @@ function zip(files: { name: string; content: string }[]): Uint8Array {
   return out;
 }
 
-export function buildXlsx(sheet: Sheet): Uint8Array {
+// 複数シートのブックを生成（1シートのときは [sheet] を渡せばよい）。
+export function buildXlsxBook(sheets: Sheet[]): Uint8Array {
+  const list = sheets.length ? sheets : [{ name: 'Sheet1', headers: [], rows: [] }];
+  const names = sheetNames(list.map((s) => s.name));
   return zip([
-    { name: '[Content_Types].xml', content: CONTENT_TYPES },
+    { name: '[Content_Types].xml', content: contentTypes(list.length) },
     { name: '_rels/.rels', content: ROOT_RELS },
-    { name: 'xl/workbook.xml', content: workbookXml(sheet.name) },
-    { name: 'xl/_rels/workbook.xml.rels', content: WB_RELS },
+    { name: 'xl/workbook.xml', content: workbookXml(names) },
+    { name: 'xl/_rels/workbook.xml.rels', content: wbRels(list.length) },
     { name: 'xl/styles.xml', content: STYLES },
-    { name: 'xl/worksheets/sheet1.xml', content: sheetXml(sheet) },
+    ...list.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, content: sheetXml(s) })),
   ]);
 }
+export const buildXlsx = (sheet: Sheet): Uint8Array => buildXlsxBook([sheet]);
 
-export function exportXlsx(sheet: Sheet, filename: string): void {
-  const buf = buildXlsx(sheet);
+function saveXlsx(buf: Uint8Array, filename: string): void {
   save(filename, new Blob([buf as unknown as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
 }
+export const exportXlsx = (sheet: Sheet, filename: string): void => saveXlsx(buildXlsx(sheet), filename);
+export const exportXlsxBook = (sheets: Sheet[], filename: string): void => saveXlsx(buildXlsxBook(sheets), filename);
