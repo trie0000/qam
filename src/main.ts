@@ -1,6 +1,6 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
-import { BUILD, ENTITIES, LS, stampNow, fmtStamp, timeOfStamp } from './config';
+import { BUILD, ENTITIES, LS, fmtStamp, timeOfStamp, datetimeToStamp } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -12,7 +12,7 @@ import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, ingestSnapshot, dateOfStamp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, ingestSnapshot, deleteSnapshot, dateOfStamp,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
 
@@ -175,6 +175,15 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLE
     host.append(emptyState(stamps.length ? '保存期間外です' : 'まだ取り込みがありません', stamps.length ? '変更履歴ビューで確認するか、別の取込日時を選んでください' : '右上の「取込」から Qualys を取り込んでください'));
     count.textContent = '0 件'; return;
   }
+  // 表示中の取込(基準)を削除するボタン（前後の取込は残る）
+  const delBtn = el('button', { class: 'btn btn--sm btn--danger', title: '表示中の取込日時のスナップショットを削除' }, ['この取込を削除']);
+  delBtn.addEventListener('click', async () => {
+    if (!(await confirmModal('スナップショット削除', `${state.entity} の ${fmtStamp(stamp)} のスナップショット（とこの取込の履歴）を削除します。よろしいですか？`))) return;
+    try { await deleteSnapshot(backend, state.entity, stamp); state.asof = ''; toast('削除しました', 'ok'); refresh(); }
+    catch (e) { toast('削除に失敗: ' + (e as Error).message, 'error'); }
+  });
+  subbar.append(delBtn);
+
   const snap = await readSnapshot(backend, state.entity, stamp);
   let rows = Object.values(snap?.records ?? {}) as QamRecord[];
   rows = rows.filter((r) => matchAsset(r, state.q));
@@ -277,7 +286,19 @@ async function openThread(entity: QamEntity, id: string): Promise<void> {
 // ---- ingest ----
 async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string): Promise<void> {
   const cfg = await getConfig();
-  const opts = { stamp: stampNow(), guardRatio: GUARD_RATIO, retentionDays: cfg.retentionDays || 90, rawXml: raw };
+  // 取込日時 = XML の DATETIME 由来。重複チェック: 同 stamp=上書き確認 / 同日=追加確認。
+  const stamp = datetimeToStamp(snap.datetime);
+  const existing = await getSnapshotStamps(backend, snap.entity);
+  if (existing.includes(stamp)) {
+    if (!(await confirmModal('既に取込済み（同じ取込日時）', `${snap.entity} の ${fmtStamp(stamp)} は既に取り込まれています。上書きしますか？`))) {
+      toast(`${snap.entity}: 取込を中止しました`, 'info'); return;
+    }
+  } else if (existing.some((s) => dateOfStamp(s) === dateOfStamp(stamp))) {
+    if (!(await confirmModal('同じ日に取込済み', `${snap.entity} は ${dateOfStamp(stamp)} に取込済みです。別の取込として追加しますか？（前のスナップショットは残ります）`))) {
+      toast(`${snap.entity}: 取込を中止しました`, 'info'); return;
+    }
+  }
+  const opts = { stamp, guardRatio: GUARD_RATIO, retentionDays: cfg.retentionDays || 90, rawXml: raw };
   let res = await ingestSnapshot(backend, snap as any, opts);
   if (res.guard && !res.committed) {
     const ok = await confirmModal('件数が大きく減少しています', `${snap.entity}: ${res.prevCount} → ${res.currCount} 件。誤ったファイルでないか確認してください。取り込みますか？`);

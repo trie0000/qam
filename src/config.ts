@@ -26,6 +26,18 @@ export function stampNow(): string {
   const p = (n: number): string => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
 }
+// XML の DATETIME(ISO) → 取込日時スタンプ。無効/空なら現在時刻。
+// データの時刻を採用することで「同じXML再取込＝同じstamp＝上書き確認」が成立する。
+export function datetimeToStamp(iso: string): string {
+  if (iso) {
+    const d = new Date(iso);
+    if (!isNaN(d.getTime())) {
+      const p = (n: number): string => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+    }
+  }
+  return stampNow();
+}
 // 'YYYY-MM-DDTHH-mm-ss' → 表示用 'YYYY-MM-DD HH:mm:ss'
 export const fmtStamp = (s: string): string => (s ? `${s.slice(0, 10)} ${s.slice(11).replace(/-/g, ':')}` : '');
 // stamp → 'HH:mm:ss'

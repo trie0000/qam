@@ -62,6 +62,20 @@ export async function readHistory(b: FileBackend, e: QamEntity, from?: string, t
 const appendHistory = (b: FileBackend, e: QamEntity, events: QamEvent[]) =>
   events.length ? b.write(histPath(e), events.map((x) => JSON.stringify(x)).join('\n') + '\n', true) : Promise.resolve();
 
+// 同じ取込日時(stamp)の履歴を除去（同 stamp の再取込＝上書き、手動削除に使う）。
+async function removeHistoryForStamp(b: FileBackend, e: QamEntity, stamp: string): Promise<void> {
+  const all = await readJsonl<QamEvent>(b, histPath(e));
+  const kept = all.filter((ev) => ev.ts !== stamp);
+  if (kept.length !== all.length) await b.write(histPath(e), kept.map((x) => JSON.stringify(x)).join('\n') + (kept.length ? '\n' : ''));
+}
+
+// スナップショット手動削除: 当該 stamp の snapshot・履歴・raw を消す（前後の点は残る）。
+export async function deleteSnapshot(b: FileBackend, e: QamEntity, stamp: string): Promise<void> {
+  await b.remove(snapPath(e, stamp));
+  await removeHistoryForStamp(b, e, stamp);
+  await b.remove(`raw/${dateOfStamp(stamp)}/${e}-${stamp}.xml`); // 無ければ no-op
+}
+
 // --- comments（資産単位） ---
 export const addComment = (b: FileBackend, c: QamComment) => b.write(COMMENTS, JSON.stringify(c) + '\n', true);
 
@@ -121,8 +135,10 @@ export async function ingestSnapshot(b: FileBackend, snap: QamSnapshot, opts: In
   if (guard && !opts.force) return res;
 
   await writeSnapshot(b, snap, stamp);
-  // 各取込は独立した点。直前取込との差分を、その取込日時(stamp)で履歴へ追記（上書きしない）。
+  // 各取込は独立した点。直前取込との差分を、その取込日時(stamp)で履歴へ。
+  // 同 stamp の再取込（上書き）に備え、まず当該 stamp の履歴を除去してから追記する。
   const events = baseline ? [] : compareSnapshots(prev, records, entity, stamp);
+  await removeHistoryForStamp(b, entity, stamp);
   await appendHistory(b, entity, events);
   res.added = countByChange(events, 'added');
   res.modified = countByChange(events, 'modified');

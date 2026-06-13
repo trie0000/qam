@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQualysXml } from '../src/ingest/parse';
 import {
-  FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot,
+  FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
   prune, addComment, readComments, readHistory,
 } from '../src/store';
 
@@ -91,6 +91,25 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     expect(removed).toContain('group/2026-01-01T00-00-00');
     expect(removed).not.toContain(`group/${S1}`);
     expect(await b.read('history/group.jsonl')).not.toBeNull();
+  });
+
+  it('同じ stamp の再取込は上書き（履歴も置換・点は増えない）', async () => {
+    await ingestSnapshot(b, parseQualysXml(GROUP1), { ...OPTS, stamp: S1 });
+    await ingestSnapshot(b, parseQualysXml(GROUP2), { ...OPTS, stamp: S2 }); // S2 に 4 件
+    expect((await readHistory(b, 'group')).length).toBe(4);
+    // S2 を GROUP1 相当で上書き → prev(S1=GROUP1) と同一で差分0、S2 の旧履歴は置換
+    const r = await ingestSnapshot(b, parseQualysXml(GROUP1), { ...OPTS, stamp: S2 });
+    expect(r.added + r.modified + r.deleted).toBe(0);
+    expect(await getSnapshotStamps(b, 'group')).toEqual([S1, S2]); // 点は増えない
+    expect((await readHistory(b, 'group')).length).toBe(0);        // S2 の旧4件は消える
+  });
+
+  it('deleteSnapshot は当該取込の snapshot/履歴のみ削除（他は残る）', async () => {
+    await ingestSnapshot(b, parseQualysXml(GROUP1), { ...OPTS, stamp: S1 });
+    await ingestSnapshot(b, parseQualysXml(GROUP2), { ...OPTS, stamp: S2 });
+    await deleteSnapshot(b, 'group', S2);
+    expect(await getSnapshotStamps(b, 'group')).toEqual([S1]);
+    expect((await readHistory(b, 'group')).length).toBe(0); // S2 の 4 件削除
   });
 
   it('コメントは資産単位', async () => {
