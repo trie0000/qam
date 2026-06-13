@@ -49,5 +49,10 @@ export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/
 
 export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number }
 export const getConfig = (): Promise<RelayConfig> => fetch(`${RELAY}/qam/config`).then((r) => r.json());
-export const setConfig = (patch: Partial<RelayConfig>): Promise<RelayConfig> => postJson('/qam/config', patch);
+export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfig> => {
+  const r = await fetch(`${RELAY}/qam/config`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+  const d = await r.json().catch(() => ({} as any));
+  if (!r.ok || d.error) throw new Error(`設定の保存に失敗: ${d.error ?? 'HTTP ' + r.status}`);
+  return d;
+};
 export const shutdownRelay = (): Promise<unknown> => postJson('/qam/shutdown', {});

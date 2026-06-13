@@ -119,11 +119,13 @@ function Invoke-QualysFetch { param($Body)
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
+        Write-Host "[qam] fetch GET $url (session=$([bool]$script:QSession), proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
         $resp = $client.GetAsync($url).Result
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
         $bytes = $resp.Content.ReadAsByteArrayAsync().Result
         $xml = [System.Text.Encoding]::UTF8.GetString($bytes)
         $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
+        Write-Host "[qam] fetch -> HTTP $([int]$resp.StatusCode), $($xml.Length) chars, nextPage=$([bool]$next)" -ForegroundColor DarkCyan
         return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; nextUrl = $next; xml = $xml }
     } finally { $client.Dispose(); $handler.Dispose() }
 }
@@ -139,6 +141,7 @@ function Invoke-QualysLogin { param($Body)
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
         $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string]$Body.pass))"
         $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
+        Write-Host "[qam] login POST $base/api/2.0/fo/session/login/ (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'なし' }))" -ForegroundColor Cyan
         $resp = $client.PostAsync("$base/api/2.0/fo/session/login/", $content).Result
         $body = $resp.Content.ReadAsStringAsync().Result
         # Cookie は Set-Cookie ヘッダから直接拾う（CookieContainer に入らない環境対策）。
@@ -150,6 +153,7 @@ function Invoke-QualysLogin { param($Body)
         if (-not $cookieVal) {
             foreach ($c in $handler.CookieContainer.GetCookies((New-Object System.Uri($base)))) { if ($c.Name -eq 'QualysSession') { $cookieVal = $c.Value } }
         }
+        Write-Host "[qam] login -> HTTP $([int]$resp.StatusCode), cookie=$([bool]$cookieVal)" -ForegroundColor Cyan
         if ($resp.IsSuccessStatusCode -and $cookieVal) {
             $script:QSession = $cookieVal; $script:QProxy = $Body.proxy; $script:QBase = $base
             return [ordered]@{ ok = $true; status = [int]$resp.StatusCode }
@@ -247,9 +251,13 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
                 Import-QamEnv $EnvFile
             }
+            $baseV = $env:QAM_QUALYS_API_BASE; $userV = $env:QAM_QUALYS_USER; $proxyV = $env:QAM_PROXY_URL
+            Write-Host ("[qam] config base={0} user={1} proxy={2}" -f `
+                $(if ($baseV) { $baseV } else { '(空)' }), `
+                $(if ($userV) { 'set' } else { '(空)' }), `
+                $(if ($proxyV) { $proxyV } else { '(空)' })) -ForegroundColor Cyan
             Send-Json $Ctx @{
-                qualysBase = $env:QAM_QUALYS_API_BASE; qualysUser = $env:QAM_QUALYS_USER
-                proxy = $env:QAM_PROXY_URL; port = $Port
+                qualysBase = $baseV; qualysUser = $userV; proxy = $proxyV; port = $Port
                 retentionDays = if ($env:QAM_RAW_RETENTION_DAYS) { [int]$env:QAM_RAW_RETENTION_DAYS } else { 90 }
             }; return
         }
@@ -268,7 +276,13 @@ Write-Host "[qam] relay listening on http://127.0.0.1:$Port/ (+localhost)  (Data
 
 while (-not $script:QamStop) {
     try { $ctx = $listener.GetContext() } catch { break }
-    try { Invoke-Route $ctx } catch { try { Send-Json $ctx @{ error = $_.Exception.Message } 500 } catch { } }
+    try { Invoke-Route $ctx }
+    catch {
+        $p = try { $ctx.Request.Url.AbsolutePath } catch { '?' }
+        Write-Host "[qam][ERR] $p : $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.ScriptStackTrace) { Write-Host ("  " + ($_.ScriptStackTrace -replace "`n", "`n  ")) -ForegroundColor DarkGray }
+        try { Send-Json $ctx @{ error = $_.Exception.Message } 500 } catch { }
+    }
 }
 $listener.Stop()
 Write-Host '[qam] relay stopped' -ForegroundColor Yellow
