@@ -91,6 +91,8 @@ body {
 .qam-subbar .qam-count { color: var(--ink-4); font-size: var(--fs-sm); }
 .qam-subbar .qam-spacer { margin-left: auto; }
 .qam-toolbar { display: flex; align-items: center; gap: var(--s-3); padding: 0 var(--gutter) var(--s-3); flex-wrap: wrap; }
+/* エクスポート(CSV/Excel)は右寄せでまとめる */
+.qam-export-group { margin-left: auto; display: inline-flex; gap: var(--s-2); }
 
 /* ---------- buttons ---------- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);

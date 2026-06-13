@@ -1,11 +1,12 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
-import { BUILD, ENTITIES, LS, fmtStamp, timeOfStamp, datetimeToStamp } from './config';
+import { BUILD, ENTITIES, LS, fmtStamp, timeOfStamp, datetimeToStamp, stampNow } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
-import { renderTable } from './ui/table';
+import { renderTable, type ExportMatrix } from './ui/table';
+import { exportCsv, exportXlsx } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, type CommentApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout } from './relay';
@@ -142,7 +143,7 @@ async function refresh(): Promise<void> {
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
   main.append(tabs, subbar, toolbar, tableHost);
 
-  if (state.mode === 'assets') await renderAssets(subbar, count, tableHost);
+  if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, tableHost);
   else await renderHistory(subbar, count, toolbar, tableHost);
 }
 
@@ -155,6 +156,25 @@ function matchQ(parts: (string | undefined)[]): boolean {
 }
 
 // コメント列に渡すAPI。byId は id→コメント(ts昇順)。save は ts指定で編集/null で新規追加。
+// エクスポートボタン（CSV / Excel）。exportRef.fn は renderTable が描画時にセットする。
+function addExportButtons(toolbar: HTMLElement, sheetName: string, exportRef: { fn?: () => ExportMatrix }): void {
+  const fname = (ext: string) => `QAM_${sheetName}_${state.entity}_${stampNow().slice(0, 10)}.${ext}`;
+  const sheet = (m: ExportMatrix) => ({ name: sheetName, headers: m.headers, rows: m.rows });
+  const mk = (label: string, run: (s: ReturnType<typeof sheet>, fn: string) => void, ext: string) => {
+    const b = el('button', { class: 'btn btn--sm', html: `${icon('download', 14)}<span>${label}</span>` });
+    b.addEventListener('click', () => {
+      const m = exportRef.fn?.();
+      if (!m || !m.rows.length) { toast('エクスポートする行がありません', 'info'); return; }
+      try { run(sheet(m), fname(ext)); } catch (e) { toast('エクスポートに失敗: ' + (e as Error).message, 'error'); }
+    });
+    return b;
+  };
+  toolbar.append(el('div', { class: 'qam-export-group' }, [
+    mk('CSV', exportCsv, 'csv'),
+    mk('Excel', exportXlsx, 'xlsx'),
+  ]));
+}
+
 async function commentApi(entity: QamEntity): Promise<CommentApi> {
   const byId: Record<string, QamComment[]> = {};
   for (const c of await readComments(backend, entity)) (byId[c.id] ??= []).push(c);
@@ -170,7 +190,7 @@ async function commentApi(entity: QamEntity): Promise<CommentApi> {
   };
 }
 
-async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLElement): Promise<void> {
+async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost); // 資産一覧モードではカレンダー非表示
   const stamps = await getSnapshotStamps(backend, state.entity);
   // as-of セレクタ（取込日時）
@@ -200,11 +220,13 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLE
   rows = rows.filter((r) => matchAsset(r, state.q));
   count.textContent = `${rows.length} 件 / ${fmtStamp(stamp)} 時点`;
   const comments = await commentApi(state.entity);
+  const exportRef: { fn?: () => ExportMatrix } = {};
   clear(host);
   host.append(renderTable({
     viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments),
-    rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment,
+    rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef,
   }));
+  addExportButtons(toolbar, '資産一覧', exportRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
@@ -253,11 +275,13 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   const span = state.histFrom ? (state.histTo && state.histTo !== state.histFrom ? ` / ${state.histFrom}〜${state.histTo}` : ` / ${state.histFrom}${state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}`) : '';
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
+  const exportRef: { fn?: () => ExportMatrix } = {};
   clear(host);
   host.append(renderTable({
     viewId: `history.${state.entity}`, columns: historyColumns(comments),
-    rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected,
+    rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef,
   }));
+  addExportButtons(toolbar, '変更履歴', exportRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 

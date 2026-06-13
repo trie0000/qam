@@ -12,6 +12,7 @@ export interface Column {
   render: (row: any) => string | Node;
   sortVal?: (row: any) => string;
 }
+export interface ExportMatrix { headers: string[]; rows: string[][] }
 export interface TableOpts {
   viewId: string;
   columns: Column[];
@@ -20,6 +21,8 @@ export interface TableOpts {
   selected: Set<string>;
   onSelectionChange?: () => void;
   bulkActions?: (keys: string[]) => HTMLElement[];
+  // 現在の表示（フィルタ・並べ替え後）をテキスト行列で取り出す関数を受け取る箱（エクスポート用）。
+  exportRef?: { fn?: () => ExportMatrix };
 }
 
 // 描画上限。通常（数千件まで）は全件描画してスクロール表示。極端（数万件）の
@@ -90,6 +93,12 @@ export function renderTable(opts: TableOpts): HTMLElement {
     return [...opts.rows].sort((a, b) => val(a).localeCompare(val(b)) * st.sort!.dir);
   }
   const displayedRows = (): any[] => sortedRows().filter(passesFilters);
+
+  // エクスポート: 現在表示中（フィルタ・並べ替え後）の全行をテキスト行列に。列順も画面どおり。
+  if (opts.exportRef) opts.exportRef.fn = () => ({
+    headers: cols.map((c) => c.label || c.id),
+    rows: displayedRows().map((r) => cols.map((c) => cellText(c, r))),
+  });
 
   function renderBody(): void {
     const old = table.querySelector('tbody'); if (old) old.remove();

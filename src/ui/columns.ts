@@ -10,6 +10,12 @@ export const changeTag = (c: string): string => `<span class="qam-tag qam-tag--$
 
 const joined = (a?: string[]): string => esc((a ?? []).join(', '));
 
+// その資産の最新コメント本文（無ければ空）。フィルタ・並べ替え・エクスポートの照合に使う。
+const latestText = (api: CommentApi, id: string): string => {
+  const l = api.byId[id] ?? [];
+  return l.length ? l[l.length - 1].text : '';
+};
+
 // 一覧のコメント列に渡すAPI。byId は id→コメント配列(ts昇順)。save は ts指定で編集/null で新規追加し、
 // 更新後の配列を返す。openThread は従来のスレッドモーダル（履歴閲覧・追記）。
 export interface CommentApi {
@@ -64,7 +70,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi): Column[] 
   const c = (id: string, label: string, render: (r: QamRecord) => string | Node, mono?: boolean): Column => ({ id, label, mono, render, sortVal: (r) => String((render(r) as any)).toString() });
   const sc = (f: string) => (r: QamRecord) => esc(r.scalar[f] ?? '');
   const stc = (f: string) => (r: QamRecord) => joined(r.set[f]);
-  const comment: Column = { id: '_c', label: 'コメント', sortable: false, render: (r: QamRecord) => commentCell(entity, r.key, comments) };
+  const comment: Column = { id: '_c', label: 'コメント', sortable: false, render: (r: QamRecord) => commentCell(entity, r.key, comments), sortVal: (r: QamRecord) => latestText(comments, r.key) };
   if (entity === 'group') return [
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'タイトル', (r) => esc(r.name)),
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
@@ -103,6 +109,6 @@ export function historyColumns(comments: CommentApi): Column[] {
     { id: 'field', label: '項目', render: (e: QamEvent) => esc(e.field ?? ''), sortVal: (e: QamEvent) => e.field ?? '' },
     { id: 'old', label: '変更前/削除', render: oldCell, sortable: false },
     { id: 'new', label: '変更後/追加', render: newCell, sortable: false },
-    { id: '_c', label: 'コメント', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments) },
+    { id: '_c', label: 'コメント', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) },
   ];
 }
