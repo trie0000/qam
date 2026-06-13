@@ -26,6 +26,8 @@ export function assetColumns(entity: QamEntity, counts: Record<string, number>, 
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'タイトル', (r) => esc(r.name)),
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
     c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
+    c('DIVISION', '部門(Division)', sc('DIVISION')), c('FUNCTION', '機能(Function)', sc('FUNCTION')),
+    c('LOCATION', 'ロケーション(Location)', sc('LOCATION')), c('COMMENTS', 'コメント', sc('COMMENTS')),
     c('LAST_UPDATE', '最終更新', (r) => esc(r.info.LAST_UPDATE ?? ''), true), comment,
   ];
   if (entity === 'host') return [

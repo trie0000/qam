@@ -68,6 +68,11 @@ function readGroup(ag: Element): QamRecord {
   r.scalar.TITLE = r.name;
   r.scalar.OWNER_ID = text(ag, 'OWNER_ID');
   r.scalar.BUSINESS_IMPACT = text(ag, 'BUSINESS_IMPACT');
+  // 業務情報（画面の Division/Function/Location/Comments）。返す API なら取得・差分対象に。
+  r.scalar.DIVISION = text(ag, 'DIVISION');
+  r.scalar.FUNCTION = text(ag, 'FUNCTION');
+  r.scalar.LOCATION = text(ag, 'LOCATION');
+  r.scalar.COMMENTS = text(ag, 'COMMENTS');
   r.info.LAST_UPDATE = text(ag, 'LAST_UPDATE');
   const ipset = ag.getElementsByTagName('IP_SET')[0] ?? null;
   r.set.IPS = uniq([...tagValues(ipset, 'IP'), ...tagValues(ipset, 'IP_RANGE')]);
