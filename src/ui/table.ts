@@ -22,6 +22,10 @@ export interface TableOpts {
   bulkActions?: (keys: string[]) => HTMLElement[];
 }
 
+// 一度に描画する最大行数。これを超えると先頭 N 件のみ描画し注記を出す
+// （数千〜万行を一括 DOM 構築するとフリーズ＝「読み込み中」に見えるため。検索/フィルタで絞り込む運用）。
+const MAX_ROWS = 500;
+
 interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null }
 
 function loadState(viewId: string): TState {
@@ -48,7 +52,9 @@ export function renderTable(opts: TableOpts): HTMLElement {
   function updateBulk(): void {
     clear(bulk);
     const keys = [...opts.selected];
-    bulk.append(el('span', {}, [keys.length ? `${keys.length} 件選択中` : `${opts.rows.length} 件`]));
+    const total = opts.rows.length;
+    const note = total > MAX_ROWS ? `（全 ${total.toLocaleString()} 件中 先頭 ${MAX_ROWS} 件を表示・検索/フィルタで絞り込み）` : '';
+    bulk.append(el('span', {}, [keys.length ? `${keys.length} 件選択中` : `${total.toLocaleString()} 件${note}`]));
     if (keys.length && opts.bulkActions) {
       const acts = el('div', { class: 'qam-bulk-actions' });
       opts.bulkActions(keys).forEach((b) => acts.append(b));
@@ -87,15 +93,17 @@ export function renderTable(opts: TableOpts): HTMLElement {
     cols.forEach((c) => trH.append(buildTh(c)));
     const thead = el('thead'); thead.append(trH); table.append(thead);
 
-    // ---- tbody ----
+    // ---- tbody（大量行はフリーズするので先頭 MAX_ROWS 件のみ描画） ----
     const tbody = el('tbody');
-    for (const row of sortedRows()) {
+    const allRows = sortedRows();
+    for (const row of allRows.slice(0, MAX_ROWS)) {
       const key = opts.getKey(row);
       const tr = el('tr', { class: opts.selected.has(key) ? 'qam-selected' : '' });
       const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
       cb.checked = opts.selected.has(key);
       cb.addEventListener('click', (e) => e.stopPropagation());
-      cb.addEventListener('change', () => { cb.checked ? opts.selected.add(key) : opts.selected.delete(key); tr.classList.toggle('qam-selected', cb.checked); updateBulk(); render(); opts.onSelectionChange?.(); });
+      // 行トグルは class 更新 + バルクのみ。全再描画(render)すると大量行でクリック毎に固まる。
+      cb.addEventListener('change', () => { if (cb.checked) opts.selected.add(key); else opts.selected.delete(key); tr.classList.toggle('qam-selected', cb.checked); updateBulk(); opts.onSelectionChange?.(); });
       const tdC = el('td', { class: 'qam-col-check' }); tdC.append(cb); tr.append(tdC);
       cols.forEach((c) => {
         const td = el('td', { class: c.mono ? 'qam-mono' : '' });
