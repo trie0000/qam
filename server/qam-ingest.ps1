@@ -143,5 +143,17 @@ function ConvertFrom-QamXml {
         'host'   { foreach ($n in $doc.SelectNodes('//HOST'))        { $r = Read-QamHostRecord $n;  $r.hash = Get-QamRecordHash $r; $records[$r.key] = $r } }
         'domain' { foreach ($n in $doc.SelectNodes('//DOMAIN'))      { $r = Read-QamDomainRecord $n; if ($r.key) { $r.hash = Get-QamRecordHash $r; $records[$r.key] = $r } } }
     }
-    return [pscustomobject]@{ entity = $Entity; records = $records }
+    $dt = ''
+    $dtNode = $doc.SelectSingleNode('//DATETIME')
+    if ($dtNode) { $dt = $dtNode.InnerText.Trim() }
+    return [pscustomobject]@{ entity = $Entity; datetime = $dt; records = $records }
+}
+
+# XML の RESPONSE/DATETIME（あれば）を yyyy-MM-dd へ。無ければ本日。
+function Resolve-QamSnapshotDate {
+    param([string]$Datetime)
+    if ($Datetime) {
+        try { return ([datetime]$Datetime).ToString('yyyy-MM-dd') } catch { }
+    }
+    return (Get-Date).ToString('yyyy-MM-dd')
 }

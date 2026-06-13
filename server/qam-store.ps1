@@ -98,6 +98,18 @@ function Add-QamHistory {
     Add-Content -LiteralPath $f -Value $lines -Encoding UTF8
 }
 
+# 再取込（冪等）用: 指定日のイベントを履歴から除去してからの追記に使う。
+function Remove-QamHistoryForDate {
+    param([string]$DataDir, [string]$Entity, [string]$Date)
+    $f = Join-Path (Join-Path $DataDir 'history') "$Entity.jsonl"
+    if (-not (Test-Path -LiteralPath $f)) { return }
+    $kept = foreach ($line in (Get-Content -LiteralPath $f -Encoding UTF8)) {
+        if (-not $line.Trim()) { continue }
+        if (($line | ConvertFrom-Json).ts -ne $Date) { $line }
+    }
+    Set-Content -LiteralPath $f -Value $kept -Encoding UTF8
+}
+
 function Read-QamHistory {
     param([string]$DataDir, [string]$Entity, [string]$From, [string]$To)
     $f = Join-Path (Join-Path $DataDir 'history') "$Entity.jsonl"
@@ -142,6 +154,22 @@ function Read-QamComments {
 function Add-QamRun {
     param([string]$DataDir, $Run)
     Add-Content -LiteralPath (Join-Path $DataDir 'runs.jsonl') -Value ($Run | ConvertTo-Json -Compress) -Encoding UTF8
+}
+
+# 生 XML を raw/<date>/<entity>.xml.gz として保管（保存期間内・再計算/監査用）。
+function Save-QamRaw {
+    param([string]$DataDir, [string]$Entity, [string]$Date, [string]$SrcPath)
+    $dir = Join-Path (Join-Path $DataDir 'raw') $Date
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $dst = Join-Path $dir "$Entity.xml.gz"
+    $in = [System.IO.File]::OpenRead($SrcPath)
+    try {
+        $out = [System.IO.File]::Create($dst)
+        try {
+            $gz = New-Object System.IO.Compression.GzipStream($out, [System.IO.Compression.CompressionMode]::Compress)
+            try { $in.CopyTo($gz) } finally { $gz.Dispose() }
+        } finally { $out.Dispose() }
+    } finally { $in.Dispose() }
 }
 
 # 保存期間超過の snapshots/*/<date>.json と raw/<date> を剪定（history/comments は対象外）。
