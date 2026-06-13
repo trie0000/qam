@@ -132,17 +132,42 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-table.qam-wrap td { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: break-word; }
 .qam-table thead th { position: sticky; z-index: 1; background: var(--paper-2); color: var(--ink-3);
   font-weight: 600; font-size: var(--fs-sm); user-select: none; }
-/* ヘッダは2段(ラベル行+フィルタ行)。ラベル行を top:0、フィルタ行をその直下に固定。 */
-.qam-table thead tr:first-child th { top: 0; height: 36px; box-sizing: border-box; }
+.qam-table thead tr:first-child th { top: 0; }
 .qam-table thead th .qam-th { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; }
 .qam-table thead th .qam-th svg { width: 13px; height: 13px; }
-/* フィルタ行: ラベル行の直下に固定、薄い背景・コンパクト入力。 */
-.qam-filter-row th { top: 36px; padding: var(--s-1) var(--s-3) var(--s-2); background: var(--paper); font-weight: 400;
-  border-bottom: 1px solid var(--line-strong); }
-.qam-filter-in { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-xs); color: var(--ink);
-  background: var(--paper-2); border: 1px solid var(--line); border-radius: var(--r-1); padding: 2px var(--s-2); }
-.qam-filter-in:focus { outline: none; border-color: var(--accent); background: var(--paper); }
-.qam-filter-in::placeholder { color: var(--ink-4); }
+
+/* ---------- フィルタ（チップ式・Notion/Spira風） ---------- */
+.qam-filterbar { display: flex; flex-wrap: wrap; gap: var(--s-2); padding: 0 var(--gutter); }
+.qam-filterbar:empty { display: none; }
+.qam-flt-chips { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.qam-flt-chips:empty { display: none; }
+.qam-filterbar:has(.qam-flt-chips:empty) { padding: 0; }
+.qam-flt-chip { display: inline-flex; align-items: center; gap: var(--s-2); height: 28px;
+  padding: 0 var(--s-2) 0 var(--s-4); border: 1px solid var(--accent); background: var(--accent-soft);
+  border-radius: 14px; font-size: var(--fs-xs); color: var(--ink); }
+.qam-flt-chip-label { font-weight: 600; white-space: nowrap; }
+.qam-flt-chip-val { border: 0; background: var(--paper); color: var(--ink); font: inherit; font-size: var(--fs-xs);
+  padding: 2px var(--s-3); border-radius: var(--r-1); outline: none; min-width: 70px; max-width: 160px; }
+.qam-flt-chip-val:focus { box-shadow: 0 0 0 1px var(--accent); }
+.qam-flt-chip-x { border: 0; background: transparent; cursor: pointer; color: var(--ink-3);
+  width: 18px; height: 18px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.qam-flt-chip-x svg { width: 12px; height: 12px; }
+.qam-flt-chip-x:hover { background: rgba(42,42,38,0.12); color: var(--ink); }
+/* フィールドピッカーのポップオーバー */
+.qam-flt-pop { position: fixed; display: none; width: 280px; padding: var(--s-3); z-index: 1000;
+  background: var(--paper); border: 1px solid var(--paper-3); border-radius: var(--r-3); box-shadow: var(--shadow-flyout);
+  font-family: var(--font-sans); }
+.qam-flt-pop.on { display: block; }
+.qam-flt-pop-inpwrap { padding: 0 0 var(--s-3); }
+.qam-flt-pop-inp { width: 100%; box-sizing: border-box; height: 32px; padding: var(--s-2) var(--s-4);
+  border: 1px solid var(--paper-3); border-radius: var(--r-2); background: var(--paper); color: var(--ink); font: inherit; font-size: var(--fs-sm); outline: none; }
+.qam-flt-pop-inp:focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-soft); }
+.qam-flt-pop-list { max-height: 280px; overflow-y: auto; }
+.qam-flt-pop-item { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-2); cursor: pointer; font-size: var(--fs-md); color: var(--ink); }
+.qam-flt-pop-item:hover { background: var(--paper-2-strong); }
+.qam-flt-pop-ic { width: 18px; flex-shrink: 0; text-align: center; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--ink-3); }
+.qam-flt-pop-empty { padding: var(--s-6) var(--s-4); text-align: center; color: var(--ink-4); font-size: var(--fs-sm); }
 .qam-th-resize { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; }
 .qam-table th { position: relative; }
 .qam-table th.qam-drag-over { box-shadow: inset 2px 0 0 var(--accent); }

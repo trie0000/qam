@@ -13,6 +13,15 @@ export interface Column {
   sortVal?: (row: any) => string;
 }
 export interface ExportMatrix { headers: string[]; rows: string[][] }
+// フィルタ操作の窓口（チップUIは外＝main側が描画。テーブルは適用・永続・本体再描画を担う）。
+export interface FilterRef {
+  cols: { id: string; label: string; mono?: boolean }[];          // フィルタ可能な列（描画時にテーブルが設定）
+  list: () => { id: string; label: string; value: string }[];     // 現在のチップ（追加順）
+  add: (id: string) => void;                                      // 空チップ追加
+  setValue: (id: string, value: string) => void;                  // 値変更（本体のみ再描画＝入力フォーカス維持）
+  remove: (id: string) => void;                                   // チップ削除
+  onChange?: () => void;                                          // 追加/削除時に main がチップを再描画
+}
 export interface TableOpts {
   viewId: string;
   columns: Column[];
@@ -23,17 +32,23 @@ export interface TableOpts {
   bulkActions?: (keys: string[]) => HTMLElement[];
   // 現在の表示（フィルタ・並べ替え後）をテキスト行列で取り出す関数を受け取る箱（エクスポート用）。
   exportRef?: { fn?: () => ExportMatrix };
+  filterRef?: FilterRef;                                          // フィルタ操作の窓口（任意）
 }
 
 // 描画上限。通常（数千件まで）は全件描画してスクロール表示。極端（数万件）の
 // フリーズだけ保護する高い上限。超えた分のみ注記を出す。
 const MAX_ROWS = 5000;
 
-interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: Record<string, string> }
+interface FilterCond { field: string; value: string }
+interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: FilterCond[] }
 
 function loadState(viewId: string): TState {
-  try { return { order: [], widths: {}, sort: null, filters: {}, ...JSON.parse(localStorage.getItem(LS.table(viewId)) || '{}') }; }
-  catch { return { order: [], widths: {}, sort: null, filters: {} }; }
+  try {
+    const s = { order: [], widths: {}, sort: null, filters: [], ...JSON.parse(localStorage.getItem(LS.table(viewId)) || '{}') } as TState;
+    // 旧形式（列ごとの Record<string,string>）からの移行: 値ありを追加順の配列へ。
+    if (s.filters && !Array.isArray(s.filters)) s.filters = Object.entries(s.filters as Record<string, string>).filter(([, v]) => v).map(([field, value]) => ({ field, value }));
+    return s;
+  } catch { return { order: [], widths: {}, sort: null, filters: [] }; }
 }
 const saveState = (viewId: string, s: TState) => localStorage.setItem(LS.table(viewId), JSON.stringify(s));
 
@@ -75,12 +90,14 @@ export function renderTable(opts: TableOpts): HTMLElement {
     }
   }
 
-  // 列フィルタ: その列が空でなければ、カンマ区切りの語の「いずれか」を含めば一致(OR)。複数列はAND。
+  // フィルタ: チップごとに、カンマ区切りの語の「いずれか」を含めば一致(OR)。複数チップはAND。
   function passesFilters(row: any): boolean {
-    return cols.every((c) => {
-      const f = (st.filters[c.id] || '').trim();
+    return st.filters.every((flt) => {
+      const f = (flt.value || '').trim();
       if (!f) return true;
-      const text = cellText(c, row).toLowerCase();
+      const col = byId.get(flt.field);
+      if (!col) return true;
+      const text = cellText(col, row).toLowerCase();
       const terms = f.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
       return terms.length === 0 || terms.some((t) => text.includes(t));
     });
@@ -99,6 +116,16 @@ export function renderTable(opts: TableOpts): HTMLElement {
     headers: cols.map((c) => c.label || c.id),
     rows: displayedRows().map((r) => cols.map((c) => cellText(c, r))),
   });
+
+  // フィルタ操作の窓口を main へ公開（チップUIは main 側が描画）。
+  if (opts.filterRef) {
+    const fr = opts.filterRef;
+    fr.cols = cols.map((c) => ({ id: c.id, label: c.label || c.id, mono: c.mono }));
+    fr.list = () => st.filters.map((f) => ({ id: f.field, label: byId.get(f.field)?.label || f.field, value: f.value }));
+    fr.add = (id) => { if (!st.filters.some((f) => f.field === id)) st.filters.push({ field: id, value: '' }); saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
+    fr.setValue = (id, val) => { const f = st.filters.find((x) => x.field === id); if (f) { f.value = val; saveState(opts.viewId, st); renderBody(); } };
+    fr.remove = (id) => { st.filters = st.filters.filter((f) => f.field !== id); saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
+  }
 
   function renderBody(): void {
     const old = table.querySelector('tbody'); if (old) old.remove();
@@ -133,7 +160,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
     table.append(colgroup);
     setTableWidth();
 
-    // ---- thead: ヘッダ行 + フィルタ行 ----
+    // ---- thead: ヘッダ行 ----
     const shownKeys = displayedRows().map(opts.getKey);
     const selCount = shownKeys.filter((k) => opts.selected.has(k)).length;
     const selAll = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -147,17 +174,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
     const thCheck = el('th', { class: 'qam-col-check' }); thCheck.append(selAll);
     const trH = el('tr'); trH.append(thCheck);
     cols.forEach((c) => trH.append(buildTh(c)));
-    // フィルタ行（列ごと・カンマで OR）
-    const trF = el('tr', { class: 'qam-filter-row' });
-    trF.append(el('th', { class: 'qam-col-check' }));
-    cols.forEach((c) => {
-      const fth = el('th');
-      const inp = el('input', { class: 'qam-filter-in', placeholder: '絞り込み (,でOR)', value: st.filters[c.id] || '' }) as HTMLInputElement;
-      inp.addEventListener('input', () => { st.filters[c.id] = inp.value; saveState(opts.viewId, st); renderBody(); });
-      inp.addEventListener('click', (e) => e.stopPropagation());
-      fth.append(inp); trF.append(fth);
-    });
-    const thead = el('thead'); thead.append(trH, trF); table.append(thead);
+    const thead = el('thead'); thead.append(trH); table.append(thead);
 
     renderBody();
   }

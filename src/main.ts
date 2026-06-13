@@ -5,7 +5,7 @@ import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
-import { renderTable, type ExportMatrix } from './ui/table';
+import { renderTable, type ExportMatrix, type FilterRef } from './ui/table';
 import { exportCsv, exportXlsx } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, type CommentApi } from './ui/columns';
@@ -139,12 +139,13 @@ async function refresh(): Promise<void> {
   });
   toolbar.append(wrapBtn);
 
+  const filterBar = el('div', { class: 'qam-filterbar' });
   const tableHost = el('div', { style: 'min-height:0;overflow:hidden' });
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
-  main.append(tabs, subbar, toolbar, tableHost);
+  main.append(tabs, subbar, toolbar, filterBar, tableHost);
 
-  if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, tableHost);
-  else await renderHistory(subbar, count, toolbar, tableHost);
+  if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, filterBar, tableHost);
+  else await renderHistory(subbar, count, toolbar, filterBar, tableHost);
 }
 
 const skeleton = (): HTMLElement => el('div', {}, Array.from({ length: 6 }, () => el('div', { class: 'qam-skeleton' })));
@@ -156,6 +157,81 @@ function matchQ(parts: (string | undefined)[]): boolean {
 }
 
 // コメント列に渡すAPI。byId は id→コメント(ts昇順)。save は ts指定で編集/null で新規追加。
+// フィルタUI（memola風）: 「フィルター」ボタン→列ピッカーのポップオーバー→チップ（ラベル+値入力+×）。
+// 複数チップは AND、各チップ内はカンマで OR。状態はテーブル側(localStorage/ビュー単位)が保持する。
+function fltIcon(c: { id: string; mono?: boolean }): string {
+  if (/DATE|UPDATE|SCAN|LOGIN|^ts$/i.test(c.id)) return '📅';
+  return c.mono ? '#' : 'Aa';
+}
+function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef): void {
+  document.getElementById('qam-flt-pop')?.remove(); // 再描画時に前回のポップオーバーが残らないように
+  const pop = el('div', { class: 'qam-flt-pop', id: 'qam-flt-pop' });
+  document.body.append(pop);
+  const chips = el('div', { class: 'qam-flt-chips' });
+  filterBar.append(chips);
+
+  const btn = el('button', { class: 'btn btn--sm', html: `${icon('chevronDown', 14)}<span>フィルター</span>` });
+
+  function renderChips(): void {
+    clear(chips);
+    for (const c of fr.list()) {
+      const chip = el('div', { class: 'qam-flt-chip' });
+      chip.append(el('span', { class: 'qam-flt-chip-label' }, [c.label]));
+      const inp = el('input', { type: 'text', class: 'qam-flt-chip-val', placeholder: '値…(,でOR)', value: c.value }) as HTMLInputElement;
+      inp.addEventListener('input', () => fr.setValue(c.id, inp.value));
+      inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') inp.blur(); });
+      const x = el('button', { class: 'qam-flt-chip-x', title: '削除', html: icon('x', 12) });
+      x.addEventListener('click', () => fr.remove(c.id));
+      chip.append(inp, x);
+      chips.append(chip);
+    }
+  }
+  fr.onChange = renderChips;
+
+  function openPop(): void {
+    if (pop.classList.contains('on')) { pop.classList.remove('on'); return; }
+    clear(pop);
+    const inpWrap = el('div', { class: 'qam-flt-pop-inpwrap' });
+    const inp = el('input', { type: 'text', class: 'qam-flt-pop-inp', placeholder: 'フィルター対象…' }) as HTMLInputElement;
+    inpWrap.append(inp); pop.append(inpWrap);
+    const list = el('div', { class: 'qam-flt-pop-list' }); pop.append(list);
+    const renderList = (q: string): void => {
+      clear(list);
+      const used = new Set(fr.list().map((f) => f.id));
+      const ql = q.toLowerCase();
+      const cand = fr.cols.filter((c) => !used.has(c.id) && (!ql || c.label.toLowerCase().includes(ql)));
+      if (!cand.length) { list.append(el('div', { class: 'qam-flt-pop-empty' }, [used.size >= fr.cols.length ? '全項目に条件設定済み' : '一致する項目なし'])); return; }
+      for (const c of cand) {
+        const item = el('div', { class: 'qam-flt-pop-item' });
+        item.append(el('span', { class: 'qam-flt-pop-ic' }, [fltIcon(c)]), el('span', {}, [c.label]));
+        item.addEventListener('click', () => {
+          pop.classList.remove('on');
+          fr.add(c.id); // → onChange=renderChips が走る
+          setTimeout(() => { const ins = chips.querySelectorAll<HTMLElement>('.qam-flt-chip-val'); ins[ins.length - 1]?.focus(); }, 30);
+        });
+        list.append(item);
+      }
+    };
+    inp.addEventListener('input', () => renderList(inp.value));
+    const r = btn.getBoundingClientRect();
+    pop.style.left = `${Math.min(r.left, window.innerWidth - 300)}px`;
+    pop.style.top = `${r.bottom + 6}px`;
+    pop.classList.add('on');
+    renderList('');
+    setTimeout(() => inp.focus(), 30);
+  }
+  btn.addEventListener('click', (e) => { e.stopPropagation(); openPop(); });
+  // 外側クリックで閉じる
+  pop.addEventListener('click', (e) => e.stopPropagation());
+  if (!filterOutsideBound) {
+    document.addEventListener('click', () => document.getElementById('qam-flt-pop')?.classList.remove('on'));
+    filterOutsideBound = true;
+  }
+  toolbar.append(btn);
+  renderChips();
+}
+let filterOutsideBound = false;
+
 // エクスポートボタン（CSV / Excel）。exportRef.fn は renderTable が描画時にセットする。
 function addExportButtons(toolbar: HTMLElement, sheetName: string, exportRef: { fn?: () => ExportMatrix }): void {
   const fname = (ext: string) => `QAM_${sheetName}_${state.entity}_${stampNow().slice(0, 10)}.${ext}`;
@@ -190,7 +266,7 @@ async function commentApi(entity: QamEntity): Promise<CommentApi> {
   };
 }
 
-async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, host: HTMLElement): Promise<void> {
+async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost); // 資産一覧モードではカレンダー非表示
   const stamps = await getSnapshotStamps(backend, state.entity);
   // as-of セレクタ（取込日時）
@@ -221,16 +297,18 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
   count.textContent = `${rows.length} 件 / ${fmtStamp(stamp)} 時点`;
   const comments = await commentApi(state.entity);
   const exportRef: { fn?: () => ExportMatrix } = {};
+  const filterRef = {} as FilterRef;
   clear(host);
   host.append(renderTable({
     viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments),
-    rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef,
+    rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef, filterRef,
   }));
+  addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '資産一覧', exportRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
-async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, host: HTMLElement): Promise<void> {
+async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
   const all = await readHistory(backend, state.entity);
   const stamps = await getSnapshotStamps(backend, state.entity);
 
@@ -276,11 +354,13 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
   const exportRef: { fn?: () => ExportMatrix } = {};
+  const filterRef = {} as FilterRef;
   clear(host);
   host.append(renderTable({
     viewId: `history.${state.entity}`, columns: historyColumns(comments),
-    rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef,
+    rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef,
   }));
+  addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '変更履歴', exportRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }

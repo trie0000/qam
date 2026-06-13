@@ -105,7 +105,9 @@ function Get-QamText1 { param([string]$Xml, [string]$Pattern)
 
 # Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
 function Invoke-QualysFetch { param($Body)
-    $proxy = if ($script:QSession) { $script:QProxy } else { $Body.proxy }
+    # noSession 指定時はセッションを使わず必ず Basic 認証で叩く（user 一覧の 401/403 再試行用）。
+    $useSession = $script:QSession -and -not $Body.noSession
+    $proxy = if ($useSession) { $script:QProxy } else { $Body.proxy }
     $base = if ($Body.base) { ([string]$Body.base).TrimEnd('/') } elseif ($script:QBase) { $script:QBase } else { '' }
     $url = $Body.url
     if (-not $url) {
@@ -123,14 +125,14 @@ function Invoke-QualysFetch { param($Body)
     $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
     try {
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
-        if ($script:QSession) {
+        if ($useSession) {
             $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
         } elseif ($Body.user) {
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
-        Write-Host "[qam] fetch GET $url (session=$([bool]$script:QSession), proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
-        Add-QamLog "FETCH start $url (session=$([bool]$script:QSession), proxy=$(if ($proxy) { $proxy } else { 'none' }))"
+        Write-Host "[qam] fetch GET $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
+        Add-QamLog "FETCH start $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
         $resp = $client.GetAsync($url).Result
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
         $bytes = $resp.Content.ReadAsByteArrayAsync().Result
