@@ -8,8 +8,12 @@ qam.env
 *.xml
 *.xml.gz
 
+# node
+node_modules/
+
 # test temp
 test/.tmp/
+test/.tmp-srv/
 
 # os / editor
 .DS_Store
