@@ -1,0 +1,14 @@
+# secrets / local config
+qam.env
+*.env.local
+
+# collected Qualys data — never commit
+/data/
+/raw/
+*.xml
+*.xml.gz
+
+# os / editor
+.DS_Store
+*.swp
+*~
