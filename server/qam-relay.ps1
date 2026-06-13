@@ -138,9 +138,19 @@ function Invoke-QualysFetch { param($Body)
         $bytes = $resp.Content.ReadAsByteArrayAsync().Result
         $xml = [System.Text.Encoding]::UTF8.GetString($bytes)
         $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
-        Write-Host "[qam] fetch -> HTTP $([int]$resp.StatusCode), $($xml.Length) chars, nextPage=$([bool]$next)" -ForegroundColor DarkCyan
-        Add-QamLog "FETCH done HTTP $([int]$resp.StatusCode), $($xml.Length) chars, nextPage=$([bool]$next)"
-        return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; nextUrl = $next; xml = $xml }
+        $ok = $resp.IsSuccessStatusCode
+        $reason = [string]$resp.ReasonPhrase
+        $ctype = if ($resp.Content.Headers.ContentType) { [string]$resp.Content.Headers.ContentType } else { '' }
+        # 応答本文のスニペット（空白畳み込み）。成功は短め、失敗は理由が分かるよう長めに残す。
+        $snippet = ($xml -replace '\s+', ' ').Trim()
+        $cap = if ($ok) { 300 } else { 1500 }
+        if ($snippet.Length -gt $cap) { $snippet = $snippet.Substring(0, $cap) + ' …(truncated)' }
+        $color = if ($ok) { 'DarkCyan' } else { 'Yellow' }
+        Write-Host "[qam] fetch -> HTTP $([int]$resp.StatusCode) $reason, $($xml.Length) chars, ctype=$ctype, nextPage=$([bool]$next)" -ForegroundColor $color
+        Write-Host "[qam] fetch body: $snippet" -ForegroundColor $color
+        Add-QamLog "FETCH done HTTP $([int]$resp.StatusCode) $reason, $($xml.Length) chars, ctype=$ctype, nextPage=$([bool]$next)"
+        Add-QamLog "FETCH body: $snippet"
+        return [ordered]@{ ok = $ok; status = [int]$resp.StatusCode; nextUrl = $next; xml = $xml }
     } finally { $client.Dispose(); $handler.Dispose() }
 }
 
@@ -245,7 +255,15 @@ function Invoke-Route { param($Ctx)
                 $r.StatusCode = $(if ($res.ok) { 200 } else { 502 })
                 $r.ContentType = 'application/xml; charset=utf-8'
                 $r.ContentLength64 = $bytes.Length; $r.OutputStream.Write($bytes, 0, $bytes.Length); $r.OutputStream.Close()
-            } catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            } catch {
+                # 例外(プロキシ/ネットワーク等)は AggregateException で実体が Inner に入るので連結して出す。
+                $msg = $_.Exception.Message
+                $inner = $_.Exception.InnerException
+                while ($inner) { $msg += ' <- ' + $inner.Message; $inner = $inner.InnerException }
+                Write-Host "[qam] fetch ERROR: $msg" -ForegroundColor Red
+                Add-QamLog "FETCH error: $msg"
+                Send-Json $Ctx @{ ok = $false; error = $msg } 502
+            }
             return
         }
         '^/qam/file/list$' {
