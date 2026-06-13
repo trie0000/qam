@@ -341,8 +341,28 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     onRange: (f, t) => { state.histFrom = f; state.histTo = t; state.histStamp = ''; refresh(); },
   }));
 
-  // 単日選択時のみ: toolbar に取込時刻ドロップダウン（その日の取込時刻だけ）
-  const singleDay = state.histFrom && (!state.histTo || state.histTo === state.histFrom);
+  // 期間 from–to を直接入力（カレンダーの2点クリックと同じ state を共有）。
+  const normalizeRange = (): void => { if (state.histFrom && state.histTo && state.histFrom > state.histTo) { const t = state.histFrom; state.histFrom = state.histTo; state.histTo = t; } };
+  const mkDate = (val: string, set: (v: string) => void): HTMLInputElement => {
+    const i = el('input', { type: 'date', class: 'in', style: 'width:auto' }) as HTMLInputElement;
+    i.value = val; // type=date は value 属性でなく value プロパティで設定
+    i.addEventListener('change', () => { set(i.value); normalizeRange(); state.histStamp = ''; refresh(); });
+    return i;
+  };
+  toolbar.append(
+    el('span', { class: 'qam-count' }, ['期間']),
+    mkDate(state.histFrom, (v) => (state.histFrom = v)),
+    el('span', { class: 'qam-count' }, ['〜']),
+    mkDate(state.histTo, (v) => (state.histTo = v)),
+  );
+  if (state.histFrom || state.histTo) {
+    const clr = el('button', { class: 'btn btn--sm btn--ghost', title: '期間をクリア' }, ['クリア']);
+    clr.addEventListener('click', () => { state.histFrom = ''; state.histTo = ''; state.histStamp = ''; refresh(); });
+    toolbar.append(clr);
+  }
+
+  // 単日（開始=終了）選択時のみ: toolbar に取込時刻ドロップダウン（その日の取込時刻だけ）
+  const singleDay = !!state.histFrom && state.histFrom === state.histTo;
   if (singleDay) {
     const tsel = el('select', { class: 'in' }) as HTMLSelectElement;
     tsel.append(el('option', { value: '' }, ['終日（全取込）']));
@@ -359,18 +379,17 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     toolbar.append(lab);
   }
 
-  const inRange = (d: string): boolean => {
-    if (!state.histFrom) return true;
-    if (!state.histTo) return d === state.histFrom; // 単日
-    return d >= state.histFrom && d <= state.histTo; // from〜to
-  };
+  // 期間: 開始のみ→その日以降、終了のみ→その日以前、両方→範囲、未指定→全件。
+  const inRange = (d: string): boolean => (!state.histFrom || d >= state.histFrom) && (!state.histTo || d <= state.histTo);
   let events = all.filter((e) =>
     state.change.has(e.change)
     && inRange(dateOfStamp(e.ts))
     && (!state.histStamp || e.ts === state.histStamp)
     && matchQ([e.id, e.name, e.field, e.old, e.new, ...(e.added ?? []), ...(e.removed ?? [])]));
   events.reverse(); // 新しい順を既定に
-  const span = state.histFrom ? (state.histTo && state.histTo !== state.histFrom ? ` / ${state.histFrom}〜${state.histTo}` : ` / ${state.histFrom}${state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}`) : '';
+  const span = (state.histFrom || state.histTo)
+    ? ` / ${state.histFrom || '最古'}〜${state.histTo || '最新'}${singleDay && state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}`
+    : '';
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
   const exportRef: { fn?: () => ExportMatrix } = {};
