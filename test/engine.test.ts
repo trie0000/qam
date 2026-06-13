@@ -121,6 +121,17 @@ describe('user', () => {
     expect(countByChange(ev, 'added')).toBe(1);     // 64
     expect(ev.find((e) => e.field === 'USER_ROLE')!.new).toBe('Reader');
   });
+  it('parse: MSP user_list.php（USER_ID なし）は USER_LOGIN をキーにする', () => {
+    const msp = `<USER_LIST_OUTPUT><USER_LIST>
+      <USER><USER_LOGIN>acme_zz9</USER_LOGIN>
+       <CONTACT_INFO><FIRSTNAME>Lee</FIRSTNAME><LASTNAME>Park</LASTNAME><EMAIL>z@e.x</EMAIL></CONTACT_INFO>
+       <USER_STATUS>Active</USER_STATUS><USER_ROLE>Reader</USER_ROLE></USER>
+    </USER_LIST></USER_LIST_OUTPUT>`;
+    const s = parseQualysXml(msp);
+    expect(s.entity).toBe('user');
+    expect(s.records['acme_zz9'].name).toBe('acme_zz9');
+    expect(s.records['acme_zz9'].scalar.NAME).toBe('Park Lee');
+  });
 });
 
 describe('shrinkGuard', () => {

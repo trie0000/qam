@@ -84,9 +84,12 @@ FQDN は `DNS_DATA/FQDN`、無ければ `DNS`。
 </DOMAIN_LIST>
 ```
 
-## User — `/api/2.0/fo/user/?action=list`
+## User — `/msp/user_list.php`（Basic 認証・MSP/v1 API）
 
 DOCTYPE: `USER_LIST_OUTPUT`（RESPONSE/DATETIME ラッパは無い）。
+注: v2 `/api/2.0/fo/user/?action=list` は環境によって Web 層で 403（HTML の「Forbidden Access」）に
+なるため、Basic 認証で使えるレガシー MSP API を使う。MSP 版は `USER_ID` を持たず `USER_LOGIN` が
+一意キー（パーサは `USER_ID || USER_LOGIN` をキーにする）。session Cookie では認証されないので Basic 固定。
 
 ```xml
 <USER_LIST_OUTPUT>

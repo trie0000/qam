@@ -121,8 +121,9 @@ function readDomain(d: Element): QamRecord {
 
 function readUser(u: Element): QamRecord {
   const r = newRecord();
-  r.key = text(u, 'USER_ID');
   const login = text(u, 'USER_LOGIN');
+  // v2(/fo/user/) は USER_ID を持つが、MSP(user_list.php) は持たない → ログインをキーに。
+  r.key = text(u, 'USER_ID') || login;
   const ci = u.getElementsByTagName('CONTACT_INFO')[0] ?? null;
   const fn = ci ? text(ci, 'FIRSTNAME') : '';
   const ln = ci ? text(ci, 'LASTNAME') : '';
