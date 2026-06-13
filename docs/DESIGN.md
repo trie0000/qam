@@ -6,12 +6,18 @@ UI は Spira デザインルール（全アプリ共通）/ 開発基準（bookm
 （all:initial シールド、ローダ 2MB 制限、SP REST 書込みの罠）は非該当。
 ローカルリレー作法（127.0.0.1 / env / health / 1 行ログ）と UI 規約は全面適用。
 
+**実装言語/構成（memola/Spira と同じ）:** アプリ本体は **TypeScript**（ブラウザ、esbuild バンドル、
+vitest）。**PowerShell 5.1 は薄い relay**（バンドル配信 / Qualys のプロキシ取得 / UNC ファイル IO）に
+徹する。ブラウザが UNC 書込み・プロキシアクセス・クロスオリジンをできないため relay は必須だが、
+パース・差分・状態・表示など重い/変わりやすいロジックは全部 TS 側に置く。
+
 ## 1. 取り込み（ingestion）
 
-- 当面: Qualys の UI/API で取得した一覧 XML を UI からアップロード。
-- 将来: PowerShell が Qualys API を直接呼ぶ（Phase 4）。
-- **取り込み口を `qam-ingest.ps1` に隔離**し、「XML アップロード」と「API 直叩き」が
-  同一の正規化関数に合流する形にする（UI・差分ロジックを変更せず後付け可能）。
+2 経路を同一の TS 正規化関数に合流させる（UI・差分は取り込み元に依存しない）:
+- **API ダウンロード**: ブラウザ → relay `/qam/fetch` → relay が **プロキシ経由 + Basic 認証**で
+  Qualys を取得し XML を返す → ブラウザ(TS)がパース。接続先 POD・アカウント/パスワード・
+  プロキシ URL は設定画面（既定は env）。Host の `WARNING/URL`（`id_min`）ページングは relay が follow。
+- **XML アップロード**: ブラウザでファイル選択 → TS がそのままパース（relay 不要）。
 
 対象 API: `/api/2.0/fo/asset/group/?action=list`（`show_attributes=ALL`）/
 `/api/2.0/fo/asset/host/?action=list`（`details=All`）/ `/api/2.0/fo/asset/domain/?action=list`。
@@ -120,6 +126,8 @@ LeftPane(200px) | Tabs: [AssetGroup][Host][Domain]
 - **資産一覧ビューの subbar に as-of 日付ピッカー**（既定=最新）。指定日以前で最大日付のスナップショットを表示。
   保存期間外の日付選択時は Empty 状態（§11）で「保存期間外・変更履歴で確認」を案内。
 - タブ: エンティティ（AssetGroup/Host/Domain）。§23。
+- 一覧表（資産一覧・変更履歴とも）は **Notion §25「共通テーブル設計」準拠**：行/全件選択チェックボックス、
+  列幅リサイズ・列入れ替え（pointer 自前実装）、ソート、列幅/順序の localStorage 永続化、選択時バルクバー常設。
 - 変更履歴の列: `日付 | 種別 | ID | 名前 | 項目 | 変更前/削除 | 変更後/追加 | コメント`。
   スカラーは old→new、リスト型は −removed / +added を表示。
   種別タグ色 added=`--ok` / modified=`--warn` / deleted=`--danger`。ID/タグは mono。
@@ -130,40 +138,57 @@ LeftPane(200px) | Tabs: [AssetGroup][Host][Domain]
 - アイコン: Feather（stroke 1.7, 24x24 viewBox, currentColor）。`.btn svg` に width/height 明示（§5.3 の 0px 潰れ対策）。**絵文字を UI 要素にしない**。
 - トークン: Spira `tokens.css`（モスグリーン accent / paper 系）を `web/app.css` 先頭に同梱。
   hex/px 直書き禁止、ガターは単一 `--gutter`。ダークは `[data-theme="dark"]`。
-- 設定ハブ: §20 master-detail。起動系（待受ポート）は env、UI に出すのは接続先ポート/テーマのみ（§18）。
-  ただし**運用設定の「保存期間（日）」は設定画面で変更可能**にし、`GET/POST /qam/config` 経由で
-  PowerShell が `qam.env`（`QAM_RAW_RETENTION_DAYS`）へ永続化（bundle-dir を UI から変更可能にする §18 の前例に倣う）。
-  保存期間変更時は次回取込で剪定が効く（即時剪定はしない＝誤設定での即消失を避ける）。
+- TopBar 「取込」: **Qualys API ダウンロード**（kind 選択→relay 経由取得）と **XML アップロード**の両入口。
+- 設定ハブ: §20 master-detail。項目=**Qualys 接続先 POD / アカウント / パスワード / プロキシ URL / 保存期間（日）**
+  ＋接続先ポート/テーマ。既定値は env、設定画面の変更は `POST /qam/config` で `qam.env` へ永続化。
+  パスワードはブラウザ設定(localStorage)保持を既定とし、env 直書きは非推奨。
+  保存期間変更時は次回取込で剪定（即時剪定はしない＝誤設定での即消失を避ける）。
 
-## 5. PowerShell サーバ エンドポイント（§18 準拠）
+## 5. relay エンドポイント（薄い中継・§18 準拠・PS 5.1）
 
 prefix `http://127.0.0.1:<QAM_RELAY_PORT>/`。全レスポンスに CORS、全リクエスト 1 行ログ。
+relay は I/O とプロキシ取得のみ。**パース/差分/ストレージ書式の解釈は TS 側**が持つ。
 
 | メソッド/パス | 役割 |
 |---|---|
 | `GET /qam/health` | 起動確認（launcher が待機） |
-| `GET /`・`GET /qam/app.{js,css}` | UI 配信 |
-| `GET /qam/current?entity=&asof=<date>` | 指定日（既定=最新）のフル状態 JSON。指定日以前で最大日付を返す |
-| `GET /qam/dates?entity=` | スナップショットが存在する日付一覧（日付ピッカー用） |
-| `GET /qam/history?entity=&from=&to=&q=` | 履歴（粗く絞り、細かいフィルタはクライアント） |
-| `POST /qam/ingest` | XML 受領→パース→差分→（ガード OK なら）コミット、サマリ返却 |
-| `POST /qam/ingest/confirm` | ガード時のステージ済み取込を確定 |
-| `GET /qam/comments?entity=&id=`・`POST /qam/comment` | 資産単位コメント取得/追記（body: entity, id, text） |
-| `POST /qam/shutdown` | 「終了」アイコン（サーバ停止） |
-| `GET/POST /qam/config` | データディレクトリ・**保存期間（日）**等の照会/変更（env へ永続化） |
+| `GET /`・`GET /qam/bundle/*` | TS バンドル(qam.bundle.js)・version・静的配信 |
+| `POST /qam/fetch` | Qualys API を**プロキシ + Basic 認証**で取得し XML を返す（body: kind, base, user, pass, proxy）。Host ページングを follow |
+| `GET /qam/file?path=` | UNC データ配下のファイル読込（path は `QAM_DATA_DIR` 配下に限定） |
+| `POST /qam/file` | ファイル書込（body: path, content）。append フラグで jsonl 追記 |
+| `GET /qam/file/list?dir=` | ディレクトリ一覧（スナップショット日付列挙等） |
+| `GET/POST /qam/config` | 既定値（プロキシ/POD/保存期間）の照会・変更（env へ永続化） |
+| `POST /qam/shutdown` | 「終了」アイコン（relay 停止） |
+
+ストレージのレイアウト（snapshots/history/comments）と差分・剪定・asof 解決・件数急減ガードは
+**TS 側のロジック**で、`/qam/file` 越しに read/write する。relay はパス安全性（データ配下限定）だけ担保。
 
 ## 6. ファイル構成（§1 / §2）
 
 ```
 qam/
-  server/ qam-server.ps1 / qam-ingest.ps1 / qam-diff.ps1 / qam-store.ps1 / qam.env.example
-  web/    index.html / app.css(tokens 同梱) / app.js / icons.js   （増えたら web/views/ に分割）
-  qam-start.bat   （ASCII のみ・末尾 pause）          ← §18
-  qam-start.ps1   （UTF-8 with BOM）                  ← §18 文字化け防止
-  docs/DESIGN.md  README.md
+  src/                      ← TS アプリ本体（esbuild で qam.bundle.js に）
+    main.ts                 起動・state・イベント結線
+    config.ts               定数・localStorage キー・relay 接続先
+    relay.ts                relay クライアント（fetch/file/list/config ラッパ）
+    ingest/parse.ts         Qualys XML → 正規化レコード（QUALYS_XML.md 準拠）
+    diff.ts                 差分エンジン(added/modified/deleted, set added/removed)
+    store.ts                snapshots/history/comments の read/write（relay 経由）+ asof/剪定
+    qualys.ts               API ダウンロード（kind 別パラメータ組立）
+    icons.ts                Feather SVG
+    styles/app.css          Spira トークン同梱 + コンポーネント
+    ui/                     table.ts（共通テーブル §25）/ modal.ts / toast.ts / views/*
+  server/
+    qam-relay.ps1           薄い relay（配信/プロキシ取得/ファイルIO・PS 5.1）
+    qam.env.example
+  qam-start.bat             （ASCII のみ・末尾 pause）        ← §18
+  qam-start.ps1             （UTF-8 with BOM）                ← §18 文字化け防止
+  build.js  package.json  tsconfig.json  vitest.config.ts
+  test/*.test.ts            vitest（parse/diff/store）
+  docs/DESIGN.md  QUALYS_XML.md  README.md
 ```
 
-1 ファイル 500 行 / 1 関数 80 行を上限。超えたらその変更内で分割。
+1 ファイル 500 行 / 1 関数 80 行を上限。テーブルは Notion §25「共通テーブル設計」準拠。
 
 ## 7. 規約適用チェック（着手・完了時に参照）
 
