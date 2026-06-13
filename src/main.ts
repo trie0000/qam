@@ -42,10 +42,12 @@ function iconBtn(name: string, label: string, on: () => void): HTMLElement {
   const b = el('button', { class: 'btn btn--icon', 'aria-label': label, title: label, html: icon(name, 18) });
   b.addEventListener('click', on); return b;
 }
+const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('upload', 16)}<span>取込</span>` });
+ingestBtn.addEventListener('click', openIngest);
 topbar.append(
   el('span', { class: 'qam-brand' }, ['QAM']),
   el('span', { class: 'qam-build' }, [`build ${BUILD}`]),
-  iconBtn('upload', '取込', openIngest),
+  ingestBtn,
   iconBtn('refresh', '更新', refresh),
   iconBtn('settings', '設定', openSettings),
   iconBtn('logout', '終了', doShutdown),
