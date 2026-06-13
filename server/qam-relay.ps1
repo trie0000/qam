@@ -75,7 +75,9 @@ function Send-Json { param($Ctx, $Obj, [int]$Status = 200)
 }
 function Get-Body { param($Req)
     if (-not $Req.HasEntityBody) { return '' }
-    $sr = New-Object System.IO.StreamReader($Req.InputStream, $Req.ContentEncoding)
+    # 必ず UTF-8 で読む。$Req.ContentEncoding は charset 未指定だと日本語 Windows で
+    # CP932 になり、UTF-8 の JSON ボディが文字化け→ConvertFrom-Json が壊れる。
+    $sr = New-Object System.IO.StreamReader($Req.InputStream, [System.Text.Encoding]::UTF8)
     try { return $sr.ReadToEnd() } finally { $sr.Dispose() }
 }
 # path を DataDir 配下に閉じ込めて解決（.. 等での脱出を拒否）。
@@ -118,7 +120,9 @@ function Invoke-QualysFetch { param($Body)
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         $resp = $client.GetAsync($url).Result
-        $xml = $resp.Content.ReadAsStringAsync().Result
+        # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
+        $bytes = $resp.Content.ReadAsByteArrayAsync().Result
+        $xml = [System.Text.Encoding]::UTF8.GetString($bytes)
         $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
         return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; nextUrl = $next; xml = $xml }
     } finally { $client.Dispose(); $handler.Dispose() }
