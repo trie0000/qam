@@ -53,6 +53,7 @@ if (-not $Port) { $Port = if ($env:QAM_RELAY_PORT) { [int]$env:QAM_RELAY_PORT } 
 if (-not $BundleDir) { $BundleDir = if ($env:QAM_BUNDLE_DIR) { $env:QAM_BUNDLE_DIR } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'dist' } }
 if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
 $DataFull = (Resolve-Path -LiteralPath $DataDir).Path
+$script:LogFile = Join-Path $DataFull 'relay.log'
 $script:QamStop = $false
 # Qualys セッション（login で取得し fetch で使い回し、logout で破棄）。
 $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null
@@ -62,6 +63,13 @@ function Set-Cors { param($Resp)
     $Resp.Headers['Access-Control-Allow-Origin'] = '*'
     $Resp.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     $Resp.Headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    # バンドルを含め一切キャッシュさせない（古い JS を掴み続けて修正が反映されないのを防ぐ）。
+    $Resp.Headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
+}
+
+# コンソールに出しつつ relay.log にも追記（コンソールを見れない時の証跡）。
+function Add-QamLog { param([string]$Text)
+    try { Add-Content -LiteralPath $script:LogFile -Value ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Text) -Encoding UTF8 } catch { }
 }
 function Send-Bytes { param($Ctx, [byte[]]$Bytes, [string]$Type, [int]$Status = 200)
     $r = $Ctx.Response; Set-Cors $r; $r.StatusCode = $Status; $r.ContentType = $Type
@@ -121,12 +129,14 @@ function Invoke-QualysFetch { param($Body)
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         Write-Host "[qam] fetch GET $url (session=$([bool]$script:QSession), proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
+        Add-QamLog "FETCH start $url (session=$([bool]$script:QSession), proxy=$(if ($proxy) { $proxy } else { 'none' }))"
         $resp = $client.GetAsync($url).Result
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
         $bytes = $resp.Content.ReadAsByteArrayAsync().Result
         $xml = [System.Text.Encoding]::UTF8.GetString($bytes)
         $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
         Write-Host "[qam] fetch -> HTTP $([int]$resp.StatusCode), $($xml.Length) chars, nextPage=$([bool]$next)" -ForegroundColor DarkCyan
+        Add-QamLog "FETCH done HTTP $([int]$resp.StatusCode), $($xml.Length) chars, nextPage=$([bool]$next)"
         return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; nextUrl = $next; xml = $xml }
     } finally { $client.Dispose(); $handler.Dispose() }
 }
@@ -144,6 +154,7 @@ function Invoke-QualysLogin { param($Body)
         $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string]$Body.pass))"
         $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
         Write-Host "[qam] login POST $base/api/2.0/fo/session/login/ (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'なし' }))" -ForegroundColor Cyan
+        Add-QamLog "LOGIN start $base (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'none' }))"
         $resp = $client.PostAsync("$base/api/2.0/fo/session/login/", $content).Result
         $body = $resp.Content.ReadAsStringAsync().Result
         # Cookie は Set-Cookie ヘッダから直接拾う（CookieContainer に入らない環境対策）。
@@ -156,6 +167,7 @@ function Invoke-QualysLogin { param($Body)
             foreach ($c in $handler.CookieContainer.GetCookies((New-Object System.Uri($base)))) { if ($c.Name -eq 'QualysSession') { $cookieVal = $c.Value } }
         }
         Write-Host "[qam] login -> HTTP $([int]$resp.StatusCode), cookie=$([bool]$cookieVal)" -ForegroundColor Cyan
+        Add-QamLog "LOGIN done HTTP $([int]$resp.StatusCode), cookie=$([bool]$cookieVal)"
         if ($resp.IsSuccessStatusCode -and $cookieVal) {
             $script:QSession = $cookieVal; $script:QProxy = $Body.proxy; $script:QBase = $base
             return [ordered]@{ ok = $true; status = [int]$resp.StatusCode }
@@ -193,7 +205,9 @@ $IndexHtml = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta n
 function Invoke-Route { param($Ctx)
     $req = $Ctx.Request
     $path = $req.Url.AbsolutePath
-    Write-Host ("[qam] {0} {1} {2}" -f (Get-Date -Format 'HH:mm:ss'), $req.HttpMethod, $path) -ForegroundColor DarkGray
+    $reqLine = "{0} {1}" -f $req.HttpMethod, $path
+    Write-Host ("[qam] " + (Get-Date -Format 'HH:mm:ss') + " " + $reqLine) -ForegroundColor DarkGray
+    Add-QamLog "REQ $reqLine"
     if ($req.HttpMethod -eq 'OPTIONS') { Send-Bytes $Ctx ([byte[]]@()) 'text/plain' 204; return }
     $q = $req.QueryString
 
@@ -276,6 +290,7 @@ $listener.Prefixes.Add("http://127.0.0.1:$Port/")
 $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
 Write-Host "[qam] relay listening on http://127.0.0.1:$Port/ (+localhost)  (DataDir=$DataFull, BundleDir=$BundleDir)" -ForegroundColor Green
+Add-QamLog "=== relay started: port=$Port DataDir=$DataFull BundleDir=$BundleDir ==="
 
 while (-not $script:QamStop) {
     try { $ctx = $listener.GetContext() } catch { break }
@@ -284,6 +299,7 @@ while (-not $script:QamStop) {
         $p = try { $ctx.Request.Url.AbsolutePath } catch { '?' }
         Write-Host "[qam][ERR] $p : $($_.Exception.Message)" -ForegroundColor Red
         if ($_.ScriptStackTrace) { Write-Host ("  " + ($_.ScriptStackTrace -replace "`n", "`n  ")) -ForegroundColor DarkGray }
+        Add-QamLog "ERR $p : $($_.Exception.Message)"
         try { Send-Json $ctx @{ error = $_.Exception.Message } 500 } catch { }
     }
 }
