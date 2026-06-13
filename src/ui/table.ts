@@ -22,9 +22,9 @@ export interface TableOpts {
   bulkActions?: (keys: string[]) => HTMLElement[];
 }
 
-// 一度に描画する最大行数。これを超えると先頭 N 件のみ描画し注記を出す
-// （数千〜万行を一括 DOM 構築するとフリーズ＝「読み込み中」に見えるため。検索/フィルタで絞り込む運用）。
-const MAX_ROWS = 500;
+// 描画上限。通常（数千件まで）は全件描画してスクロール表示。極端（数万件）の
+// フリーズだけ保護する高い上限。超えた分のみ注記を出す。
+const MAX_ROWS = 5000;
 
 interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null }
 
