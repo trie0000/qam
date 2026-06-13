@@ -76,6 +76,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
     colgroup.append(el('col', { style: 'width:38px' }));
     cols.forEach((c) => colgroup.append(el('col', { style: `width:${widthOf(c)}px` })));
     table.append(colgroup);
+    setTableWidth();
 
     // ---- thead ----
     const allKeys = opts.rows.map(opts.getKey);
@@ -144,9 +145,16 @@ export function renderTable(opts: TableOpts): HTMLElement {
     return h;
   }
 
+  // テーブル幅を「列幅の合計」に固定する。width:100% のままだと table-layout:fixed が
+  // 列幅を 100% に再配分し、1 列を広げると他列（左側含む）がずれる。合計幅にすれば各列は独立。
+  function setTableWidth(): void {
+    const total = 38 + cols.reduce((s, c) => s + widthOf(c), 0);
+    table.style.width = `${total}px`;
+  }
   function applyWidths(): void {
     const colEls = table.querySelectorAll('colgroup col');
     cols.forEach((c, i) => { (colEls[i + 1] as HTMLElement).style.width = `${widthOf(c)}px`; });
+    setTableWidth();
   }
 
   // 列入替（pointer 自前。native draggable は使わない・§12/§25.4）

@@ -105,9 +105,11 @@ body {
 .qam-tablewrap { overflow: auto; padding: 0 var(--gutter) var(--gutter); min-height: 0; }
 .qam-bulk { display: flex; align-items: center; gap: var(--s-4); min-height: 32px; padding: var(--s-2) var(--gutter); color: var(--ink-3); font-size: var(--fs-sm); }
 .qam-bulk .qam-bulk-actions { display: flex; gap: var(--s-2); }
-table.qam-table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: fixed; font-size: var(--fs-md); }
+table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; table-layout: fixed; font-size: var(--fs-md); }
 .qam-table th, .qam-table td { padding: var(--s-4) var(--s-5); text-align: left; border-bottom: 1px solid var(--line);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
+/* 全文表示: 列幅で折り返し、全文を表示（行高は伸びる） */
+.qam-table.qam-wrap td { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: break-word; }
 .qam-table thead th { position: sticky; top: 0; z-index: 1; background: var(--paper-2); color: var(--ink-3);
   font-weight: 600; font-size: var(--fs-sm); user-select: none; }
 .qam-table thead th .qam-th { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; }

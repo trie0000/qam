@@ -26,7 +26,37 @@ const state = {
   to: '',
   change: new Set(['added', 'modified', 'deleted']),
   selected: new Set<string>(),
+  wrap: false,
 };
+
+// IPv4 を整数へ（不正なら null）。レンジ内判定に使う。
+function ipToInt(s: string): number | null {
+  const m = s.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const p = m.slice(1).map(Number);
+  if (p.some((n) => n > 255)) return null;
+  return p[0] * 2 ** 24 + p[1] * 2 ** 16 + p[2] * 2 ** 8 + p[3];
+}
+function ipInRange(ipInt: number, range: string): boolean {
+  const i = range.indexOf('-');
+  if (i < 0) return false;
+  const a = ipToInt(range.slice(0, i)); const b = ipToInt(range.slice(i + 1));
+  return a !== null && b !== null && ipInt >= a && ipInt <= b;
+}
+// 資産の検索: 文字列部分一致 ＋ クエリが IPv4 なら set 内のレンジ(a-b)に含まれるかも判定。
+function matchAsset(r: QamRecord, q: string): boolean {
+  if (!q) return true;
+  const lq = q.toLowerCase();
+  const texts = [r.key, r.name, ...Object.values(r.scalar), ...Object.values(r.set).flat()];
+  if (texts.some((t) => String(t ?? '').toLowerCase().includes(lq))) return true;
+  const qi = ipToInt(q);
+  if (qi !== null) {
+    for (const arr of Object.values(r.set)) {
+      for (const v of arr) if (typeof v === 'string' && v.includes('-') && ipInRange(qi, v)) return true;
+    }
+  }
+  return false;
+}
 
 // ---- shell ----
 const style = document.createElement('style'); style.textContent = css; document.head.append(style);
@@ -95,6 +125,14 @@ async function refresh(): Promise<void> {
   onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
   sIn.addEventListener('change', () => { state.q = sIn.value.trim(); refresh(); });
   search.append(sIn); toolbar.append(search);
+  // 全文表示トグル（列幅で折り返して全文表示）
+  const wrapBtn = el('button', { class: state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm', title: '列幅で折り返して全文表示' }, ['全文表示']);
+  wrapBtn.addEventListener('click', () => {
+    state.wrap = !state.wrap;
+    wrapBtn.className = state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm';
+    main.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
+  });
+  toolbar.append(wrapBtn);
 
   const tableHost = el('div', { style: 'min-height:0;overflow:hidden' });
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
@@ -135,7 +173,7 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLE
   }
   const snap = await readSnapshot(backend, state.entity, date);
   let rows = Object.values(snap?.records ?? {}) as QamRecord[];
-  rows = rows.filter((r) => matchQ([r.key, r.name, r.scalar.IP, r.scalar.FQDN, ...Object.values(r.set).flat()]));
+  rows = rows.filter((r) => matchAsset(r, state.q));
   count.textContent = `${rows.length} 件 / ${date} 時点`;
   const counts = await commentCounts(state.entity);
   clear(host);
@@ -143,6 +181,7 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLE
     viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, counts, openThread),
     rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment,
   }));
+  host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
 async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, host: HTMLElement): Promise<void> {
@@ -169,6 +208,7 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     viewId: `history.${state.entity}`, columns: historyColumns(counts, openThread),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected,
   }));
+  host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
 const emptyState = (t: string, d: string): HTMLElement => el('div', { class: 'qam-empty' }, [el('div', { class: 'qam-empty-title' }, [t]), el('div', {}, [d])]);
