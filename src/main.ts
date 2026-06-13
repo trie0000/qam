@@ -1,17 +1,18 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
-import { BUILD, ENTITIES, LS, today } from './config';
+import { BUILD, ENTITIES, LS, stampNow, fmtStamp, timeOfStamp } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
 import { renderTable } from './ui/table';
+import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import {
-  getSnapshotDates, resolveAsof, readSnapshot, readHistory, readComments, addComment, ingestSnapshot,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, ingestSnapshot, dateOfStamp,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
 
@@ -22,8 +23,8 @@ const state = {
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
-  from: '',
-  to: '',
+  histDate: '',
+  histStamp: '',
   change: new Set(['added', 'modified', 'deleted']),
   selected: new Set<string>(),
   wrap: false,
@@ -100,7 +101,9 @@ function renderLeft(): void {
     nav.append(b);
   }
   left.append(nav);
+  left.append(leftCalHost); // 変更履歴モードでカレンダーをここに描画
 }
+const leftCalHost = el('div', { class: 'qam-cal-host' });
 
 // ---- main render ----
 async function refresh(): Promise<void> {
@@ -157,24 +160,25 @@ async function commentCounts(entity: QamEntity): Promise<Record<string, number>>
 }
 
 async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLElement): Promise<void> {
-  const dates = await getSnapshotDates(backend, state.entity);
-  // as-of セレクタ
+  clear(leftCalHost); // 資産一覧モードではカレンダー非表示
+  const stamps = await getSnapshotStamps(backend, state.entity);
+  // as-of セレクタ（取込日時）
   const sel = el('select', { class: 'in' }) as HTMLSelectElement;
   sel.append(el('option', { value: '' }, ['最新']));
-  for (const d of [...dates].reverse()) sel.append(el('option', { value: d, selected: state.asof === d }, [d]));
+  for (const s of [...stamps].reverse()) sel.append(el('option', { value: s, selected: state.asof === s }, [fmtStamp(s)]));
   sel.addEventListener('change', () => { state.asof = sel.value; refresh(); });
-  subbar.append(el('span', { class: 'qam-count' }, ['基準日']), sel);
+  subbar.append(el('span', { class: 'qam-count' }, ['基準（取込日時）']), sel);
 
-  const date = resolveAsof(dates, state.asof || undefined);
+  const stamp = resolveAsof(stamps, state.asof || undefined);
   clear(host);
-  if (!date) {
-    host.append(emptyState(dates.length ? '保存期間外の日付です' : 'まだ取り込みがありません', dates.length ? '変更履歴ビューで確認するか、別の基準日を選んでください' : '右上の「取込」から Qualys を取り込んでください'));
+  if (!stamp) {
+    host.append(emptyState(stamps.length ? '保存期間外です' : 'まだ取り込みがありません', stamps.length ? '変更履歴ビューで確認するか、別の取込日時を選んでください' : '右上の「取込」から Qualys を取り込んでください'));
     count.textContent = '0 件'; return;
   }
-  const snap = await readSnapshot(backend, state.entity, date);
+  const snap = await readSnapshot(backend, state.entity, stamp);
   let rows = Object.values(snap?.records ?? {}) as QamRecord[];
   rows = rows.filter((r) => matchAsset(r, state.q));
-  count.textContent = `${rows.length} 件 / ${date} 時点`;
+  count.textContent = `${rows.length} 件 / ${fmtStamp(stamp)} 時点`;
   const counts = await commentCounts(state.entity);
   clear(host);
   host.append(renderTable({
@@ -185,12 +189,28 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLE
 }
 
 async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, host: HTMLElement): Promise<void> {
-  // 期間 + 種別フィルタ
-  const from = el('input', { type: 'date', class: 'in', value: state.from }) as HTMLInputElement;
-  const to = el('input', { type: 'date', class: 'in', value: state.to }) as HTMLInputElement;
-  from.addEventListener('change', () => { state.from = from.value; refresh(); });
-  to.addEventListener('change', () => { state.to = to.value; refresh(); });
-  toolbar.append(el('span', { class: 'qam-count' }, ['期間']), from, el('span', {}, ['〜']), to);
+  const all = await readHistory(backend, state.entity);
+  const stamps = await getSnapshotStamps(backend, state.entity);
+
+  // 左ペイン: 変更があった日に印を付けたカレンダー
+  const markedDays = new Set(all.map((e) => dateOfStamp(e.ts)));
+  clear(leftCalHost);
+  leftCalHost.append(el('div', { class: 'qam-navhead' }, ['変更カレンダー']));
+  leftCalHost.append(renderCalendar({
+    marked: markedDays, selected: state.histDate,
+    onSelect: (d) => { state.histDate = d; state.histStamp = ''; refresh(); },
+  }));
+
+  // toolbar: 時刻(取込日時)ドロップダウン — 選択日の取込時刻だけを出す
+  if (state.histDate) {
+    const tsel = el('select', { class: 'in' }) as HTMLSelectElement;
+    tsel.append(el('option', { value: '' }, ['終日（全取込）']));
+    for (const s of stamps.filter((s) => dateOfStamp(s) === state.histDate)) {
+      tsel.append(el('option', { value: s, selected: state.histStamp === s }, [timeOfStamp(s)]));
+    }
+    tsel.addEventListener('change', () => { state.histStamp = tsel.value; refresh(); });
+    toolbar.append(el('span', { class: 'qam-count' }, [`${state.histDate} の時刻`]), tsel);
+  }
   for (const ch of ['added', 'modified', 'deleted']) {
     const cb = el('input', { type: 'checkbox' }) as HTMLInputElement; cb.checked = state.change.has(ch);
     cb.addEventListener('change', () => { cb.checked ? state.change.add(ch) : state.change.delete(ch); refresh(); });
@@ -198,10 +218,13 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     toolbar.append(lab);
   }
 
-  let events = await readHistory(backend, state.entity, state.from || undefined, state.to || undefined);
-  events = events.filter((e) => state.change.has(e.change) && matchQ([e.id, e.name, e.field, e.old, e.new, ...(e.added ?? []), ...(e.removed ?? [])]));
+  let events = all.filter((e) =>
+    state.change.has(e.change)
+    && (!state.histDate || dateOfStamp(e.ts) === state.histDate)
+    && (!state.histStamp || e.ts === state.histStamp)
+    && matchQ([e.id, e.name, e.field, e.old, e.new, ...(e.added ?? []), ...(e.removed ?? [])]));
   events.reverse(); // 新しい順を既定に
-  count.textContent = `${events.length} 件`;
+  count.textContent = `${events.length} 件${state.histDate ? ` / ${state.histDate}${state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}` : ''}`;
   const counts = await commentCounts(state.entity);
   clear(host);
   host.append(renderTable({
@@ -254,7 +277,7 @@ async function openThread(entity: QamEntity, id: string): Promise<void> {
 // ---- ingest ----
 async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string): Promise<void> {
   const cfg = await getConfig();
-  const opts = { today: today(), guardRatio: GUARD_RATIO, retentionDays: cfg.retentionDays || 90, rawXml: raw };
+  const opts = { stamp: stampNow(), guardRatio: GUARD_RATIO, retentionDays: cfg.retentionDays || 90, rawXml: raw };
   let res = await ingestSnapshot(backend, snap as any, opts);
   if (res.guard && !res.committed) {
     const ok = await confirmModal('件数が大きく減少しています', `${snap.entity}: ${res.prevCount} → ${res.currCount} 件。誤ったファイルでないか確認してください。取り込みますか？`);
@@ -262,7 +285,7 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
     res = await ingestSnapshot(backend, snap as any, { ...opts, force: true });
   }
   const sum = res.baseline ? '初回取込・基準確立' : `+${res.added}/~${res.modified}/-${res.deleted}`;
-  toast(`${snap.entity} ${res.date}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
+  toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
 }
 
 function confirmModal(title: string, message: string): Promise<boolean> {

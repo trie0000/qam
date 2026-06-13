@@ -1,6 +1,7 @@
 // 資産一覧 / 変更履歴 の列定義（共通テーブル §25 用）。
 import { el, esc } from './dom';
 import { icon } from '../icons';
+import { fmtStamp } from '../config';
 import type { Column } from './table';
 import type { QamEntity, QamEvent, QamRecord } from '../types';
 
@@ -43,7 +44,7 @@ export function historyColumns(counts: Record<string, number>, openThread: (e: Q
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   return [
-    { id: 'ts', label: '日付', mono: true, render: (e: QamEvent) => esc(e.ts), sortVal: (e: QamEvent) => e.ts },
+    { id: 'ts', label: '取込日時', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
     { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => e.change },
     { id: 'id', label: 'ID', mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
     { id: 'name', label: '名前', render: (e: QamEvent) => esc(e.name) },

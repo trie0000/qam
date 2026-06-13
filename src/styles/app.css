@@ -62,6 +62,21 @@ body {
 .qam-filters label { font-size: var(--fs-xs); color: var(--ink-3); }
 .qam-chip-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 
+/* カレンダー（変更履歴・変更日マーク） */
+.qam-cal { margin-top: var(--s-5); }
+.qam-cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-3); }
+.qam-cal-title { font-size: var(--fs-md); font-weight: 600; }
+.qam-cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.qam-cal-wd { text-align: center; font-size: var(--fs-xs); color: var(--ink-4); padding: 2px 0; }
+.qam-cal-day { border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-sm);
+  aspect-ratio: 1; border-radius: var(--r-2); cursor: pointer; position: relative; padding: 0; }
+.qam-cal-day:hover { background: var(--paper-2); }
+.qam-cal-marked { font-weight: 700; }
+.qam-cal-marked::after { content: ''; position: absolute; left: 50%; bottom: 3px; transform: translateX(-50%);
+  width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.qam-cal-sel { background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--accent); }
+.qam-cal-all { width: 100%; margin-top: var(--s-3); }
+
 /* ---------- main / tabs / subbar / toolbar ---------- */
 .qam-main { display: grid; grid-template-rows: auto auto auto 1fr; min-width: 0; min-height: 0; }
 .qam-tabs { display: flex; gap: var(--s-1); padding: var(--s-3) var(--gutter) 0; border-bottom: 1px solid var(--line); }

@@ -19,3 +19,14 @@ export const ENTITIES: { key: QamEntity; label: string }[] = [
 ];
 
 export const today = (): string => new Date().toISOString().slice(0, 10);
+
+// 取込日時スタンプ（ローカル時刻・ファイル名/キー/辞書順ソート可）: 'YYYY-MM-DDTHH-mm-ss'
+export function stampNow(): string {
+  const d = new Date();
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+}
+// 'YYYY-MM-DDTHH-mm-ss' → 表示用 'YYYY-MM-DD HH:mm:ss'
+export const fmtStamp = (s: string): string => (s ? `${s.slice(0, 10)} ${s.slice(11).replace(/-/g, ':')}` : '');
+// stamp → 'HH:mm:ss'
+export const timeOfStamp = (s: string): string => s.slice(11).replace(/-/g, ':');
