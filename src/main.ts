@@ -23,7 +23,8 @@ const state = {
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
-  histDate: '',
+  histFrom: '',
+  histTo: '',
   histStamp: '',
   change: new Set(['added', 'modified', 'deleted']),
   selected: new Set<string>(),
@@ -201,24 +202,25 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   const all = await readHistory(backend, state.entity);
   const stamps = await getSnapshotStamps(backend, state.entity);
 
-  // 左ペイン: 変更があった日に印を付けたカレンダー
+  // 左ペイン: 変更があった日に印を付けたカレンダー（クリックで from→to 範囲選択）
   const markedDays = new Set(all.map((e) => dateOfStamp(e.ts)));
   clear(leftCalHost);
   leftCalHost.append(el('div', { class: 'qam-navhead' }, ['変更カレンダー']));
   leftCalHost.append(renderCalendar({
-    marked: markedDays, selected: state.histDate,
-    onSelect: (d) => { state.histDate = d; state.histStamp = ''; refresh(); },
+    marked: markedDays, from: state.histFrom, to: state.histTo,
+    onRange: (f, t) => { state.histFrom = f; state.histTo = t; state.histStamp = ''; refresh(); },
   }));
 
-  // toolbar: 時刻(取込日時)ドロップダウン — 選択日の取込時刻だけを出す
-  if (state.histDate) {
+  // 単日選択時のみ: toolbar に取込時刻ドロップダウン（その日の取込時刻だけ）
+  const singleDay = state.histFrom && (!state.histTo || state.histTo === state.histFrom);
+  if (singleDay) {
     const tsel = el('select', { class: 'in' }) as HTMLSelectElement;
     tsel.append(el('option', { value: '' }, ['終日（全取込）']));
-    for (const s of stamps.filter((s) => dateOfStamp(s) === state.histDate)) {
+    for (const s of stamps.filter((s) => dateOfStamp(s) === state.histFrom)) {
       tsel.append(el('option', { value: s, selected: state.histStamp === s }, [timeOfStamp(s)]));
     }
     tsel.addEventListener('change', () => { state.histStamp = tsel.value; refresh(); });
-    toolbar.append(el('span', { class: 'qam-count' }, [`${state.histDate} の時刻`]), tsel);
+    toolbar.append(el('span', { class: 'qam-count' }, [`${state.histFrom} の時刻`]), tsel);
   }
   for (const ch of ['added', 'modified', 'deleted']) {
     const cb = el('input', { type: 'checkbox' }) as HTMLInputElement; cb.checked = state.change.has(ch);
@@ -227,13 +229,19 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     toolbar.append(lab);
   }
 
+  const inRange = (d: string): boolean => {
+    if (!state.histFrom) return true;
+    if (!state.histTo) return d === state.histFrom; // 単日
+    return d >= state.histFrom && d <= state.histTo; // from〜to
+  };
   let events = all.filter((e) =>
     state.change.has(e.change)
-    && (!state.histDate || dateOfStamp(e.ts) === state.histDate)
+    && inRange(dateOfStamp(e.ts))
     && (!state.histStamp || e.ts === state.histStamp)
     && matchQ([e.id, e.name, e.field, e.old, e.new, ...(e.added ?? []), ...(e.removed ?? [])]));
   events.reverse(); // 新しい順を既定に
-  count.textContent = `${events.length} 件${state.histDate ? ` / ${state.histDate}${state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}` : ''}`;
+  const span = state.histFrom ? (state.histTo && state.histTo !== state.histFrom ? ` / ${state.histFrom}〜${state.histTo}` : ` / ${state.histFrom}${state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}`) : '';
+  count.textContent = `${events.length} 件${span}`;
   const counts = await commentCounts(state.entity);
   clear(host);
   host.append(renderTable({
