@@ -8,6 +8,9 @@ qam.env
 *.xml
 *.xml.gz
 
+# test temp
+test/.tmp/
+
 # os / editor
 .DS_Store
 *.swp
