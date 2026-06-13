@@ -38,12 +38,14 @@ const left = el('div', { class: 'qam-left' });
 const topbar = el('div', { class: 'qam-topbar' });
 root.append(el('div', { class: 'qam-app' }, [topbar, el('div', { class: 'qam-body' }, [left, main])]));
 
-function iconBtn(name: string, label: string, on: () => void): HTMLElement {
+function iconBtn(name: string, label: string, on: () => void | Promise<void>): HTMLElement {
   const b = el('button', { class: 'btn btn--icon', 'aria-label': label, title: label, html: icon(name, 18) });
-  b.addEventListener('click', on); return b;
+  // async ハンドラの失敗を握り潰さない（無反応の正体）。失敗はトーストで出す。
+  b.addEventListener('click', () => { Promise.resolve().then(on).catch((e) => toast(`${label}でエラー: ${(e as Error).message}`, 'error')); });
+  return b;
 }
 const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('upload', 16)}<span>取込</span>` });
-ingestBtn.addEventListener('click', openIngest);
+ingestBtn.addEventListener('click', () => { try { openIngest(); } catch (e) { toast(`取込でエラー: ${(e as Error).message}`, 'error'); } });
 topbar.append(
   el('div', { class: 'qam-brandwrap' }, [
     el('span', { class: 'qam-badge' }, ['N']),

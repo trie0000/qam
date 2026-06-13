@@ -111,6 +111,7 @@ function Invoke-QualysFetch { param($Body)
     $handler = New-Object System.Net.Http.HttpClientHandler
     if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
     $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
     try {
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
         if ($script:QSession) {
@@ -137,6 +138,7 @@ function Invoke-QualysLogin { param($Body)
     $handler.CookieContainer = New-Object System.Net.CookieContainer
     if ($Body.proxy) { $handler.Proxy = New-Object System.Net.WebProxy($Body.proxy); $handler.UseProxy = $true }
     $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
     try {
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
         $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string]$Body.pass))"
@@ -174,6 +176,7 @@ function Invoke-QualysLogout {
     $handler = New-Object System.Net.Http.HttpClientHandler
     if ($script:QProxy) { $handler.Proxy = New-Object System.Net.WebProxy($script:QProxy); $handler.UseProxy = $true }
     $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
     try {
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
         $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
