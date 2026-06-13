@@ -84,6 +84,14 @@ export async function readComments(b: FileBackend, e?: QamEntity, id?: string): 
   return all.filter((c) => (!e || c.entity === e) && (!id || c.id === id));
 }
 
+// 既存コメントの本文を編集（entity+id+ts で同定）。
+export async function editComment(b: FileBackend, e: QamEntity, id: string, ts: string, text: string): Promise<void> {
+  const all = await readJsonl<QamComment>(b, COMMENTS);
+  let done = false;
+  const out = all.map((c) => (!done && c.entity === e && c.id === id && c.ts === ts ? (done = true, { ...c, text }) : c));
+  if (done) await b.write(COMMENTS, out.map((x) => JSON.stringify(x)).join('\n') + (out.length ? '\n' : ''));
+}
+
 // --- 取込メタ（取込日時ごと） ---
 export interface QamRun { ts: string; entity: QamEntity; count: number; added: number; modified: number; deleted: number; baseline: boolean }
 export async function readRuns(b: FileBackend, e?: QamEntity): Promise<QamRun[]> {

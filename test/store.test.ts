@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
-  prune, addComment, readComments, readHistory,
+  prune, addComment, editComment, readComments, readHistory,
 } from '../src/store';
 
 class MemBackend implements FileBackend {
@@ -117,5 +117,14 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     const c = await readComments(b, 'host', '1');
     expect(c.length).toBe(1);
     expect(c[0].text).toBe('対応済み');
+  });
+
+  it('editComment は ts で同定して本文だけ差し替える', async () => {
+    await addComment(b, { ts: '2026-06-13T09:00:00Z', entity: 'host', id: '1', author: 't', text: '初稿' });
+    await addComment(b, { ts: '2026-06-13T10:00:00Z', entity: 'host', id: '1', author: 't', text: '二稿' });
+    await editComment(b, 'host', '1', '2026-06-13T10:00:00Z', '二稿(修正)');
+    const c = await readComments(b, 'host', '1');
+    expect(c.map((x) => x.text)).toEqual(['初稿', '二稿(修正)']);
+    expect(c[1].author).toBe('t'); // 本文以外は保持
   });
 });

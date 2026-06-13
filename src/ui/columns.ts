@@ -1,27 +1,70 @@
 // 資産一覧 / 変更履歴 の列定義（共通テーブル §25 用）。
-import { el, esc } from './dom';
+import { el, esc, clear } from './dom';
 import { icon } from '../icons';
 import { fmtStamp } from '../config';
 import type { Column } from './table';
-import type { QamEntity, QamEvent, QamRecord } from '../types';
+import type { QamComment, QamEntity, QamEvent, QamRecord } from '../types';
 
 const CHANGE_LABEL: Record<string, string> = { added: '追加', modified: '変更', deleted: '削除' };
 export const changeTag = (c: string): string => `<span class="qam-tag qam-tag--${c}">${CHANGE_LABEL[c] ?? c}</span>`;
 
 const joined = (a?: string[]): string => esc((a ?? []).join(', '));
 
-// コメントセル: アイコン＋件数。クリックでその資産の作業履歴スレッドを開く。
-function commentCell(entity: QamEntity, id: string, count: number, open: (e: QamEntity, id: string) => void): HTMLElement {
-  const span = el('span', { class: 'qam-cell-comment', html: `${icon('message', 14)}<span>${count || ''}</span>` });
-  span.addEventListener('click', (e) => { e.stopPropagation(); open(entity, id); });
-  return span;
+// 一覧のコメント列に渡すAPI。byId は id→コメント配列(ts昇順)。save は ts指定で編集/null で新規追加し、
+// 更新後の配列を返す。openThread は従来のスレッドモーダル（履歴閲覧・追記）。
+export interface CommentApi {
+  byId: Record<string, QamComment[]>;
+  openThread: (e: QamEntity, id: string) => void;
+  save: (e: QamEntity, id: string, ts: string | null, text: string) => Promise<QamComment[]>;
 }
 
-export function assetColumns(entity: QamEntity, counts: Record<string, number>, openThread: (e: QamEntity, id: string) => void): Column[] {
+// コメントセル: 最新コメントを一覧内に直接表示し、クリックでその場編集（最新を編集／無ければ新規）。
+// 右側のスレッドボタン（件数）で全作業履歴モーダルを開く（追記もそこから）。
+function commentCell(entity: QamEntity, id: string, api: CommentApi): HTMLElement {
+  const cell = el('div', { class: 'qam-comment-cell' });
+  const stop = (e: Event) => e.stopPropagation();
+
+  function view(): void {
+    clear(cell);
+    const list = api.byId[id] ?? [];
+    const latest = list.length ? list[list.length - 1] : null;
+    const text = el('div', { class: 'qam-comment-view' + (latest ? '' : ' is-empty'), title: latest ? latest.text : 'クリックしてメモを追加' }, [latest ? latest.text : '＋ メモ']);
+    text.addEventListener('click', (e) => { stop(e); edit(latest); });
+    const thread = el('button', { class: 'qam-comment-thread', title: '作業履歴を開く', html: `${icon('message', 13)}<span>${list.length || ''}</span>` });
+    thread.addEventListener('click', (e) => { stop(e); api.openThread(entity, id); });
+    cell.append(text, el('div', { class: 'qam-comment-tools' }, [thread]));
+  }
+
+  function edit(latest: QamComment | null): void {
+    clear(cell);
+    const ta = el('textarea', { class: 'qam-comment-edit', placeholder: '改廃作業のメモ（⌘/Ctrl+Enterで保存）' }) as HTMLTextAreaElement;
+    ta.value = latest?.text ?? '';
+    const save = el('button', { class: 'btn btn--xs btn--primary', title: '保存', html: icon('check', 13) });
+    const cancel = el('button', { class: 'btn btn--xs', title: 'キャンセル', html: icon('x', 13) });
+    [ta, save, cancel].forEach((n) => n.addEventListener('click', stop));
+    cancel.addEventListener('click', view);
+    const doSave = async (): Promise<void> => {
+      const t = ta.value.trim();
+      if (!t) { view(); return; } // 空は保存しない（既存の削除はスレッド側で）
+      save.setAttribute('disabled', 'true');
+      try { api.byId[id] = await api.save(entity, id, latest?.ts ?? null, t); view(); }
+      catch { save.removeAttribute('disabled'); }
+    };
+    save.addEventListener('click', doSave);
+    ta.addEventListener('keydown', (e) => { if (!e.isComposing && (e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); doSave(); } });
+    cell.append(ta, el('div', { class: 'qam-comment-editbar' }, [save, cancel]));
+    ta.focus();
+  }
+
+  view();
+  return cell;
+}
+
+export function assetColumns(entity: QamEntity, comments: CommentApi): Column[] {
   const c = (id: string, label: string, render: (r: QamRecord) => string | Node, mono?: boolean): Column => ({ id, label, mono, render, sortVal: (r) => String((render(r) as any)).toString() });
   const sc = (f: string) => (r: QamRecord) => esc(r.scalar[f] ?? '');
   const stc = (f: string) => (r: QamRecord) => joined(r.set[f]);
-  const comment: Column = { id: '_c', label: '', sortable: false, render: (r: QamRecord) => commentCell(entity, r.key, counts[r.key] ?? 0, openThread) };
+  const comment: Column = { id: '_c', label: 'コメント', sortable: false, render: (r: QamRecord) => commentCell(entity, r.key, comments) };
   if (entity === 'group') return [
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'タイトル', (r) => esc(r.name)),
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
@@ -49,7 +92,7 @@ export function assetColumns(entity: QamEntity, counts: Record<string, number>, 
   ];
 }
 
-export function historyColumns(counts: Record<string, number>, openThread: (e: QamEntity, id: string) => void): Column[] {
+export function historyColumns(comments: CommentApi): Column[] {
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   return [
@@ -60,6 +103,6 @@ export function historyColumns(counts: Record<string, number>, openThread: (e: Q
     { id: 'field', label: '項目', render: (e: QamEvent) => esc(e.field ?? ''), sortVal: (e: QamEvent) => e.field ?? '' },
     { id: 'old', label: '変更前/削除', render: oldCell, sortable: false },
     { id: 'new', label: '変更後/追加', render: newCell, sortable: false },
-    { id: '_c', label: '', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, counts[e.id] ?? 0, openThread) },
+    { id: '_c', label: 'コメント', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments) },
   ];
 }

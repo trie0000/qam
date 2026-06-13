@@ -7,12 +7,12 @@ import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
 import { renderTable } from './ui/table';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns } from './ui/columns';
+import { assetColumns, historyColumns, type CommentApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, ingestSnapshot, deleteSnapshot, dateOfStamp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
 
@@ -154,10 +154,20 @@ function matchQ(parts: (string | undefined)[]): boolean {
   return parts.some((p) => (p ?? '').toLowerCase().includes(q));
 }
 
-async function commentCounts(entity: QamEntity): Promise<Record<string, number>> {
-  const map: Record<string, number> = {};
-  for (const c of await readComments(backend, entity)) map[c.id] = (map[c.id] ?? 0) + 1;
-  return map;
+// コメント列に渡すAPI。byId は id→コメント(ts昇順)。save は ts指定で編集/null で新規追加。
+async function commentApi(entity: QamEntity): Promise<CommentApi> {
+  const byId: Record<string, QamComment[]> = {};
+  for (const c of await readComments(backend, entity)) (byId[c.id] ??= []).push(c);
+  for (const id of Object.keys(byId)) byId[id].sort((a, b) => a.ts.localeCompare(b.ts));
+  return {
+    byId,
+    openThread,
+    save: async (e, id, ts, text) => {
+      if (ts) await editComment(backend, e, id, ts, text);
+      else await addComment(backend, { ts: new Date().toISOString(), entity: e, id, author: localStorage.getItem('qam.author') || '', text });
+      return (await readComments(backend, e, id)).sort((a, b) => a.ts.localeCompare(b.ts));
+    },
+  };
 }
 
 async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLElement): Promise<void> {
@@ -189,10 +199,10 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, host: HTMLE
   let rows = Object.values(snap?.records ?? {}) as QamRecord[];
   rows = rows.filter((r) => matchAsset(r, state.q));
   count.textContent = `${rows.length} 件 / ${fmtStamp(stamp)} 時点`;
-  const counts = await commentCounts(state.entity);
+  const comments = await commentApi(state.entity);
   clear(host);
   host.append(renderTable({
-    viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, counts, openThread),
+    viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments),
     rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment,
   }));
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
@@ -242,10 +252,10 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   events.reverse(); // 新しい順を既定に
   const span = state.histFrom ? (state.histTo && state.histTo !== state.histFrom ? ` / ${state.histFrom}〜${state.histTo}` : ` / ${state.histFrom}${state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}`) : '';
   count.textContent = `${events.length} 件${span}`;
-  const counts = await commentCounts(state.entity);
+  const comments = await commentApi(state.entity);
   clear(host);
   host.append(renderTable({
-    viewId: `history.${state.entity}`, columns: historyColumns(counts, openThread),
+    viewId: `history.${state.entity}`, columns: historyColumns(comments),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected,
   }));
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);

@@ -128,10 +128,19 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }
 /* 全文表示: 列幅で折り返し、全文を表示（行高は伸びる） */
 .qam-table.qam-wrap td { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; word-break: break-word; }
-.qam-table thead th { position: sticky; top: 0; z-index: 1; background: var(--paper-2); color: var(--ink-3);
+.qam-table thead th { position: sticky; z-index: 1; background: var(--paper-2); color: var(--ink-3);
   font-weight: 600; font-size: var(--fs-sm); user-select: none; }
+/* ヘッダは2段(ラベル行+フィルタ行)。ラベル行を top:0、フィルタ行をその直下に固定。 */
+.qam-table thead tr:first-child th { top: 0; height: 36px; box-sizing: border-box; }
 .qam-table thead th .qam-th { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; }
 .qam-table thead th .qam-th svg { width: 13px; height: 13px; }
+/* フィルタ行: ラベル行の直下に固定、薄い背景・コンパクト入力。 */
+.qam-filter-row th { top: 36px; padding: var(--s-1) var(--s-3) var(--s-2); background: var(--paper); font-weight: 400;
+  border-bottom: 1px solid var(--line-strong); }
+.qam-filter-in { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-xs); color: var(--ink);
+  background: var(--paper-2); border: 1px solid var(--line); border-radius: var(--r-1); padding: 2px var(--s-2); }
+.qam-filter-in:focus { outline: none; border-color: var(--accent); background: var(--paper); }
+.qam-filter-in::placeholder { color: var(--ink-4); }
 .qam-th-resize { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; }
 .qam-table th { position: relative; }
 .qam-table th.qam-drag-over { box-shadow: inset 2px 0 0 var(--accent); }
@@ -140,8 +149,19 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-table tbody tr:hover { background: var(--paper-2); }
 .qam-table tbody tr.qam-selected { background: var(--accent-soft); }
 .qam-mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
-.qam-cell-comment { cursor: pointer; color: var(--accent-strong); display: inline-flex; align-items: center; gap: var(--s-1); }
-.qam-cell-comment svg { width: 14px; height: 14px; }
+/* 一覧内コメント: 最新を直接表示し、その場編集。右にスレッドボタン(件数)。 */
+.qam-comment-cell { display: flex; align-items: flex-start; gap: var(--s-2); }
+.qam-comment-view { flex: 1 1 auto; min-width: 0; cursor: text; white-space: pre-wrap; overflow-wrap: anywhere; }
+.qam-comment-view.is-empty { color: var(--ink-4); cursor: pointer; }
+.qam-comment-tools { flex: none; }
+.qam-comment-thread { border: 0; background: transparent; color: var(--accent-strong); cursor: pointer;
+  display: inline-flex; align-items: center; gap: 2px; font: inherit; font-size: var(--fs-xs); padding: 2px; }
+.qam-comment-thread svg { width: 13px; height: 13px; }
+.qam-comment-edit { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-sm); resize: vertical; min-height: 46px;
+  color: var(--ink); background: var(--paper); border: 1px solid var(--accent); border-radius: var(--r-1); padding: var(--s-2); }
+.qam-comment-editbar { display: flex; gap: var(--s-1); margin-top: var(--s-1); }
+.btn--xs { height: 22px; padding: 0 var(--s-2); font-size: var(--fs-xs); }
+.btn--xs svg { width: 13px; height: 13px; }
 
 /* ---------- status tags ---------- */
 .qam-tag { display: inline-block; padding: 1px var(--s-3); border-radius: var(--r-1); font-family: var(--font-mono);

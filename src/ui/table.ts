@@ -26,13 +26,21 @@ export interface TableOpts {
 // フリーズだけ保護する高い上限。超えた分のみ注記を出す。
 const MAX_ROWS = 5000;
 
-interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null }
+interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: Record<string, string> }
 
 function loadState(viewId: string): TState {
-  try { return { order: [], widths: {}, sort: null, ...JSON.parse(localStorage.getItem(LS.table(viewId)) || '{}') }; }
-  catch { return { order: [], widths: {}, sort: null }; }
+  try { return { order: [], widths: {}, sort: null, filters: {}, ...JSON.parse(localStorage.getItem(LS.table(viewId)) || '{}') }; }
+  catch { return { order: [], widths: {}, sort: null, filters: {} }; }
 }
 const saveState = (viewId: string, s: TState) => localStorage.setItem(LS.table(viewId), JSON.stringify(s));
+
+// セルの表示テキスト（フィルタ照合用）。render が HTML 文字列でもタグを除いた文字列にする。
+function cellText(col: Column, row: any): string {
+  if (col.sortVal) return col.sortVal(row);
+  const v = col.render(row);
+  if (typeof v !== 'string') return (v as Node).textContent ?? '';
+  const d = document.createElement('div'); d.innerHTML = v; return d.textContent ?? '';
+}
 
 export function renderTable(opts: TableOpts): HTMLElement {
   const st = loadState(opts.viewId);
@@ -49,11 +57,13 @@ export function renderTable(opts: TableOpts): HTMLElement {
 
   const widthOf = (c: Column) => st.widths[c.id] ?? (c.id === cols[0].id ? 220 : 160);
 
-  function updateBulk(): void {
+  function updateBulk(shown: number): void {
     clear(bulk);
     const keys = [...opts.selected];
     const total = opts.rows.length;
-    const note = total > MAX_ROWS ? `（全 ${total.toLocaleString()} 件中 先頭 ${MAX_ROWS} 件を表示・検索/フィルタで絞り込み）` : '';
+    let note = '';
+    if (shown < total) note = `（全 ${total.toLocaleString()} 件中 ${shown.toLocaleString()} 件）`;
+    else if (total > MAX_ROWS) note = `（先頭 ${MAX_ROWS} 件表示）`;
     bulk.append(el('span', {}, [keys.length ? `${keys.length} 件選択中` : `${total.toLocaleString()} 件${note}`]));
     if (keys.length && opts.bulkActions) {
       const acts = el('div', { class: 'qam-bulk-actions' });
@@ -62,6 +72,16 @@ export function renderTable(opts: TableOpts): HTMLElement {
     }
   }
 
+  // 列フィルタ: その列が空でなければ、カンマ区切りの語の「いずれか」を含めば一致(OR)。複数列はAND。
+  function passesFilters(row: any): boolean {
+    return cols.every((c) => {
+      const f = (st.filters[c.id] || '').trim();
+      if (!f) return true;
+      const text = cellText(c, row).toLowerCase();
+      const terms = f.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
+      return terms.length === 0 || terms.some((t) => text.includes(t));
+    });
+  }
   function sortedRows(): any[] {
     if (!st.sort) return opts.rows;
     const col = byId.get(st.sort.col);
@@ -69,42 +89,19 @@ export function renderTable(opts: TableOpts): HTMLElement {
     const val = col.sortVal ?? ((r: any) => String(col.render(r)));
     return [...opts.rows].sort((a, b) => val(a).localeCompare(val(b)) * st.sort!.dir);
   }
+  const displayedRows = (): any[] => sortedRows().filter(passesFilters);
 
-  function render(): void {
-    clear(table);
-    const colgroup = el('colgroup');
-    colgroup.append(el('col', { style: 'width:38px' }));
-    cols.forEach((c) => colgroup.append(el('col', { style: `width:${widthOf(c)}px` })));
-    table.append(colgroup);
-    setTableWidth();
-
-    // ---- thead ----
-    const allKeys = opts.rows.map(opts.getKey);
-    const selCount = allKeys.filter((k) => opts.selected.has(k)).length;
-    const selAll = el('input', { type: 'checkbox' }) as HTMLInputElement;
-    selAll.checked = selCount > 0 && selCount === allKeys.length;
-    selAll.indeterminate = selCount > 0 && selCount < allKeys.length;
-    selAll.addEventListener('change', () => {
-      if (selAll.checked) allKeys.forEach((k) => opts.selected.add(k));
-      else allKeys.forEach((k) => opts.selected.delete(k));
-      render(); opts.onSelectionChange?.();
-    });
-    const thCheck = el('th', { class: 'qam-col-check' }); thCheck.append(selAll);
-    const trH = el('tr'); trH.append(thCheck);
-    cols.forEach((c) => trH.append(buildTh(c)));
-    const thead = el('thead'); thead.append(trH); table.append(thead);
-
-    // ---- tbody（大量行はフリーズするので先頭 MAX_ROWS 件のみ描画） ----
+  function renderBody(): void {
+    const old = table.querySelector('tbody'); if (old) old.remove();
     const tbody = el('tbody');
-    const allRows = sortedRows();
-    for (const row of allRows.slice(0, MAX_ROWS)) {
+    const rows = displayedRows();
+    for (const row of rows.slice(0, MAX_ROWS)) {
       const key = opts.getKey(row);
       const tr = el('tr', { class: opts.selected.has(key) ? 'qam-selected' : '' });
       const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
       cb.checked = opts.selected.has(key);
       cb.addEventListener('click', (e) => e.stopPropagation());
-      // 行トグルは class 更新 + バルクのみ。全再描画(render)すると大量行でクリック毎に固まる。
-      cb.addEventListener('change', () => { if (cb.checked) opts.selected.add(key); else opts.selected.delete(key); tr.classList.toggle('qam-selected', cb.checked); updateBulk(); opts.onSelectionChange?.(); });
+      cb.addEventListener('change', () => { if (cb.checked) opts.selected.add(key); else opts.selected.delete(key); tr.classList.toggle('qam-selected', cb.checked); updateBulk(rows.length); opts.onSelectionChange?.(); });
       const tdC = el('td', { class: 'qam-col-check' }); tdC.append(cb); tr.append(tdC);
       cols.forEach((c) => {
         const td = el('td', { class: c.mono ? 'qam-mono' : '' });
@@ -116,7 +113,44 @@ export function renderTable(opts: TableOpts): HTMLElement {
       tbody.append(tr);
     }
     table.append(tbody);
-    updateBulk();
+    updateBulk(rows.length);
+  }
+
+  function render(): void {
+    clear(table);
+    const colgroup = el('colgroup');
+    colgroup.append(el('col', { style: 'width:38px' }));
+    cols.forEach((c) => colgroup.append(el('col', { style: `width:${widthOf(c)}px` })));
+    table.append(colgroup);
+    setTableWidth();
+
+    // ---- thead: ヘッダ行 + フィルタ行 ----
+    const shownKeys = displayedRows().map(opts.getKey);
+    const selCount = shownKeys.filter((k) => opts.selected.has(k)).length;
+    const selAll = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    selAll.checked = selCount > 0 && selCount === shownKeys.length;
+    selAll.indeterminate = selCount > 0 && selCount < shownKeys.length;
+    selAll.addEventListener('change', () => {
+      if (selAll.checked) shownKeys.forEach((k) => opts.selected.add(k));
+      else shownKeys.forEach((k) => opts.selected.delete(k));
+      render(); opts.onSelectionChange?.();
+    });
+    const thCheck = el('th', { class: 'qam-col-check' }); thCheck.append(selAll);
+    const trH = el('tr'); trH.append(thCheck);
+    cols.forEach((c) => trH.append(buildTh(c)));
+    // フィルタ行（列ごと・カンマで OR）
+    const trF = el('tr', { class: 'qam-filter-row' });
+    trF.append(el('th', { class: 'qam-col-check' }));
+    cols.forEach((c) => {
+      const fth = el('th');
+      const inp = el('input', { class: 'qam-filter-in', placeholder: '絞り込み (,でOR)', value: st.filters[c.id] || '' }) as HTMLInputElement;
+      inp.addEventListener('input', () => { st.filters[c.id] = inp.value; saveState(opts.viewId, st); renderBody(); });
+      inp.addEventListener('click', (e) => e.stopPropagation());
+      fth.append(inp); trF.append(fth);
+    });
+    const thead = el('thead'); thead.append(trH, trF); table.append(thead);
+
+    renderBody();
   }
 
   function buildTh(c: Column): HTMLElement {
