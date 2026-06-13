@@ -219,8 +219,8 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
     if (!ok) { toast(`${snap.entity}: 取り込みを中止しました`, 'info'); return; }
     res = await ingestSnapshot(backend, snap as any, { ...opts, force: true });
   }
-  const sum = res.baseline ? '初回取込（基準確立）' : `+${res.added} / ~${res.modified} / -${res.deleted}`;
-  toast(`${snap.entity} ${res.date}: ${sum}`, 'ok');
+  const sum = res.baseline ? '初回取込・基準確立' : `+${res.added}/~${res.modified}/-${res.deleted}`;
+  toast(`${snap.entity} ${res.date}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
 }
 
 function confirmModal(title: string, message: string): Promise<boolean> {

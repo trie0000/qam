@@ -12,18 +12,32 @@ async function postJson(path: string, body: unknown): Promise<any> {
 }
 
 // store.ts が使う FileBackend を relay /qam/file で実装。
+// 書込/削除は relay 応答を必ず検査し、失敗はエラーにする（黙って 0 件 = 反映されない、を防ぐ）。
 export const backend: FileBackend = {
   async read(path) {
     const r = await fetch(`${RELAY}/qam/file?path=${encodeURIComponent(path)}`);
-    const d = await r.json();
-    return d.content ?? null;
+    const d = await r.json().catch(() => ({}));
+    return d.content ?? null; // 404(=未存在) は null。読みは失敗扱いしない
   },
-  write: (path, content, append) => postJson('/qam/file', { path, content, append: !!append }).then(() => undefined),
+  async write(path, content, append) {
+    const r = await fetch(`${RELAY}/qam/file`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path, content, append: !!append }),
+    });
+    const d = await r.json().catch(() => ({} as any));
+    if (!r.ok || d.ok === false) throw new Error(`保存に失敗 (${path}): ${d.error ?? 'HTTP ' + r.status}`);
+  },
   async list(dir) {
     const r = await fetch(`${RELAY}/qam/file/list?dir=${encodeURIComponent(dir)}`);
-    return (await r.json()).names ?? [];
+    return (await r.json().catch(() => ({}))).names ?? [];
   },
-  remove: (path) => postJson('/qam/file/remove', { path }).then(() => undefined),
+  async remove(path) {
+    const r = await fetch(`${RELAY}/qam/file/remove`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    if (!r.ok) { const d = await r.json().catch(() => ({} as any)); throw new Error(`削除に失敗 (${path}): ${d.error ?? 'HTTP ' + r.status}`); }
+  },
 };
 
 export interface FetchResult { ok: boolean; status: number; nextUrl: string | null; xml: string; error?: string }
