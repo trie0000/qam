@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # qam-relay.ps1 — 薄いローカル中継（Windows PowerShell 5.1 / PowerShell 7 両対応）
 # =============================================================================
 # ブラウザ(TS アプリ)が出来ないことだけを担う:
@@ -184,10 +184,11 @@ function Invoke-Route { param($Ctx)
 
 # ─── 起動 ────────────────────────────────────────────────────────────────────
 $listener = New-Object System.Net.HttpListener
-$prefix = "http://127.0.0.1:$Port/"
-$listener.Prefixes.Add($prefix)
+# 127.0.0.1 と localhost の両方を受ける（HttpListener は Host が prefix と一致しないと標準 404 を返す）。
+$listener.Prefixes.Add("http://127.0.0.1:$Port/")
+$listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
-Write-Host "[qam] relay listening on $prefix  (DataDir=$DataFull, BundleDir=$BundleDir)" -ForegroundColor Green
+Write-Host "[qam] relay listening on http://127.0.0.1:$Port/ (+localhost)  (DataDir=$DataFull, BundleDir=$BundleDir)" -ForegroundColor Green
 
 while (-not $script:QamStop) {
     try { $ctx = $listener.GetContext() } catch { break }

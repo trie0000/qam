@@ -1,0 +1,170 @@
+/* =========================================================
+ * QAM styles — Spira トークン同梱（モスグリーン accent / paper 系）
+ * トークンは :root に集中定義。hex/px 直書き禁止（変数経由）。
+ * 単体ページ（SP overlay ではない）ため all:initial シールドは不要。
+ * ========================================================= */
+:root {
+  --ink: #2a2a26; --ink-3: #7a766c; --ink-4: #a8a39a;
+  --paper: #fafaf7; --paper-2: #f3f1ea; --paper-2-strong: #ece8de; --paper-3: #e8e4d8;
+  --line: rgba(42,42,38,0.12); --line-strong: rgba(42,42,38,0.18);
+  --accent: #7a8a78; --accent-soft: rgba(122,138,120,0.18); --accent-strong: #5e6f5c;
+  --danger: #b8534a; --warn: #c47f1c; --ok: #2f6f5e; --hl: rgba(196,174,96,0.35);
+  --font-sans: "Meiryo","メイリオ","Hiragino Sans","Yu Gothic UI",-apple-system,"Segoe UI",system-ui,sans-serif;
+  --font-mono: ui-monospace,"Cascadia Mono","Consolas",monospace;
+  --fs-xs: 11px; --fs-sm: 12px; --fs-md: 13px; --fs-base: 15px; --fs-lg: 16px; --fs-xl: 18px;
+  --lh-base: 1.6; --lh-tight: 1.35;
+  --s-1: 4px; --s-2: 6px; --s-3: 8px; --s-4: 10px; --s-5: 12px; --s-6: 14px; --s-7: 18px; --s-8: 22px; --s-9: 28px;
+  --gutter: 24px;
+  --r-1: 2px; --r-2: 4px; --r-3: 6px; --r-4: 8px;
+  --shadow-flyout: 0 12px 30px rgba(42,42,38,0.14);
+  --shadow-modal: 0 0 0 1px rgba(42,42,38,0.06), 0 4px 12px rgba(42,42,38,0.10), 0 16px 40px rgba(42,42,38,0.18);
+  --topbar-h: 44px; --side-w: 220px; --toolbar-h: 40px;
+  --z-modal: 2000; --z-toast: 2100;
+}
+[data-theme="dark"] {
+  --ink: #e8e4d8; --ink-3: #a8a39a; --ink-4: #7a766c;
+  --paper: #1d1b18; --paper-2: #25231f; --paper-2-strong: #2c2a25; --paper-3: #3a3731;
+  --line: rgba(232,228,216,0.14); --line-strong: rgba(232,228,216,0.22);
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font-sans); font-size: var(--fs-base); line-height: var(--lh-base);
+  color: var(--ink); background: var(--paper); -webkit-font-smoothing: antialiased;
+}
+#qam-root { height: 100%; }
+
+/* ---------- layout ---------- */
+.qam-app { display: grid; grid-template-rows: var(--topbar-h) 1fr; height: 100%; }
+.qam-body { display: grid; grid-template-columns: var(--side-w) 1fr; min-height: 0; }
+
+/* ---------- topbar ---------- */
+.qam-topbar { display: flex; align-items: center; gap: var(--s-4); padding: 0 var(--gutter);
+  border-bottom: 1px solid var(--line); background: var(--paper-2); }
+.qam-topbar .qam-brand { font-weight: 600; font-size: var(--fs-lg); margin-right: auto; letter-spacing: .02em; }
+.qam-topbar .qam-build { font-size: var(--fs-xs); color: var(--ink-4); font-family: var(--font-mono); margin-right: var(--s-4); }
+
+/* ---------- left pane ---------- */
+.qam-left { border-right: 1px solid var(--line); background: var(--paper); padding: var(--s-6) var(--s-5); overflow: auto; }
+.qam-navhead { font-size: var(--fs-xs); color: var(--ink-4); text-transform: uppercase; letter-spacing: .08em; margin: var(--s-3) var(--s-2) var(--s-2); }
+.qam-nav { display: flex; flex-direction: column; gap: 2px; margin-bottom: var(--s-6); }
+.qam-nav button { display: flex; align-items: center; gap: var(--s-3); width: 100%; text-align: left;
+  border: 0; background: transparent; color: var(--ink); font: inherit; padding: var(--s-3) var(--s-3);
+  border-radius: var(--r-2); border-left: 3px solid transparent; cursor: pointer; }
+.qam-nav button:hover { background: var(--paper-2); }
+.qam-nav button[aria-current="true"] { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
+.qam-filters { display: flex; flex-direction: column; gap: var(--s-3); }
+.qam-filters label { font-size: var(--fs-xs); color: var(--ink-3); }
+.qam-chip-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+
+/* ---------- main / tabs / subbar / toolbar ---------- */
+.qam-main { display: grid; grid-template-rows: auto auto auto 1fr; min-width: 0; min-height: 0; }
+.qam-tabs { display: flex; gap: var(--s-1); padding: var(--s-3) var(--gutter) 0; border-bottom: 1px solid var(--line); }
+.qam-tab { border: 0; background: transparent; color: var(--ink-3); font: inherit; font-size: var(--fs-md);
+  padding: var(--s-3) var(--s-5); border-bottom: 2px solid transparent; cursor: pointer; }
+.qam-tab[aria-current="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.qam-subbar { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-4) var(--gutter) var(--s-2); }
+.qam-subbar .qam-title { font-size: var(--fs-lg); font-weight: 600; }
+.qam-subbar .qam-count { color: var(--ink-4); font-size: var(--fs-sm); }
+.qam-subbar .qam-spacer { margin-left: auto; }
+.qam-toolbar { display: flex; align-items: center; gap: var(--s-3); padding: 0 var(--gutter) var(--s-3); flex-wrap: wrap; }
+
+/* ---------- buttons ---------- */
+.btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
+  height: 34px; padding: 0 var(--s-7); border-radius: var(--r-2); border: 1px solid transparent;
+  font: inherit; font-size: var(--fs-md); cursor: pointer; white-space: nowrap; background: var(--paper-2); color: var(--ink); }
+.btn:hover { background: var(--paper-2-strong); }
+.btn svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.btn--sm { height: 28px; padding: 0 var(--s-5); font-size: var(--fs-sm); }
+.btn--icon { width: 30px; height: 30px; padding: 0; background: transparent; color: var(--ink-3); }
+.btn--icon:hover { background: var(--paper-2); color: var(--ink); }
+.btn--primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn--primary:hover { background: var(--accent-strong); }
+.btn--primary svg { color: #fff; }
+.btn--ghost { background: transparent; color: var(--ink-3); }
+.btn--ghost:hover { background: var(--paper-2); color: var(--ink); }
+.btn--danger { background: transparent; color: var(--danger); border-color: var(--danger); }
+.btn:disabled { opacity: .45; cursor: default; }
+
+/* ---------- inputs ---------- */
+.in { min-height: 30px; padding: var(--s-2) var(--s-3); border: 1px solid transparent; background: var(--paper-2);
+  border-radius: var(--r-2); font: inherit; font-size: var(--fs-md); color: var(--ink); }
+.in:focus { outline: none; background: var(--paper); border-color: var(--line-strong); }
+.in::placeholder { color: var(--ink-4); }
+.qam-search { display: flex; align-items: center; gap: var(--s-2); background: var(--paper-2); border-radius: var(--r-2); padding: 0 var(--s-3); min-height: 30px; }
+.qam-search svg { width: 14px; height: 14px; color: var(--ink-4); }
+.qam-search input { border: 0; background: transparent; font: inherit; font-size: var(--fs-md); color: var(--ink); min-width: 180px; }
+.qam-search input:focus { outline: none; }
+
+/* ---------- table (§25 共通テーブル) ---------- */
+.qam-tablewrap { overflow: auto; padding: 0 var(--gutter) var(--gutter); min-height: 0; }
+.qam-bulk { display: flex; align-items: center; gap: var(--s-4); min-height: 32px; padding: var(--s-2) var(--gutter); color: var(--ink-3); font-size: var(--fs-sm); }
+.qam-bulk .qam-bulk-actions { display: flex; gap: var(--s-2); }
+table.qam-table { border-collapse: separate; border-spacing: 0; width: 100%; table-layout: fixed; font-size: var(--fs-md); }
+.qam-table th, .qam-table td { padding: var(--s-4) var(--s-5); text-align: left; border-bottom: 1px solid var(--line);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qam-table thead th { position: sticky; top: 0; z-index: 1; background: var(--paper-2); color: var(--ink-3);
+  font-weight: 600; font-size: var(--fs-sm); user-select: none; }
+.qam-table thead th .qam-th { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; }
+.qam-table thead th .qam-th svg { width: 13px; height: 13px; }
+.qam-th-resize { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; }
+.qam-table th { position: relative; }
+.qam-table th.qam-drag-over { box-shadow: inset 2px 0 0 var(--accent); }
+.qam-col-check { width: 38px; text-align: center; }
+.qam-col-check input { cursor: pointer; }
+.qam-table tbody tr:hover { background: var(--paper-2); }
+.qam-table tbody tr.qam-selected { background: var(--accent-soft); }
+.qam-mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.qam-cell-comment { cursor: pointer; color: var(--accent-strong); display: inline-flex; align-items: center; gap: var(--s-1); }
+.qam-cell-comment svg { width: 14px; height: 14px; }
+
+/* ---------- status tags ---------- */
+.qam-tag { display: inline-block; padding: 1px var(--s-3); border-radius: var(--r-1); font-family: var(--font-mono);
+  font-size: var(--fs-xs); font-weight: 600; }
+.qam-tag--added { color: var(--ok); background: rgba(47,111,94,0.14); }
+.qam-tag--modified { color: var(--warn); background: rgba(196,127,28,0.16); }
+.qam-tag--deleted { color: var(--danger); background: rgba(184,83,74,0.14); }
+.qam-add { color: var(--ok); }
+.qam-rem { color: var(--danger); }
+
+/* ---------- states ---------- */
+.qam-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-3);
+  color: var(--ink-3); padding: var(--s-9); text-align: center; }
+.qam-empty .qam-empty-title { font-size: var(--fs-lg); color: var(--ink); }
+.qam-skeleton { height: 16px; border-radius: var(--r-1); background: linear-gradient(90deg, var(--paper-2), var(--paper-3), var(--paper-2));
+  background-size: 200% 100%; animation: qam-shimmer 1.2s ease infinite; margin: var(--s-3) 0; }
+@keyframes qam-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ---------- modal ---------- */
+.qam-backdrop { position: fixed; inset: 0; background: rgba(15,15,15,0.45); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
+.qam-modal { background: var(--paper); border-radius: var(--r-4); box-shadow: var(--shadow-modal);
+  width: min(680px, calc(100vw - 80px)); max-height: calc(100vh - 80px); display: flex; flex-direction: column; overflow: hidden; }
+.qam-modal-head { display: flex; align-items: center; padding: var(--s-6) var(--s-7); border-bottom: 1px solid var(--line); }
+.qam-modal-head .qam-modal-title { font-size: var(--fs-lg); font-weight: 600; margin-right: auto; }
+.qam-modal-body { padding: var(--s-7); overflow: auto; }
+.qam-modal-foot { display: flex; justify-content: flex-end; gap: var(--s-3); padding: var(--s-5) var(--s-7); border-top: 1px solid var(--line); }
+.qam-field { display: flex; flex-direction: column; gap: var(--s-2); margin-bottom: var(--s-5); }
+.qam-field label { font-size: var(--fs-sm); color: var(--ink-3); }
+.qam-field .in { width: 100%; }
+
+/* comment thread */
+.qam-thread { display: flex; flex-direction: column; gap: var(--s-4); margin-bottom: var(--s-6); }
+.qam-comment { background: var(--paper-2); border-radius: var(--r-3); padding: var(--s-4) var(--s-5); }
+.qam-comment .qam-meta { font-size: var(--fs-xs); color: var(--ink-4); margin-bottom: var(--s-1); }
+.qam-note-form { position: relative; line-height: 0; }
+.qam-note-form textarea { width: 100%; min-height: 64px; padding: var(--s-4); padding-right: 52px; padding-bottom: 44px;
+  border: 1px solid var(--line); border-radius: var(--r-3); resize: none; font: inherit; font-size: var(--fs-md); background: var(--paper); color: var(--ink); }
+.qam-note-form textarea:focus { outline: none; border-color: var(--line-strong); }
+.qam-note-submit { position: absolute; right: 12px; bottom: 12px; width: 30px; height: 30px; }
+
+/* ---------- toast ---------- */
+.qam-toasts { position: fixed; top: var(--s-6); right: var(--s-6); display: flex; flex-direction: column; gap: var(--s-3); z-index: var(--z-toast); }
+.qam-toast { display: flex; align-items: center; gap: var(--s-3); background: var(--paper); border: 1px solid var(--line);
+  box-shadow: var(--shadow-flyout); border-radius: var(--r-3); padding: var(--s-4) var(--s-5); min-width: 240px; max-width: 420px; animation: qam-slide .2s ease; }
+.qam-toast.qam-toast--error { border-left: 3px solid var(--danger); }
+.qam-toast.qam-toast--ok { border-left: 3px solid var(--ok); }
+.qam-toast .qam-toast-msg { flex: 1; font-size: var(--fs-md); user-select: text; }
+@keyframes qam-slide { from { transform: translateY(-8px); opacity: 0; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; } }

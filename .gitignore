@@ -11,6 +11,9 @@ qam.env
 # node
 node_modules/
 
+# local tooling (machine-specific abs paths)
+.claude/
+
 # test temp
 test/.tmp/
 test/.tmp-srv/
