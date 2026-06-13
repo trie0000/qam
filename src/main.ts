@@ -263,9 +263,15 @@ function openIngest(): void {
         const creds = { base: cfg.qualysBase, user: cfg.qualysUser, pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
         if (!creds.base || !creds.user) { setProg('設定で Qualys 接続先とアカウントを入力してください', false); toast('設定が未入力です', 'error'); return; }
         const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
+        // session login は「できれば」。失敗しても止めず、従来どおり Basic 認証で続行する
+        // （login 必須化で動かなくなった反省）。relay は session があれば Cookie、無ければ Basic を使う。
         setProg('Qualys にログイン中…', true);
-        const lg = await qualysLogin(creds);
-        if (!lg.ok) throw new Error('Qualys ログイン失敗' + (lg.error ? ': ' + lg.error : ` (status ${lg.status ?? '?'})`));
+        let useSession = false;
+        try {
+          const lg = await qualysLogin(creds);
+          useSession = !!lg.ok;
+          if (!useSession) toast('セッションログイン不可のため Basic 認証で続行します' + (lg.error ? `（${lg.error}）` : ''), 'info');
+        } catch { useSession = false; }
         try {
           for (const k of kinds) {
             setProg(`${labelOf(k)}: ダウンロード中…`, true);
@@ -274,8 +280,7 @@ function openIngest(): void {
             await commitOne(dl.snapshot, dl.raw);
           }
         } finally {
-          setProg('Qualys からログアウト中…', true);
-          await qualysLogout().catch(() => undefined);
+          if (useSession) { setProg('Qualys からログアウト中…', true); await qualysLogout().catch(() => undefined); }
         }
         setProg('完了しました', false);
         refresh();
