@@ -99,6 +99,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi): Column[] 
     c('NAME', '氏名', sc('NAME')), c('EMAIL', 'メール', sc('EMAIL')),
     c('USER_ROLE', 'ロール', sc('USER_ROLE')), c('USER_STATUS', '状態', sc('USER_STATUS')),
     c('TITLE', '役職', sc('TITLE')),
+    c('ASSIGNED_GROUPS', 'アクセス可能AG', stc('ASSIGNED_GROUPS')),
     c('LAST_LOGIN_DATE', '最終ログイン', (r) => esc(r.info.LAST_LOGIN_DATE ?? ''), true), comment,
   ];
   return [

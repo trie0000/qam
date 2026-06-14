@@ -105,10 +105,8 @@ function Get-QamText1 { param([string]$Xml, [string]$Pattern)
 
 # Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
 function Invoke-QualysFetch { param($Body)
-    # user は QPS REST(/qps/rest/2.0/search/am/user) を Basic 認証・POST で叩く。応答は ServiceResponse(XML)。
-    # session Cookie では認証されないので、user は常に Basic（noSession 同等）。
-    $isUserList = (-not $Body.url) -and ($Body.kind -eq 'user')
-    $useSession = $script:QSession -and -not $Body.noSession -and -not $isUserList
+    # noSession 指定時は Basic 認証で叩く（401/403 再試行用）。それ以外は session 優先。
+    $useSession = $script:QSession -and -not $Body.noSession
     # プロキシは本文指定を優先（session 経路でも確実にプロキシを通す。proxy=なしで直結する不具合対策）。
     $proxy = if ($Body.proxy) { $Body.proxy } elseif ($script:QProxy) { $script:QProxy } else { $null }
     $base = if ($Body.base) { ([string]$Body.base).TrimEnd('/') } elseif ($script:QBase) { $script:QBase } else { '' }
@@ -118,8 +116,9 @@ function Invoke-QualysFetch { param($Body)
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
             'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
-            # user 一覧は QPS REST(Asset Management)。Basic 認証・POST(ServiceRequest)で ServiceResponse(XML)。
-            'user'   { $url = "$base/qps/rest/2.0/search/am/user" }
+            # user 一覧は v2 FO /api/2.0/fo/user/。USER_LIST_OUTPUT（ASSIGNED_ASSET_GROUPS＝割当AG含む）を返す。
+            # MSP(user_list.php)は VMDR では access denied になりがちなので v2 を使う。
+            'user'   { $url = "$base/api/2.0/fo/user/?action=list" }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }
@@ -128,26 +127,18 @@ function Invoke-QualysFetch { param($Body)
     $client = New-Object System.Net.Http.HttpClient($handler)
     $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
     try {
-        # User-Agent を必ず付与（無いと WAF が空応答を返すことがある＝curl では返る差分の正体）。
+        # User-Agent を必ず付与（無いと WAF が空応答/403 を返すことがある＝curl との差分の正体）。
         $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
-        # X-Requested-With は v2 API で必要。MSP(user) は curl 同様に付けない。
-        if (-not $isUserList) { $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM') }
+        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')  # FO v2 API で必須
         if ($useSession) {
             $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
         } elseif ($Body.user) {
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
-        $method = if ($isUserList) { 'POST' } else { 'GET' }
-        Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
-        Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
-        if ($isUserList) {
-            # QPS は POST。空の ServiceRequest で全件取得（ページングは hasMoreRecords。当面1ページ）。
-            $reqXml = New-Object System.Net.Http.StringContent('<ServiceRequest></ServiceRequest>', [Text.Encoding]::UTF8, 'application/xml')
-            $resp = $client.PostAsync($url, $reqXml).Result
-        } else {
-            $resp = $client.GetAsync($url).Result
-        }
+        Write-Host "[qam] fetch GET $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
+        Add-QamLog "FETCH start GET $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
+        $resp = $client.GetAsync($url).Result
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
         # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
         $content = $resp.Content

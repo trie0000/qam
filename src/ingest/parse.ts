@@ -134,6 +134,9 @@ function readUser(u: Element): QamRecord {
   r.scalar.COMPANY = ci ? text(ci, 'COMPANY') : '';
   r.scalar.USER_STATUS = text(u, 'USER_STATUS');
   r.scalar.USER_ROLE = text(u, 'USER_ROLE');
+  r.scalar.BUSINESS_UNIT = text(u, 'BUSINESS_UNIT');
+  // 割当 AssetGroup（このユーザがアクセスできる AssetGroup。Manager/Auditor は無し＝全体）。
+  r.set.ASSIGNED_GROUPS = uniq(listValues(u, 'ASSIGNED_ASSET_GROUPS', 'ASSET_GROUP_TITLE'));
   r.info.LAST_LOGIN_DATE = text(u, 'LAST_LOGIN_DATE');
   r.name = login || r.scalar.NAME;
   return r;

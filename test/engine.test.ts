@@ -136,6 +136,15 @@ describe('user', () => {
     expect(s.records['12345'].scalar.USER_STATUS).toBe('Active');
     expect(s.records['12345'].scalar.USER_ROLE).toBe('Manager');
   });
+  it('parse: v2 USER_LIST_OUTPUT の ASSIGNED_ASSET_GROUPS（割当AG）を読む', () => {
+    const x = `<USER_LIST_OUTPUT><USER_LIST><USER>
+      <USER_LOGIN>acme_sc1</USER_LOGIN><USER_ID>77</USER_ID>
+      <USER_ROLE>Scanner</USER_ROLE><USER_STATUS>Active</USER_STATUS>
+      <ASSIGNED_ASSET_GROUPS><ASSET_GROUP_TITLE>東京</ASSET_GROUP_TITLE><ASSET_GROUP_TITLE>大阪</ASSET_GROUP_TITLE></ASSIGNED_ASSET_GROUPS>
+    </USER></USER_LIST></USER_LIST_OUTPUT>`;
+    const s = parseQualysXml(x, 'user');
+    expect(s.records['77'].set.ASSIGNED_GROUPS).toEqual(['大阪', '東京']);
+  });
   it('parse: QPS responseCode != SUCCESS は中断', () => {
     const err = `<ServiceResponse><responseCode>INVALID_REQUEST</responseCode><errorMessage>bad</errorMessage></ServiceResponse>`;
     expect(() => parseQualysXml(err, 'user')).toThrow(/QPS/);

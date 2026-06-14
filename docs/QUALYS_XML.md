@@ -84,11 +84,17 @@ FQDN は `DNS_DATA/FQDN`、無ければ `DNS`。
 </DOMAIN_LIST>
 ```
 
-## User — `/qps/rest/2.0/search/am/user`（QPS REST・Basic 認証・POST）
+## User — `/api/2.0/fo/user/?action=list`（v2 FO・GET・session/Basic）
 
-v2 `/api/2.0/fo/user/`（403 HTML）や MSP `/msp/user_list.php`（空応答）が環境で使えないため、
-QPS REST(Asset Management) の user 検索を使う。Basic 認証・**POST**・本文は `<ServiceRequest></ServiceRequest>`
-（空＝全件）。応答はルート `ServiceResponse`（XML）:
+VMDR では MSP `/msp/user_list.php` が access denied になりがちなので v2 FO を使う。応答は
+`USER_LIST_OUTPUT`。重要: **`ASSIGNED_ASSET_GROUPS`（このユーザがアクセスできる AssetGroup タイトル）** を含む
+（Manager/Auditor は割当が無く全体アクセス＝空になる）。`User-Agent` 必須（無いと WAF が 403/空応答）。
+以前 v2 が 403 だったのは UA 欠落の WAF 拒否が原因。`X-Requested-With` 必須。キーは `USER_ID || USER_LOGIN`。
+
+（参考: QPS REST `/qps/rest/2.0/search/am/user` はタグスコープ寄りで割当 AG を持たないため未使用。パーサは
+`ServiceResponse/<User>` も解釈可能なので、必要時に切替できる。）
+
+### 旧: QPS ServiceResponse 形式（参考）
 
 ```xml
 <ServiceResponse>
