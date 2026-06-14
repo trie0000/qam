@@ -9,6 +9,7 @@ export const RELAY = location.origin; // relay が配信しているので同一
 export const LS = {
   theme: 'qam.theme',
   qualysPass: 'qam.qualys.pass', // パスワードは env でなくブラウザに保持
+  author: 'qam.author',          // メモ(コメント)の記入者名
   table: (view: string) => `qam.table.${view}`,
 };
 

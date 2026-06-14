@@ -314,7 +314,7 @@ async function commentApi(entity: QamEntity): Promise<CommentApi> {
     openThread,
     save: async (e, id, ts, text) => {
       if (ts) await editComment(backend, e, id, ts, text);
-      else await addComment(backend, { ts: new Date().toISOString(), entity: e, id, author: localStorage.getItem('qam.author') || '', text });
+      else await addComment(backend, { ts: new Date().toISOString(), entity: e, id, author: localStorage.getItem(LS.author) || '', text });
       return (await readComments(backend, e, id)).sort((a, b) => a.ts.localeCompare(b.ts));
     },
   };
@@ -474,7 +474,7 @@ async function openThread(entity: QamEntity, id: string): Promise<void> {
     const text = ta.value.trim(); if (!text) return;
     send.setAttribute('disabled', 'true');
     try {
-      const c: QamComment = { ts: new Date().toISOString(), entity, id, author: localStorage.getItem('qam.author') || '', text };
+      const c: QamComment = { ts: new Date().toISOString(), entity, id, author: localStorage.getItem(LS.author) || '', text };
       await addComment(backend, c); ta.value = ''; await reload(); toast('コメントを追加しました', 'ok');
     } catch (e) { toast('コメントの追加に失敗しました: ' + (e as Error).message, 'error'); }
     finally { send.removeAttribute('disabled'); }
@@ -650,24 +650,58 @@ function openIngest(): void {
 }
 
 // ---- settings ----
+// Spira 風に分類（個人設定 / 共通設定 / 開発者）。左ペインで分類を選び右ペインに項目を表示。
 async function openSettings(): Promise<void> {
   const cfg = await getConfig();
-  const field = (label: string, input: HTMLElement) => el('div', { class: 'qam-field' }, [el('label', {}, [label]), input]);
+  const field = (label: string, input: HTMLElement, hint?: string) =>
+    el('div', { class: 'qam-field' }, [el('label', {}, [label]), input, ...(hint ? [el('div', { class: 'qam-count' }, [hint])] : [])]);
+  // 入力は一度だけ生成（ペイン切替で値は保持）。
   const base = el('input', { class: 'in', value: cfg.qualysBase || '', placeholder: 'https://YOUR-POD.qualysapi.example.com' }) as HTMLInputElement;
   const user = el('input', { class: 'in', value: cfg.qualysUser || '' }) as HTMLInputElement;
-  const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
   const proxy = el('input', { class: 'in', value: cfg.proxy || '', placeholder: 'http://proxy:8080' }) as HTMLInputElement;
   const ret = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.retentionDays || 90) }) as HTMLInputElement;
-  const body = el('div', {}, [
-    field('Qualys 接続先 POD', base), field('アカウント', user), field('パスワード（ブラウザに保存）', pass),
-    field('プロキシ URL', proxy), field('保存期間（日）', ret),
-  ]);
+  const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
+  const author = el('input', { class: 'in', value: localStorage.getItem(LS.author) || '', placeholder: '例: 山田' }) as HTMLInputElement;
+  const theme = el('select', { class: 'in' }) as HTMLSelectElement;
+  ([['', 'システム既定'], ['light', 'ライト'], ['dark', 'ダーク']] as [string, string][])
+    .forEach(([v, t]) => theme.append(el('option', { value: v, selected: (localStorage.getItem(LS.theme) || '') === v }, [t])));
+
+  // 開発者: 登録情報のリセット（接続設定・認証・記入者名を初期化。資産データ/履歴は消さない）。
+  const resetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['登録情報をリセット']);
+  resetBtn.addEventListener('click', async () => {
+    if (!(await confirmModal('登録情報のリセット', '接続先POD・アカウント・パスワード・プロキシ・記入者名を初期化します。取り込んだ資産データ・変更履歴・メモは消えません。よろしいですか？', 'リセット'))) return;
+    try {
+      await setConfig({ qualysBase: '', qualysUser: '', proxy: '', retentionDays: 90 });
+      localStorage.removeItem(LS.qualysPass); localStorage.removeItem(LS.author);
+      base.value = ''; user.value = ''; proxy.value = ''; ret.value = '90'; pass.value = ''; author.value = '';
+      toast('登録情報をリセットしました', 'ok');
+    } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
+  });
+
+  const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
+    { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモの作成者）', author), field('テーマ', theme), field('パスワード（このブラウザに保存）', pass)] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('アカウント', user), field('プロキシ URL', proxy), field('保存期間（日）', ret)] },
+    { id: 'dev', label: '開発者', pane: () => [field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'), field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [String(BUILD)]))] },
+  ];
+  const nav = el('div', { class: 'qam-settings-nav' });
+  const paneEl = el('div', { class: 'qam-settings-pane' });
+  const select = (id: string): void => {
+    clear(paneEl); cats.find((c) => c.id === id)!.pane().forEach((n) => paneEl.append(n));
+    nav.querySelectorAll('button').forEach((b) => b.setAttribute('aria-current', String((b as HTMLElement).dataset.cat === id)));
+  };
+  cats.forEach((c) => { const b = el('button', { dataset: { cat: c.id } }, [c.label]); b.addEventListener('click', () => select(c.id)); nav.append(b); });
+  const body = el('div', { class: 'qam-settings' }, [nav, paneEl]);
+  select('personal');
+
   openModal({
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
         await setConfig({ qualysBase: base.value.trim(), qualysUser: user.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90 });
         if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
+        if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
+        if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
+        document.documentElement.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
         toast('設定を保存しました', 'ok'); return true;
       } catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
     },

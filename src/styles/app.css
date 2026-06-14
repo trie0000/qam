@@ -226,6 +226,13 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-modal-head .qam-modal-title { font-size: var(--fs-lg); font-weight: 600; margin-right: auto; }
 .qam-modal-body { padding: var(--s-7); overflow: auto; }
 .qam-modal-foot { display: flex; justify-content: flex-end; gap: var(--s-3); padding: var(--s-5) var(--s-7); border-top: 1px solid var(--line); }
+/* 設定モーダル: 左ペインに分類、右ペインに項目（Spira風） */
+.qam-settings { display: grid; grid-template-columns: 150px 1fr; gap: var(--s-6); min-width: 540px; }
+.qam-settings-nav { display: flex; flex-direction: column; gap: var(--s-1); border-right: 1px solid var(--line); padding-right: var(--s-4); }
+.qam-settings-nav button { text-align: left; border: 0; background: transparent; color: var(--ink); font: inherit; padding: var(--s-3) var(--s-4); border-radius: var(--r-2); cursor: pointer; }
+.qam-settings-nav button:hover { background: var(--paper-2); }
+.qam-settings-nav button[aria-current="true"] { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
+.qam-settings-pane { display: flex; flex-direction: column; gap: var(--s-5); min-width: 0; }
 .qam-field { display: flex; flex-direction: column; gap: var(--s-2); margin-bottom: var(--s-5); }
 .qam-field label { font-size: var(--fs-sm); color: var(--ink-3); }
 .qam-field .in { width: 100%; }
