@@ -62,6 +62,14 @@ export async function readHistory(b: FileBackend, e: QamEntity, from?: string, t
 const appendHistory = (b: FileBackend, e: QamEntity, events: QamEvent[]) =>
   events.length ? b.write(histPath(e), events.map((x) => JSON.stringify(x)).join('\n') + '\n', true) : Promise.resolve();
 
+// 既存の変更履歴を取り込む（CSV 由来など）。eid 重複は除いて追記し、追記件数を返す。
+export async function importHistory(b: FileBackend, e: QamEntity, events: QamEvent[]): Promise<number> {
+  const seen = new Set((await readJsonl<QamEvent>(b, histPath(e))).map((x) => x.eid));
+  const fresh = events.filter((x) => !seen.has(x.eid));
+  await appendHistory(b, e, fresh);
+  return fresh.length;
+}
+
 // 同じ取込日時(stamp)の履歴を除去（同 stamp の再取込＝上書き、手動削除に使う）。
 async function removeHistoryForStamp(b: FileBackend, e: QamEntity, stamp: string): Promise<void> {
   const all = await readJsonl<QamEvent>(b, histPath(e));

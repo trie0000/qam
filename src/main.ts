@@ -12,8 +12,9 @@ import { assetColumns, historyColumns, settenId, type CommentApi } from './ui/co
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
+import { parseGroupHistoryCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
 
@@ -503,8 +504,9 @@ function openIngest(): void {
   const seg = el('div', { class: 'qam-chip-row', style: 'margin-bottom:var(--s-5)' });
   const apiBtn = el('button', { class: 'btn btn--sm' }, ['API ダウンロード']);
   const xmlBtn = el('button', { class: 'btn btn--sm' }, ['XML アップロード']);
+  const histBtn = el('button', { class: 'btn btn--sm' }, ['変更履歴CSV']);
   const prog = el('div', { class: 'qam-progress', style: 'display:none' });
-  seg.append(apiBtn, xmlBtn); body.append(seg, panel, prog);
+  seg.append(apiBtn, xmlBtn, histBtn); body.append(seg, panel, prog);
 
   const labelOf = (k: QamEntity): string => ENTITIES.find((e) => e.key === k)?.label ?? k;
   function setProg(msg: string, busy: boolean): void {
@@ -513,7 +515,7 @@ function openIngest(): void {
   }
 
   function showApi(): void {
-    apiBtn.className = 'btn btn--sm btn--primary'; xmlBtn.className = 'btn btn--sm';
+    apiBtn.className = 'btn btn--sm btn--primary'; xmlBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm';
     clear(panel);
     const sel = el('select', { class: 'in' }) as HTMLSelectElement;
     sel.append(el('option', { value: 'all' }, ['すべて']));
@@ -565,7 +567,7 @@ function openIngest(): void {
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['取得対象']), sel]), go);
   }
   function showXml(): void {
-    xmlBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm';
+    xmlBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm';
     clear(panel);
     const file = el('input', { type: 'file', accept: '.xml', class: 'in' }) as HTMLInputElement;
     const go = el('button', { class: 'btn btn--primary', html: `${icon('upload', 16)}<span>取込</span>` });
@@ -585,7 +587,33 @@ function openIngest(): void {
     });
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['Qualys 一覧 XML（種別は自動判定）']), file]), go);
   }
-  apiBtn.addEventListener('click', showApi); xmlBtn.addEventListener('click', showXml);
+  // 既存の変更履歴を CSV で取り込む（現在は AssetGroup のみ。種別ごとに個別指定）。
+  function showHist(): void {
+    histBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; xmlBtn.className = 'btn btn--sm';
+    clear(panel);
+    const sel = el('select', { class: 'in' }) as HTMLSelectElement;
+    ENTITIES.forEach((e) => sel.append(el('option', { value: e.key, selected: e.key === 'group', disabled: e.key !== 'group' }, [e.label + (e.key === 'group' ? '' : '（未対応）')])));
+    const file = el('input', { type: 'file', accept: '.csv', class: 'in' }) as HTMLInputElement;
+    const go = el('button', { class: 'btn btn--primary', html: `${icon('inbox', 16)}<span>履歴を取込</span>` });
+    go.addEventListener('click', async () => {
+      if (sel.value !== 'group') { toast('現在は AssetGroup のみ対応しています', 'error'); return; }
+      if (!file.files?.length) { toast('CSV ファイルを選択してください', 'error'); return; }
+      go.setAttribute('disabled', 'true');
+      try {
+        setProg('解析中…', true);
+        const events = parseGroupHistoryCsv(await file.files[0].text());
+        setProg(`変更履歴を取込中…（${events.length.toLocaleString()} 行）`, true);
+        const n = await importHistory(backend, 'group', events);
+        setProg(`完了しました（${n.toLocaleString()} 件追加 / ${(events.length - n).toLocaleString()} 件は重複でスキップ）`, false);
+        toast(`変更履歴を ${n.toLocaleString()} 件取り込みました`, 'ok');
+        refresh();
+      } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
+      finally { go.removeAttribute('disabled'); }
+    });
+    const cols = el('div', { class: 'qam-count', style: 'margin-top:var(--s-3);user-select:text' }, ['CSVヘッダ: 更新日, 更新内容, 接続点ID, 事業場名, タイトル, 接続点名称(Function), 拠点名称(Location), コメント(comments)']);
+    panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['対象（種別ごとに個別取込）']), sel]), el('div', { class: 'qam-field' }, [el('label', {}, ['変更履歴 CSV']), file]), cols, go);
+  }
+  apiBtn.addEventListener('click', showApi); xmlBtn.addEventListener('click', showXml); histBtn.addEventListener('click', showHist);
   showApi();
   openModal({ title: '取り込み', body });
 }
