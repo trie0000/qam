@@ -51,6 +51,13 @@ body {
 .qam-topbar .qam-brand { font-weight: 600; font-size: var(--fs-lg); letter-spacing: .02em; }
 .qam-subtitle { color: var(--ink-4); font-size: var(--fs-sm); }
 .qam-topbar .qam-build { font-size: var(--fs-xs); color: var(--ink-4); font-family: var(--font-mono); margin-right: var(--s-4); }
+/* 使用ライセンス数バッジ（設定アイコン付近・クリックで推移ビュー） */
+.qam-license { display: inline-flex; flex-direction: column; align-items: flex-end; line-height: 1.1;
+  border: 1px solid var(--line); background: var(--paper); border-radius: var(--r-2);
+  padding: 3px var(--s-4); cursor: pointer; color: var(--ink); }
+.qam-license:hover { background: var(--paper-2-strong); border-color: var(--accent); }
+.qam-license-cap { font-size: var(--fs-xs); color: var(--ink-4); }
+.qam-license-num { font-size: var(--fs-md); font-weight: 600; font-family: var(--font-mono); }
 
 /* ---------- left pane ---------- */
 .qam-left { border-right: 1px solid var(--line); background: var(--paper); padding: var(--s-6) var(--s-5); overflow: auto; }
@@ -249,6 +256,17 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-prop-row:last-child { border-bottom: 0; }
 .qam-prop-k { color: var(--ink-4); }
 .qam-prop-v { color: var(--ink); overflow-wrap: anywhere; white-space: pre-wrap; }
+
+/* ---------- ライセンス数推移グラフ ---------- */
+.qam-lic { padding: var(--s-5) var(--gutter); display: flex; flex-direction: column; gap: var(--s-4); }
+.qam-lic-note { font-size: var(--fs-sm); color: var(--ink-4); }
+.qam-lic-chart { width: 100%; max-width: 920px; }
+.qam-lic-svg { width: 100%; height: auto; display: block; }
+.qam-lic-grid { stroke: var(--line); stroke-width: 1; }
+.qam-lic-axislbl { fill: var(--ink-4); font-size: 11px; font-family: var(--font-mono); }
+.qam-lic-legend { display: flex; flex-wrap: wrap; gap: var(--s-3) var(--s-6); max-width: 920px; }
+.qam-lic-legitem { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); cursor: pointer; color: var(--ink); }
+.qam-lic-swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }
 
 /* ---------- states ---------- */
 .qam-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-3);

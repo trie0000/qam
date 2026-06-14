@@ -142,7 +142,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'FQDN', (r) => esc(r.name)),
     c('AG_SETTEN', '接続点ID', (r) => esc(agSetten[r.key] ?? ''), true),
     c('IP', 'IP', sc('IP'), true), c('OS', 'OS', sc('OS')),
-    c('TRACKING_METHOD', '追跡', sc('TRACKING_METHOD')), c('NETBIOS', 'NetBIOS', sc('NETBIOS')),
+    c('TRACKING_METHOD', 'Tracking', sc('TRACKING_METHOD')), c('NETBIOS', 'NetBIOS', sc('NETBIOS')),
     c('LAST_VULN_SCAN_DATETIME', '最終スキャン', (r) => esc(r.info.LAST_VULN_SCAN_DATETIME ?? ''), true), comment,
   ];
   if (entity === 'user') return [

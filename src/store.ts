@@ -101,11 +101,20 @@ export async function resetData(b: FileBackend, opts: ResetOptions): Promise<voi
   if (opts.snapshots) {
     for (const e of ENTITIES) for (const s of await getSnapshotStamps(b, e)) await b.remove(snapPath(e, s));
     await b.remove(RUNS);
+    await b.remove('licenses.jsonl'); // ライセンス数推移サンプルも資産データの一部として消去
     for (const d of await b.list('raw')) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) await b.remove(`raw/${d}`);
   }
   if (opts.history) for (const e of ENTITIES) await b.remove(histPath(e));
   if (opts.comments) await b.remove(COMMENTS);
 }
+
+// --- ライセンス数推移: Host の登録IP数を「日時(取込stamp)」つきで記録（剪定対象外で長期保持） ---
+// snapshot は保存期間で消えるが、推移グラフは年度をまたいで見たいのでサンプルは別ログに残す。
+export interface QamLicenseSample { ts: string; count: number }
+const LICENSES = 'licenses.jsonl';
+export const recordLicense = (b: FileBackend, ts: string, count: number): Promise<void> =>
+  b.write(LICENSES, JSON.stringify({ ts, count }) + '\n', true);
+export const readLicenses = (b: FileBackend): Promise<QamLicenseSample[]> => readJsonl<QamLicenseSample>(b, LICENSES);
 
 // --- 操作履歴（監査ログ）: 登録/削除/変更などの操作を 作業者・日時つきで記録 ---
 export interface QamOp { ts: string; author: string; action: string; entity?: QamEntity; detail: string }

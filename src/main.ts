@@ -14,9 +14,10 @@ import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, resetData, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, type QamOp,
 } from './store';
-import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
+import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
+import type { QamComment, QamEntity, QamEvent, QamRecord, QamRecords } from './types';
 
 // 操作履歴記録: 作業者(個人設定の記入者名)＋時刻で登録/削除/変更を残す。失敗しても本処理は止めない。
 function recordOp(action: string, detail: string, entity?: QamEntity): void {
@@ -27,7 +28,7 @@ function recordOp(action: string, detail: string, entity?: QamEntity): void {
 const GUARD_RATIO = 0.5;
 
 const state = {
-  mode: 'assets' as 'assets' | 'history' | 'ops',
+  mode: 'assets' as 'assets' | 'history' | 'ops' | 'licenses',
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
@@ -37,7 +38,25 @@ const state = {
   change: new Set(['added', 'modified', 'deleted']),
   selected: new Set<string>(),
   wrap: false,
+  licenseHidden: new Set<number>(), // ライセンス推移グラフで非表示にした年度
 };
+
+// ライセンス数 = Host に登録されている IP アドレス数（重複は除いた一意件数）。
+function licenseCountOf(records: QamRecords): number {
+  const ips = new Set<string>();
+  for (const r of Object.values(records)) { const ip = (r.scalar.IP || '').trim(); if (ip) ips.add(ip); }
+  return ips.size;
+}
+// 推移サンプル: licenses.jsonl（長期保持）＋現存 host スナップショットから算出した値を stamp で統合。
+async function buildLicenseSamples(): Promise<LicenseSample[]> {
+  const map = new Map<string, number>();
+  for (const s of await readLicenses(backend)) map.set(s.ts, s.count);
+  for (const stamp of await getSnapshotStamps(backend, 'host')) {
+    const snap = await readSnapshot(backend, 'host', stamp);
+    if (snap) map.set(stamp, licenseCountOf(snap.records));
+  }
+  return [...map.entries()].map(([ts, count]) => ({ ts, count })).sort((a, b) => a.ts.localeCompare(b.ts));
+}
 
 // IPv4 を整数へ（不正なら null）。レンジ内判定に使う。
 function ipToInt(s: string): number | null {
@@ -94,6 +113,19 @@ const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('inbox', 16
 ingestBtn.addEventListener('click', () => { try { openIngest(); } catch (e) { toast(`取込でエラー: ${(e as Error).message}`, 'error'); } });
 const exportAllBtn = el('button', { class: 'btn btn--sm', title: '全種別の最新スナップショットを1つのExcelに出力（種別ごとにシート分け）', html: `${icon('download', 16)}<span>全資産Excel</span>` });
 exportAllBtn.addEventListener('click', () => { Promise.resolve().then(exportAllAssets).catch((e) => toast(`全資産Excel出力でエラー: ${(e as Error).message}`, 'error')); });
+// 使用ライセンス数（最新 host スナップショットの登録IP数）。クリックで推移ビューへ。
+const licenseBadge = el('button', { class: 'qam-license', title: '使用ライセンス数（Host の登録IP数）。クリックで推移を表示' });
+licenseBadge.addEventListener('click', () => { state.mode = 'licenses'; state.selected.clear(); refresh(); });
+async function updateLicenseBadge(): Promise<void> {
+  clear(licenseBadge);
+  const stamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
+  const snap = stamp ? await readSnapshot(backend, 'host', stamp) : null;
+  const n = snap ? licenseCountOf(snap.records) : null;
+  licenseBadge.append(
+    el('span', { class: 'qam-license-cap' }, ['使用ライセンス']),
+    el('span', { class: 'qam-license-num' }, [n == null ? '—' : n.toLocaleString()]),
+  );
+}
 topbar.append(
   el('div', { class: 'qam-brandwrap' }, [
     el('span', { class: 'qam-badge' }, ['N']),
@@ -101,6 +133,7 @@ topbar.append(
     el('span', { class: 'qam-subtitle' }, ['Qualys Asset Management']),
   ]),
   el('span', { class: 'qam-build', title: BUILDTIME ? `ビルド日時: ${BUILDTIME}` : '' }, [`build ${BUILD}${BUILDTIME ? ` (${BUILDTIME})` : ''}`]),
+  licenseBadge,
   ingestBtn,
   exportAllBtn,
   iconBtn('refresh', '更新', refresh),
@@ -112,7 +145,7 @@ function renderLeft(): void {
   clear(left);
   left.append(el('div', { class: 'qam-navhead' }, ['ビュー']));
   const nav = el('div', { class: 'qam-nav' });
-  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['ops', '操作履歴', 'message']];
+  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
   for (const [m, label, ic] of modes) {
     const b = el('button', { 'aria-current': String(state.mode === m), html: `${icon(ic, 16)}<span>${label}</span>` });
     b.addEventListener('click', () => { state.mode = m; state.selected.clear(); refresh(); });
@@ -126,42 +159,48 @@ const leftCalHost = el('div', { class: 'qam-cal-host' });
 // ---- main render ----
 async function refresh(): Promise<void> {
   renderLeft();
+  updateLicenseBadge().catch(() => undefined); // 使用ライセンス数バッジを最新 host から更新（非同期・失敗は無視）
   clear(main);
   // tabs（操作履歴は全種別共通なので種別タブは出さない。行数維持のため空のタブ行は残す）
+  const tableLike = state.mode === 'assets' || state.mode === 'history';
   const tabs = el('div', { class: 'qam-tabs' });
-  if (state.mode !== 'ops') for (const e of ENTITIES) {
+  if (tableLike) for (const e of ENTITIES) {
     const t = el('button', { class: 'qam-tab', 'aria-current': String(state.entity === e.key) }, [e.label]);
     t.addEventListener('click', () => { state.entity = e.key; state.selected.clear(); refresh(); });
     tabs.append(t);
   }
   // subbar
   const subbar = el('div', { class: 'qam-subbar' });
-  const title = el('span', { class: 'qam-title' }, [state.mode === 'assets' ? '資産一覧' : state.mode === 'history' ? '変更履歴' : '操作履歴']);
+  const titles = { assets: '資産一覧', history: '変更履歴', ops: '操作履歴', licenses: 'ライセンス数推移' } as const;
+  const title = el('span', { class: 'qam-title' }, [titles[state.mode]]);
   const count = el('span', { class: 'qam-count' });
   subbar.append(title, count, el('span', { class: 'qam-spacer' }));
   // toolbar
   const toolbar = el('div', { class: 'qam-toolbar' });
-  const search = el('div', { class: 'qam-search', html: icon('search', 14) });
-  const sIn = el('input', { type: 'text', placeholder: '検索（ID / 名前 / IP / FQDN）', value: state.q }) as HTMLInputElement;
-  onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
-  sIn.addEventListener('change', () => { state.q = sIn.value.trim(); refresh(); });
-  search.append(sIn); toolbar.append(search);
-  // 全文表示トグル（列幅で折り返して全文表示）
-  const wrapBtn = el('button', { class: state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm', title: '列幅で折り返して全文表示' }, ['全文表示']);
-  wrapBtn.addEventListener('click', () => {
-    state.wrap = !state.wrap;
-    wrapBtn.className = state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm';
-    main.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
-  });
-  toolbar.append(wrapBtn);
+  if (state.mode !== 'licenses') {
+    const search = el('div', { class: 'qam-search', html: icon('search', 14) });
+    const sIn = el('input', { type: 'text', placeholder: '検索（ID / 名前 / IP / FQDN）', value: state.q }) as HTMLInputElement;
+    onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
+    sIn.addEventListener('change', () => { state.q = sIn.value.trim(); refresh(); });
+    search.append(sIn); toolbar.append(search);
+    // 全文表示トグル（列幅で折り返して全文表示）
+    const wrapBtn = el('button', { class: state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm', title: '列幅で折り返して全文表示' }, ['全文表示']);
+    wrapBtn.addEventListener('click', () => {
+      state.wrap = !state.wrap;
+      wrapBtn.className = state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm';
+      main.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
+    });
+    toolbar.append(wrapBtn);
+  }
 
   const filterBar = el('div', { class: 'qam-filterbar' });
-  const tableHost = el('div', { style: 'min-height:0;overflow:hidden' });
+  const tableHost = el('div', { style: 'min-height:0;overflow:' + (state.mode === 'licenses' ? 'auto' : 'hidden') });
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
   main.append(tabs, subbar, toolbar, filterBar, tableHost);
 
   if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'history') await renderHistory(subbar, count, toolbar, filterBar, tableHost);
+  else if (state.mode === 'licenses') await renderLicenses(count, tableHost);
   else await renderOps(subbar, count, toolbar, filterBar, tableHost);
 }
 
@@ -529,6 +568,42 @@ async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLE
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
+// ライセンス数推移ビュー: 年度（4月〜翌3月）ごとの折れ線を 12 ヶ月 x 軸に重ね描き。凡例で年度の表示/非表示を切替。
+async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<void> {
+  clear(leftCalHost);
+  const samples = await buildLicenseSamples();
+  const series = prepareLicenseSeries(samples);
+  count.textContent = `${samples.length.toLocaleString()} サンプル / ${series.length} 年度`;
+  clear(host);
+  if (!series.length) {
+    host.append(emptyState('ライセンス数のデータがありません', 'Host を取り込むと、その時点の登録IP数を使用ライセンス数として日時で記録します。'));
+    return;
+  }
+  // 初期表示: 直近 2 年度のみ表示（古い年度は凡例で表示に切替）。既定適用はセッション内で一度だけ。
+  if (!licenseDefaulted) { licenseDefaulted = true; if (series.length > 2) for (const s of series.slice(2)) state.licenseHidden.add(s.fy); }
+
+  const wrap = el('div', { class: 'qam-lic' });
+  const chartBox = el('div', { class: 'qam-lic-chart' });
+  const legend = el('div', { class: 'qam-lic-legend' });
+  const redraw = (): void => {
+    clear(chartBox);
+    const visible = new Set(series.filter((s) => !state.licenseHidden.has(s.fy)).map((s) => s.fy));
+    chartBox.append(licenseChartSvg(series, visible));
+  };
+  for (const s of series) {
+    const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    cb.checked = !state.licenseHidden.has(s.fy);
+    cb.addEventListener('change', () => { cb.checked ? state.licenseHidden.delete(s.fy) : state.licenseHidden.add(s.fy); redraw(); });
+    const sw = el('span', { class: 'qam-lic-swatch', style: `background:${s.color}` });
+    legend.append(el('label', { class: 'qam-lic-legitem' }, [cb, sw, el('span', {}, [s.label])]));
+  }
+  wrap.append(el('div', { class: 'qam-lic-note' }, ['使用ライセンス数 = Host に登録されている IP アドレス数（一意件数）。x 軸は年度（4月〜翌3月）の月。データの無い月は未記載。']), chartBox, legend);
+  host.append(wrap);
+  redraw();
+}
+
+let licenseDefaulted = false; // ライセンス推移の初期表示（直近2年度）をセッション内で一度だけ適用
+
 const emptyState = (t: string, d: string): HTMLElement => el('div', { class: 'qam-empty' }, [el('div', { class: 'qam-empty-title' }, [t]), el('div', {}, [d])]);
 
 function bulkComment(keys: string[]): HTMLElement[] {
@@ -613,6 +688,8 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   const sum = res.baseline ? '初回取込・基準確立' : `+${res.added}/~${res.modified}/-${res.deleted}`;
   toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
   recordOp('取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
+  // Host 取込ごとに、その時点の使用ライセンス数(登録IP数)を日時(stamp)つきで記録（推移グラフ用）。
+  if (res.committed && snap.entity === 'host') await recordLicense(backend, res.stamp, licenseCountOf(snap.records as QamRecords)).catch(() => undefined);
 }
 
 // Qualys アカウント/パスワード未登録時の登録モーダル。保存して {user,pass} を返す。取消は null。
