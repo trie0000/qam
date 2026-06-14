@@ -1,7 +1,7 @@
 // Qualys API ダウンロード: relay 経由でプロキシ取得し、Host の nextUrl ページングを辿って
 // 全件をマージ → 正規化スナップショットにする。XML アップロードと同じ正規化(parse)に合流。
 import { parseQualysXml } from './ingest/parse';
-import { fetchQualys } from './relay';
+import { fetchQualys, type FetchResult } from './relay';
 import type { QamEntity, QamRecords, QamSnapshot } from './types';
 
 export interface QualysCreds { base: string; user: string; pass: string; proxy: string }
@@ -18,12 +18,20 @@ function failReason(res: { error?: string; xml?: string }): string {
 }
 
 export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProgress?: DownloadProgress): Promise<DownloadResult> {
-  let res = await fetchQualys({ kind, base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy });
-  // 401/403: セッションのスコープ不足の可能性（user 一覧は権限が厳しめ）。Basic 認証で1度だけ再試行。
-  if (!res.ok && (res.status === 401 || res.status === 403)) {
-    res = await fetchQualys({ kind, base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
-  }
-  if (!res.ok) throw new Error(`Qualys 取得失敗 (status ${res.status}): ${failReason(res) || 'アカウント権限（特に user 一覧は Manager 権限が必要）やプロキシ設定を確認してください'}`);
+  // セッションが 401/403 で拒否される環境では Basic に落とす。一度落ちたらラン全体（ページング含む）を
+  // Basic 固定にする（ページ追従が毎回セッションに戻って 401 になるのを防ぐ）。
+  let noSession = false;
+  const fetchPage = async (body: Record<string, unknown>): Promise<FetchResult> => {
+    let r = await fetchQualys({ ...body, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession });
+    if (!r.ok && (r.status === 401 || r.status === 403) && !noSession) {
+      noSession = true; // 以降は Basic 固定
+      r = await fetchQualys({ ...body, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
+    }
+    return r;
+  };
+
+  let res = await fetchPage({ kind, base: creds.base });
+  if (!res.ok) throw new Error(`Qualys 取得失敗 (status ${res.status}): ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
 
   const records: QamRecords = {};
   const rawPages: string[] = [];
@@ -37,8 +45,8 @@ export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProg
   const seen = new Set<string>([next ?? '']);
   let guard = 0;
   while (next && guard++ < 2000) {
-    res = await fetchQualys({ url: next, user: creds.user, pass: creds.pass, proxy: creds.proxy });
-    if (!res.ok) throw new Error(`Qualys 取得失敗(ページ ${guard}) (status ${res.status})`);
+    res = await fetchPage({ url: next });
+    if (!res.ok) throw new Error(`Qualys 取得失敗(ページ ${guard}) (status ${res.status}): ${failReason(res)}`);
     Object.assign(records, parseQualysXml(res.xml, kind).records);
     rawPages.push(res.xml);
     const nx = res.nextUrl;
