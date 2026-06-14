@@ -43,16 +43,18 @@ export interface TableOpts {
 const MAX_ROWS = 20000;
 
 interface FilterCond { field: string; value: string }
-interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: FilterCond[]; hidden: string[] }
+// excluded: 列ID → その列で「チェックを外した（＝非表示にする）値」の配列（Excel オートフィルタ相当）。
+interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: FilterCond[]; hidden: string[]; excluded: Record<string, string[]> }
 
 function loadState(viewId: string): TState {
   try {
-    const s = { order: [], widths: {}, sort: null, filters: [], hidden: [], ...JSON.parse(localStorage.getItem(LS.table(viewId)) || '{}') } as TState;
+    const s = { order: [], widths: {}, sort: null, filters: [], hidden: [], excluded: {}, ...JSON.parse(localStorage.getItem(LS.table(viewId)) || '{}') } as TState;
     // 旧形式（列ごとの Record<string,string>）からの移行: 値ありを追加順の配列へ。
     if (s.filters && !Array.isArray(s.filters)) s.filters = Object.entries(s.filters as Record<string, string>).filter(([, v]) => v).map(([field, value]) => ({ field, value }));
     if (!Array.isArray(s.hidden)) s.hidden = [];
+    if (!s.excluded || typeof s.excluded !== 'object') s.excluded = {};
     return s;
-  } catch { return { order: [], widths: {}, sort: null, filters: [], hidden: [] }; }
+  } catch { return { order: [], widths: {}, sort: null, filters: [], hidden: [], excluded: {} }; }
 }
 const saveState = (viewId: string, s: TState) => localStorage.setItem(LS.table(viewId), JSON.stringify(s));
 
@@ -104,18 +106,17 @@ export function renderTable(opts: TableOpts): HTMLElement {
   document.getElementById('qam-colmenu')?.remove();
   const colPop = el('div', { class: 'qam-colmenu', id: 'qam-colmenu' });
   document.body.append(colPop);
-  const setSort = (id: string, dir: 1 | -1): void => { st.sort = { col: id, dir }; saveState(opts.viewId, st); colPop.classList.remove('on'); render(); };
-  // Excel 風のヘッダドロップダウン: 並べ替え（列指定時）＋表示する列のチェックリスト。
-  function renderColMenu(sortCol: Column | null): void {
+  const openAt = (anchor: HTMLElement): void => {
+    const r = anchor.getBoundingClientRect();
+    colPop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 268))}px`;
+    colPop.style.top = `${r.bottom + 6}px`;
+    colPop.classList.add('on');
+  };
+
+  // 「列表示」ボタン: 表示する列のチェックリスト（列の表示/非表示）。
+  function openColumnList(anchor: HTMLElement): void {
+    if (colPop.classList.contains('on')) { colPop.classList.remove('on'); return; }
     clear(colPop);
-    if (sortCol && sortCol.sortable !== false) {
-      colPop.append(el('div', { class: 'qam-colmenu-head' }, [`「${sortCol.label || sortCol.id}」で並べ替え`]));
-      const asc = el('button', { class: 'qam-colmenu-item qam-colmenu-act', html: `${icon('chevronUp', 13)}<span>昇順</span>` });
-      const desc = el('button', { class: 'qam-colmenu-item qam-colmenu-act', html: `${icon('chevronDown', 13)}<span>降順</span>` });
-      asc.addEventListener('click', () => setSort(sortCol.id, 1));
-      desc.addEventListener('click', () => setSort(sortCol.id, -1));
-      colPop.append(asc, desc, el('div', { class: 'qam-colmenu-sep' }));
-    }
     colPop.append(el('div', { class: 'qam-colmenu-head' }, ['表示する列']));
     cols.forEach((c) => {
       const lab = el('label', { class: 'qam-colmenu-item' });
@@ -129,31 +130,88 @@ export function renderTable(opts: TableOpts): HTMLElement {
       lab.append(cb, el('span', {}, [c.label || c.id]));
       colPop.append(lab);
     });
+    openAt(anchor);
   }
-  function openColMenu(anchor: HTMLElement, sortCol: Column | null): void {
+  if (opts.columnRef) opts.columnRef.open = openColumnList;
+
+  // 列名クリック: Excel オートフィルタ（並べ替え＋その列の値リストをチェックで表示/非表示）。
+  function openValueFilter(anchor: HTMLElement, col: Column): void {
     if (colPop.classList.contains('on')) { colPop.classList.remove('on'); return; }
-    renderColMenu(sortCol);
-    const r = anchor.getBoundingClientRect();
-    colPop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 228))}px`;
-    colPop.style.top = `${r.bottom + 6}px`;
-    colPop.classList.add('on');
+    clear(colPop);
+    const setSort = (dir: 1 | -1): void => { st.sort = { col: col.id, dir }; saveState(opts.viewId, st); colPop.classList.remove('on'); render(); };
+    if (col.sortable !== false) {
+      const asc = el('button', { class: 'qam-colmenu-item qam-colmenu-act', html: `${icon('chevronUp', 13)}<span>昇順で並べ替え</span>` });
+      const desc = el('button', { class: 'qam-colmenu-item qam-colmenu-act', html: `${icon('chevronDown', 13)}<span>降順で並べ替え</span>` });
+      asc.addEventListener('click', () => setSort(1));
+      desc.addEventListener('click', () => setSort(-1));
+      colPop.append(asc, desc, el('div', { class: 'qam-colmenu-sep' }));
+    }
+    // その列の登録値（一意・昇順）。空は「(空白)」表示。最大 2000 件で頭打ち。
+    const values = [...new Set(opts.rows.map((r) => cellText(col, r)))].sort((a, b) => a.localeCompare(b));
+    const capped = values.slice(0, 2000);
+    const ex = new Set(st.excluded[col.id] ?? []);
+    const apply = (): void => { const arr = [...ex]; if (arr.length) st.excluded[col.id] = arr; else delete st.excluded[col.id]; saveState(opts.viewId, st); renderBody(); render(); };
+
+    const head = el('div', { class: 'qam-colmenu-head' }, [`${col.label || col.id} の値で絞り込み`]);
+    const search = el('input', { class: 'qam-colmenu-search', type: 'text', placeholder: '値を検索' }) as HTMLInputElement;
+    const listWrap = el('div', { class: 'qam-colmenu-vlist' });
+    colPop.append(head, search);
+    // (すべて選択)
+    const allLab = el('label', { class: 'qam-colmenu-item qam-colmenu-all' });
+    const allCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    allLab.append(allCb, el('span', {}, ['(すべて選択)']));
+    colPop.append(allLab, listWrap);
+    if (values.length > capped.length) colPop.append(el('div', { class: 'qam-colmenu-note' }, [`値が多いため先頭 ${capped.length} 件のみ`]));
+
+    const renderList = (q: string): void => {
+      clear(listWrap);
+      const ql = q.trim().toLowerCase();
+      const shown = capped.filter((v) => !ql || (v || '(空白)').toLowerCase().includes(ql));
+      allCb.checked = shown.length > 0 && shown.every((v) => !ex.has(v));
+      allCb.indeterminate = shown.some((v) => !ex.has(v)) && shown.some((v) => ex.has(v));
+      for (const v of shown) {
+        const lab = el('label', { class: 'qam-colmenu-item' });
+        const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+        cb.checked = !ex.has(v);
+        cb.addEventListener('change', () => { if (cb.checked) ex.delete(v); else ex.add(v); apply(); allCb.checked = shown.every((x) => !ex.has(x)); });
+        lab.append(cb, el('span', {}, [v === '' ? '(空白)' : v]));
+        listWrap.append(lab);
+      }
+    };
+    allCb.addEventListener('change', () => {
+      const ql = search.value.trim().toLowerCase();
+      const shown = capped.filter((v) => !ql || (v || '(空白)').toLowerCase().includes(ql));
+      if (allCb.checked) shown.forEach((v) => ex.delete(v)); else shown.forEach((v) => ex.add(v));
+      apply(); renderList(search.value);
+    });
+    search.addEventListener('input', () => renderList(search.value));
+    renderList('');
+    openAt(anchor);
+    setTimeout(() => search.focus(), 30);
   }
-  // 「列表示」ボタン（main のエクスポート群の隣）からは並べ替えなしのチェックリストを開く。
-  if (opts.columnRef) opts.columnRef.open = (anchor: HTMLElement) => openColMenu(anchor, null);
+
   colPop.addEventListener('click', (e) => e.stopPropagation());
   if (!colMenuBound) { document.addEventListener('click', () => document.getElementById('qam-colmenu')?.classList.remove('on')); colMenuBound = true; }
 
-  // フィルタ: チップごとに、カンマ区切りの語の「いずれか」を含めば一致(OR)。複数チップはAND。
+  // フィルタ: (1)チップ substring(カンマOR/複数列AND) (2)列ごとオートフィルタ(除外値)。両方 AND。
   function passesFilters(row: any): boolean {
-    return st.filters.every((flt) => {
+    for (const flt of st.filters) {
       const f = (flt.value || '').trim();
-      if (!f) return true;
+      if (!f) continue;
       const col = byId.get(flt.field);
-      if (!col) return true;
+      if (!col) continue;
       const text = cellText(col, row).toLowerCase();
       const terms = f.split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
-      return terms.length === 0 || terms.some((t) => text.includes(t));
-    });
+      if (terms.length && !terms.some((t) => text.includes(t))) return false;
+    }
+    for (const colId of Object.keys(st.excluded)) {
+      const ex = st.excluded[colId];
+      if (!ex || !ex.length) continue;
+      const col = byId.get(colId);
+      if (!col) continue;
+      if (ex.includes(cellText(col, row))) return false; // チェックを外した値は非表示
+    }
+    return true;
   }
   function sortedRows(): any[] {
     if (!st.sort) return opts.rows;
@@ -178,7 +236,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
     fr.add = (id) => { if (!st.filters.some((f) => f.field === id)) st.filters.push({ field: id, value: '' }); saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
     fr.setValue = (id, val) => { const f = st.filters.find((x) => x.field === id); if (f) { f.value = val; saveState(opts.viewId, st); renderBody(); } };
     fr.remove = (id) => { st.filters = st.filters.filter((f) => f.field !== id); saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
-    fr.clear = () => { st.filters = []; saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
+    fr.clear = () => { st.filters = []; st.excluded = {}; saveState(opts.viewId, st); render(); fr.onChange?.(); }; // チップ＋列オートフィルタを一括解除
   }
 
   function renderBody(): void {
@@ -235,11 +293,14 @@ export function renderTable(opts: TableOpts): HTMLElement {
 
   function buildTh(c: Column): HTMLElement {
     const th = el('th', { dataset: { col: c.id } });
-    // 現在の並べ替え表示＋ドロップダウン（caret）。列名クリックで Excel 風メニューを開く。
-    const sortIcon = st.sort?.col === c.id ? icon(st.sort.dir === 1 ? 'chevronUp' : 'chevronDown', 12) : '';
-    const inner = el('div', { class: 'qam-th', html: `<span>${c.label}</span>${sortIcon}<span class="qam-th-caret">${icon('chevronDown', 12)}</span>` });
-    // クリックで Excel 風メニュー（並べ替え＋表示/非表示）。外側クリック判定に拾われて即閉じしないよう伝播停止。
-    inner.addEventListener('click', (e) => { e.stopPropagation(); openColMenu(th, c); });
+    // 右側アイコンは1つだけ: ソート中はその向きの矢印、未ソートならドロップダウン caret。
+    // フィルタが効いている列は caret を強調（フィルタ中の目印）。
+    const sorted = st.sort?.col === c.id;
+    const filtered = (st.excluded[c.id]?.length ?? 0) > 0;
+    const rightIcon = sorted ? icon(st.sort!.dir === 1 ? 'chevronUp' : 'chevronDown', 12) : icon('chevronDown', 12);
+    const inner = el('div', { class: 'qam-th' + (filtered ? ' qam-th-filtered' : ''), html: `<span>${c.label}</span><span class="qam-th-caret">${rightIcon}</span>` });
+    // 列名クリックで Excel オートフィルタ（並べ替え＋値リスト）。外側クリック判定で即閉じしないよう伝播停止。
+    inner.addEventListener('click', (e) => { e.stopPropagation(); openValueFilter(th, c); });
     th.append(inner);
     attachReorder(th, c);
     th.append(buildResize(c));

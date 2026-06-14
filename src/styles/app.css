@@ -131,7 +131,7 @@ body {
 .qam-bulk-info { display: flex; align-items: center; gap: var(--s-4); }
 .qam-bulk .qam-bulk-actions { display: flex; gap: var(--s-2); }
 /* 列表示メニュー（チェックで表示/非表示） */
-.qam-colmenu { position: fixed; display: none; width: 220px; max-height: 360px; overflow-y: auto; padding: var(--s-3); z-index: 1000;
+.qam-colmenu { position: fixed; display: none; width: 250px; max-height: 380px; overflow-y: auto; padding: var(--s-3); z-index: 1000;
   background: var(--paper); border: 1px solid var(--paper-3); border-radius: var(--r-3); box-shadow: var(--shadow-flyout); font-family: var(--font-sans); }
 .qam-colmenu.on { display: block; }
 .qam-colmenu-head { font-size: var(--fs-xs); color: var(--ink-4); padding: 0 var(--s-3) var(--s-2); }
@@ -140,6 +140,16 @@ body {
 .qam-colmenu-act { width: 100%; border: 0; background: transparent; color: var(--ink); font: inherit; gap: var(--s-3); }
 .qam-colmenu-act svg { width: 13px; height: 13px; }
 .qam-colmenu-sep { height: 1px; background: var(--line); margin: var(--s-2) 0; }
+/* オートフィルタ（列の値リスト）の検索ボックス・値リスト・すべて選択・注記 */
+.qam-colmenu-search { width: 100%; box-sizing: border-box; height: 28px; margin-bottom: var(--s-2); padding: 2px var(--s-3);
+  border: 1px solid var(--paper-3); border-radius: var(--r-2); background: var(--paper); color: var(--ink); font: inherit; font-size: var(--fs-sm); outline: none; }
+.qam-colmenu-search:focus { border-color: var(--accent); }
+.qam-colmenu-vlist { max-height: 220px; overflow-y: auto; }
+.qam-colmenu-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qam-colmenu-all { border-bottom: 1px solid var(--line); margin-bottom: var(--s-1); }
+.qam-colmenu-note { font-size: var(--fs-xs); color: var(--ink-4); padding: var(--s-2) var(--s-3) 0; }
+/* フィルタが効いている列の目印 */
+.qam-th-filtered > span:first-child, .qam-th-filtered .qam-th-caret { color: var(--accent-strong); }
 /* ヘッダのドロップダウン caret（Excel風）。常時うっすら、ホバーで濃く。 */
 .qam-th .qam-th-caret { display: inline-flex; align-items: center; margin-left: auto; color: var(--ink-4); }
 .qam-table thead th:hover .qam-th-caret { color: var(--ink-3); }
@@ -189,7 +199,9 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-th-resize { position: absolute; top: 0; right: 0; width: 6px; height: 100%; cursor: col-resize; }
 .qam-table th { position: relative; }
 .qam-table th.qam-drag-over { box-shadow: inset 2px 0 0 var(--accent); }
-.qam-col-check { width: 38px; text-align: center; }
+/* チェックボックス列: 横パディングを詰め overflow を可視に（狭い枠でチェックボックスがはみ出して
+   text-overflow:ellipsis の「…/点」が出ていたのを解消）。 */
+.qam-col-check { width: 38px; text-align: center; overflow: visible; text-overflow: clip; padding-left: var(--s-2); padding-right: var(--s-2); }
 .qam-col-check input { cursor: pointer; }
 .qam-table tbody tr:hover { background: var(--paper-2); }
 .qam-table tbody tr.qam-selected { background: var(--accent-soft); }
