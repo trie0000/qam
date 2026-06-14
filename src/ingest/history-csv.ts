@@ -36,12 +36,23 @@ function inferChange(content: string): QamChange {
   return 'modified';
 }
 
+// CSV の「変更種別」列の値を QamChange に対応付け（不明は null）。
+function mapChange(v: string): QamChange | null {
+  const s = v.trim();
+  if (!s) return null;
+  if (/^add|追加|新規|登録|新設|開設/i.test(s)) return 'added';
+  if (/^del|削除|廃止|除却|抹消|停止/i.test(s)) return 'deleted';
+  if (/^mod|変更|更新|修正/i.test(s)) return 'modified';
+  return null;
+}
+
 // entity ごとの列仕様。
 // keyCols: その値を resolveId() で現スナップショットの Qualys ID に解決し、ID 列にする
 //   （AssetGroup=タイトル / Host=FQDN / Domain=ドメイン名 / User=アカウント名）。
 //   解決できなければ名前そのものを ID にする。接続点ID/外接番号は ID にせず extras に併記。
 interface HistSpec {
   date: RegExp;
+  type: RegExp;                    // 変更種別の列（その値で 種別 を決める。無ければ content から推定）。
   content: RegExp | null;          // 本文に使う列（更新内容 / host はメモ）。
   field: string;                   // 「項目」列の表示ラベル。
   keyCols: RegExp[];               // Qualys ID へ解決する識別名（タイトル/FQDN/ドメイン名/アカウント名）。
@@ -50,22 +61,22 @@ interface HistSpec {
 }
 const SPECS: Record<QamEntity, HistSpec> = {
   group: {
-    date: /更新日/, content: /更新内容/, field: '更新内容',
+    date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
     keyCols: [/タイトル/], name: [/タイトル/],
     extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['Function', /Function|機能|接続.*名称/i], ['Location', /Location|拠点/i], ['コメント', /comment|コメント/i]],
   },
   domain: {
-    date: /更新日/, content: /更新内容/, field: '更新内容',
+    date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
     keyCols: [/ドメイン名/], name: [/ドメイン名/],
     extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['IP範囲from', /from/i], ['IP範囲to', /to/i], ['外接番号', /外接/]],
   },
   host: {
-    date: /更新日/, content: /メモ/, field: 'メモ',
+    date: /更新日/, type: /種別/, content: /メモ/, field: 'メモ',
     keyCols: [/FQDN/i], name: [/FQDN/i, /接続[店点]名/],
     extras: [['接続点名', /接続[店点]名/], ['IP', /IP|アドレス/i], ['外接番号', /外接/]],
   },
   user: {
-    date: /更新日/, content: /更新内容/, field: '更新内容',
+    date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
     keyCols: [/アカウント名/], name: [/氏名/, /アカウント名/],
     extras: [['接続点ID', /接続点ID/i], ['姓', /姓/], ['名', /名前/], ['事業場', /事業/], ['TEL', /TEL|電話/i],
       ['Email', /mail|メール/i], ['Language', /Language|言語/i], ['権限', /権限|role/i],
@@ -83,6 +94,7 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
   const dateI = idx(spec.date);
   if (dateI < 0) throw new Error('ヘッダに「更新日」が必要です');
   const contentI = spec.content ? idx(spec.content) : -1;
+  const typeI = idx(spec.type);
   const keyIdx = spec.keyCols.map(idx).filter((i) => i >= 0);
   const nameIdx = spec.name.map(idx).filter((i) => i >= 0);
   const extraDefs = spec.extras.map(([label, re]) => [label, idx(re)] as [string, number]).filter(([, i]) => i >= 0);
@@ -102,7 +114,7 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
       eid: `${entity}:${id}:${date}:import:${i}`,
       ts: `${date}T00-00-00`,
       entity, id, name,
-      change: inferChange(content || extras.join(' ')),
+      change: mapChange(get(typeI)) ?? inferChange(content || extras.join(' ')), // 変更種別列を優先、無ければ推定
       field: spec.field,
       old: '',
       // 全種別統一: 変更後/追加 列の先頭に「CSVインポートで登録」を入れ、取込履歴と分かるようにする。
@@ -118,8 +130,8 @@ export const parseGroupHistoryCsv = (text: string, resolveId?: (n: string) => st
 
 // 取込モーダルに表示する各 entity の想定ヘッダ。
 export const HIST_HEADER_HINT: Record<QamEntity, string> = {
-  group: '更新日, 更新内容, 接続点ID, 事業場名, タイトル, 接続点名称(Function), 拠点名称(Location), コメント(comments)',
-  domain: '更新日, 更新内容, 接続点ID, 事業場名, ドメイン名, IPアドレス範囲_from, IPアドレス範囲_to, 外接番号',
-  host: '更新日, 接続点名, IPアドレス, FQDN, メモ, 外接番号',
-  user: '更新日, 更新内容, 接続点ID, 氏名, 名前, 姓, 事業場名, TEL, e_mail, アカウント名, Language, 権限, ログイン方法(SAML), スキャン結果通知',
+  group: '更新日, 変更種別, 更新内容, 接続点ID, 事業場名, タイトル, 接続点名称(Function), 拠点名称(Location), コメント(comments)',
+  domain: '更新日, 変更種別, 更新内容, 接続点ID, 事業場名, ドメイン名, IPアドレス範囲_from, IPアドレス範囲_to, 外接番号',
+  host: '更新日, 変更種別, 接続点名, IPアドレス, FQDN, メモ, 外接番号',
+  user: '更新日, 変更種別, 更新内容, 接続点ID, 氏名, 名前, 姓, 事業場名, TEL, e_mail, アカウント名, Language, 権限, ログイン方法(SAML), スキャン結果通知',
 };

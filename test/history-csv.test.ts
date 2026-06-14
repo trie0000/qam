@@ -29,6 +29,13 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[2].ts).toBe('2026-07-01T00-00-00');
   });
 
+  it('変更種別列があればその値を種別に使う（更新内容からの推定より優先）', () => {
+    const csv = '更新日,変更種別,更新内容,接続点ID,事業場名,タイトル,接続点名称(Function),拠点名称(Location),コメント(comments)\n'
+      + '2026-06-01,削除,新規登録した,AB123,東京,AB123 拠点,F,L,c'; // 内容は「登録」だが 変更種別=削除 を優先
+    const ev = parseGroupHistoryCsv(csv);
+    expect(ev[0].change).toBe('deleted');
+  });
+
   it('クォート内のカンマを正しく扱う', () => {
     const csv = header + '\n' + '2026-06-01,"IP追加,DNS変更",AB123,場,AB123 拠点,F,L,c';
     const ev = parseGroupHistoryCsv(csv);
