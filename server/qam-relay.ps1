@@ -143,21 +143,40 @@ function Invoke-QualysFetch { param($Body)
         Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
         Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
         if ($isUserList) {
-            # QPS REST: POST + ServiceRequest(空=全件)。応答は ServiceResponse(XML)。
-            $reqXml = New-Object System.Net.Http.StringContent('<ServiceRequest></ServiceRequest>', [Text.Encoding]::UTF8, 'application/xml')
-            $resp = $client.PostAsync($url, $reqXml).Result
+            # QPS REST はページング（既定100件/ページ。hasMoreRecords/lastId で続き）。
+            # 全ページを POST で辿り、<User> 要素を結合して 1 つの ServiceResponse にする。
+            $sb = New-Object System.Text.StringBuilder
+            $lastId = ''; $page = 0; $ok = $true; $more = $false
+            do {
+                $page++
+                $crit = if ($lastId) { "<filters><Criteria field=`"id`" operator=`"GREATER`">$lastId</Criteria></filters>" } else { '' }
+                $bodyXml = "<ServiceRequest><preferences><limitResults>1000</limitResults></preferences>$crit</ServiceRequest>"
+                $resp = $client.PostAsync($url, (New-Object System.Net.Http.StringContent($bodyXml, [Text.Encoding]::UTF8, 'application/xml'))).Result
+                $reason = [string]$resp.ReasonPhrase
+                $ctype = if ($resp.Content -and $resp.Content.Headers.ContentType) { [string]$resp.Content.Headers.ContentType } else { '' }
+                $pageBytes = if ($resp.Content) { $resp.Content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
+                $pageXml = if ($pageBytes.Length) { [System.Text.Encoding]::UTF8.GetString($pageBytes) } else { '' }
+                if (-not $resp.IsSuccessStatusCode) { $ok = $false; $sb = New-Object System.Text.StringBuilder; [void]$sb.Append($pageXml); break }
+                foreach ($m in [regex]::Matches($pageXml, '(?s)<User>.*?</User>')) { [void]$sb.Append($m.Value) }
+                $more = ($pageXml -match '<hasMoreRecords>\s*true\s*</hasMoreRecords>')
+                $lm = [regex]::Match($pageXml, '<lastId>\s*(\d+)\s*</lastId>')
+                $lastId = if ($lm.Success) { $lm.Groups[1].Value } else { '' }
+                Add-QamLog "FETCH user page $page: more=$more lastId=$lastId"
+            } while ($ok -and $more -and $lastId -and $page -lt 200)
+            $xml = if ($ok) { "<?xml version=`"1.0`" encoding=`"UTF-8`"?><ServiceResponse><responseCode>SUCCESS</responseCode><data>$($sb.ToString())</data></ServiceResponse>" } else { $sb.ToString() }
+            $next = $null
         } else {
             $resp = $client.GetAsync($url).Result
+            # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
+            # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
+            $content = $resp.Content
+            $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
+            $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
+            $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
+            $ok = $resp.IsSuccessStatusCode
+            $reason = [string]$resp.ReasonPhrase
+            $ctype = if ($content -and $content.Headers.ContentType) { [string]$content.Headers.ContentType } else { '' }
         }
-        # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
-        # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
-        $content = $resp.Content
-        $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
-        $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
-        $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
-        $ok = $resp.IsSuccessStatusCode
-        $reason = [string]$resp.ReasonPhrase
-        $ctype = if ($content -and $content.Headers.ContentType) { [string]$content.Headers.ContentType } else { '' }
         # 応答本文のスニペット（空白畳み込み）。成功は短め、失敗は理由が分かるよう長めに残す。
         $snippet = ($xml -replace '\s+', ' ').Trim()
         $cap = if ($ok) { 300 } else { 1500 }
