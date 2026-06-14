@@ -119,8 +119,8 @@ function Invoke-QualysFetch { param($Body)
             'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
             # user 一覧は v2 FO /api/2.0/fo/user/（USER_LIST_OUTPUT、ASSIGNED_ASSET_GROUPS＝割当AG含む）。
-            # action=list は下で POST body として送る（GET だと 403 HTML になるため）。
-            'user'   { $url = "$base/api/2.0/fo/user/" }
+            # action=list はクエリに付け、メソッドは POST（GET だと 403 / クエリ無し POST だと 404 になるため）。
+            'user'   { $url = "$base/api/2.0/fo/user/?action=list" }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }
