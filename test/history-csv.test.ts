@@ -48,29 +48,40 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(() => parseGroupHistoryCsv(csv)).toThrow(/取り込める行/);
   });
 
-  it('domain: 接続点ID=id / ドメイン名=name / IP範囲・外接番号を併記', () => {
-    const csv = '更新日,更新内容,接続点ID,事業場名,ドメイン名,IPアドレス範囲_from,IPアドレス範囲_to,外接番号\n'
-      + '2026-06-01,新規,DM12,東京,example.com,10.0.0.1,10.0.0.255,EXT9';
+  it('domain: ドメイン名=id / 接続点ID併記 / 単一IP範囲はレンジ表記', () => {
+    const csv = '更新日,変更種別,接続点ID,ドメイン名,IP_from,IP_to\n'
+      + '2026-06-01,新規,DM12,example.com,10.0.0.1,10.0.0.255';
     const ev = parseHistoryCsv('domain', csv);
     expect(ev[0].id).toBe('example.com'); // ドメイン名がID（=Qualysキー）。接続点IDではない
     expect(ev[0].name).toBe('example.com');
     expect(ev[0].change).toBe('added');
     expect(ev[0].new).toContain('接続点ID:DM12'); // 接続点IDは併記
-    expect(ev[0].new).toContain('IP範囲from:10.0.0.1');
-    expect(ev[0].new).toContain('IP範囲to:10.0.0.255');
-    expect(ev[0].new).toContain('外接番号:EXT9');
+    expect(ev[0].new).toContain('IP:10.0.0.1-10.0.0.255');
   });
 
-  it('host: 更新内容が無く メモ を本文に / 未解決時 id は空(FQDNを流用しない) / 外接番号は併記', () => {
-    const csv = '更新日,接続点名,IPアドレス,FQDN,メモ,外接番号\n'
-      + '2026-06-02,東京拠点,10.1.1.1,host1.example,初期構築,EXT1';
+  it('domain: 同日・同ドメイン・同種別を1レコードに集約。連続範囲は統合・非連続はカンマ区切り', () => {
+    const csv = '更新日,変更種別,接続点ID,ドメイン名,IP_from,IP_to\n'
+      + '2026-06-01,変更,DM1,example.com,10.0.0.1,10.0.0.10\n'   // ← この2行は隣接(…10と…11)で
+      + '2026-06-01,変更,DM1,example.com,10.0.0.11,10.0.0.20\n'  //    統合され 1-20 に
+      + '2026-06-01,変更,DM1,example.com,10.0.5.5,\n'            // ← 離れた単一IPは別途併記
+      + '2026-06-02,変更,DM1,example.com,10.0.9.9,';            // ← 別日は別レコード
+    const ev = parseHistoryCsv('domain', csv);
+    expect(ev.length).toBe(2); // 06-01 集約1件 + 06-02 1件
+    const d1 = ev.find((e) => e.ts.startsWith('2026-06-01'))!;
+    expect(d1.new).toContain('IP:10.0.0.1-10.0.0.20, 10.0.5.5');
+    const d2 = ev.find((e) => e.ts.startsWith('2026-06-02'))!;
+    expect(d2.new).toContain('IP:10.0.9.9');
+  });
+
+  it('host: FQDN の http(s):// を除去 / 未解決時 id は空 / 接続点ID・IPを併記', () => {
+    const csv = '更新日,変更種別,接続点ID,IPアドレス,FQDN\n'
+      + '2026-06-02,追加,AB123,10.1.1.1,https://host1.example/';
     const ev = parseHistoryCsv('host', csv);
-    expect(ev[0].id).toBe('');               // 未解決は空（FQDN を Host ID に流用しない）
-    expect(ev[0].name).toBe('host1.example'); // FQDN は「名前」列に残る
-    expect(ev[0].field).toBe('');            // CSV取込は項目単位でないため「変更項目」は空
-    expect(ev[0].new).toContain('初期構築');
-    expect(ev[0].new).toContain('接続点名:東京拠点');
-    expect(ev[0].new).toContain('外接番号:EXT1');
+    expect(ev[0].id).toBe('');                // 未解決は空（FQDN を Host ID に流用しない）
+    expect(ev[0].name).toBe('host1.example'); // http(s):// と末尾スラッシュを除去
+    expect(ev[0].change).toBe('added');
+    expect(ev[0].new).toContain('接続点ID:AB123');
+    expect(ev[0].new).toContain('IP:10.1.1.1');
   });
 
   it('user: アカウント名=id / 氏名=name / 権限などを併記', () => {

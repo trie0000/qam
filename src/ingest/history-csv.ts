@@ -63,20 +63,23 @@ interface HistSpec {
   extras: [string, RegExp][];      // [併記ラベル, ヘッダ正規表現]
 }
 const SPECS: Record<QamEntity, HistSpec> = {
+  // AssetGroup: 更新日, 変更種別, 接続点ID, 事業場名(Division), タイトル, 接続名称(Function), 拠点名称(Location), メモ
   group: {
-    date: /更新日/, type: /種別/, content: /更新内容/,
+    date: /更新日/, type: /種別/, content: /メモ|更新内容/,
     keyCols: [/タイトル/], keyIsIdentity: false, name: [/タイトル/],
-    extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['Function', /Function|機能|接続.*名称/i], ['Location', /Location|拠点/i], ['コメント', /comment|コメント/i]],
+    extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['Function', /Function|機能|接続.*名称/i], ['Location', /Location|拠点/i]],
   },
+  // Domain: 更新日, 変更種別, 接続点ID, ドメイン名, IP_from, IP_to（IP_from/to は同日でレンジ統合＝専用処理）
   domain: {
-    date: /更新日/, type: /種別/, content: /更新内容/,
+    date: /更新日/, type: /種別/, content: null,
     keyCols: [/ドメイン名/], keyIsIdentity: true, name: [/ドメイン名/],
-    extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['IP範囲from', /from/i], ['IP範囲to', /to/i], ['外接番号', /外接/]],
+    extras: [['接続点ID', /接続点ID/i]],
   },
+  // Host: 更新日, 変更種別, 接続点ID, IPアドレス, FQDN（FQDN の http(s):// は除去）
   host: {
-    date: /更新日/, type: /種別/, content: /メモ/,
-    keyCols: [/FQDN/i], keyIsIdentity: false, name: [/FQDN/i, /接続[店点]名/],
-    extras: [['接続点名', /接続[店点]名/], ['IP', /IP|アドレス/i], ['外接番号', /外接/]],
+    date: /更新日/, type: /種別/, content: null,
+    keyCols: [/FQDN/i], keyIsIdentity: false, name: [/FQDN/i],
+    extras: [['接続点ID', /接続点ID/i], ['IP', /IPアドレス|IP|アドレス/i]],
   },
   user: {
     date: /更新日/, type: /種別/, content: /更新内容/,
@@ -86,6 +89,43 @@ const SPECS: Record<QamEntity, HistSpec> = {
       ['ログイン方法', /ログイン方法|SAML/i], ['スキャン結果通知', /スキャン|通知/]],
   },
 };
+
+// FQDN 等から先頭の http:// https:// と末尾スラッシュを除去。
+const stripProtocol = (s: string): string => s.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+
+// IPv4 → 整数（不正は null）。
+function ipToInt(s: string): number | null {
+  const m = s.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const p = m.slice(1).map(Number);
+  if (p.some((n) => n > 255)) return null;
+  return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
+}
+const ipToStr = (n: number): string => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+
+// 同日のIP範囲(from,to)群を統合: 連続/重複する範囲はレンジにまとめ、まとめられないものは併記。
+// IPv4 として解釈できないものは原文のまま併記。結果は "a-b, c, d-e" のカンマ区切り。
+function consolidateRanges(pairs: [string, string][]): string {
+  const valid: [number, number][] = [];
+  const raw: string[] = [];
+  for (const [f, t] of pairs) {
+    const fromS = (f || '').trim(); const toS = (t || '').trim();
+    if (!fromS && !toS) continue;
+    const fi = ipToInt(fromS); const ti = ipToInt(toS || fromS);
+    if (fi !== null && ti !== null) valid.push([Math.min(fi, ti), Math.max(fi, ti)]);
+    else raw.push(toS && toS !== fromS ? `${fromS}-${toS}` : (fromS || toS));
+  }
+  valid.sort((a, b) => a[0] - b[0]);
+  const merged: [number, number][] = [];
+  for (const [fi, ti] of valid) {
+    const last = merged[merged.length - 1];
+    if (last && fi <= last[1] + 1) last[1] = Math.max(last[1], ti); // 連続/重複は結合
+    else merged.push([fi, ti]);
+  }
+  const out = merged.map(([a, b]) => (a === b ? ipToStr(a) : `${ipToStr(a)}-${ipToStr(b)}`));
+  for (const r of raw) if (!out.includes(r)) out.push(r);
+  return out.join(', ');
+}
 
 // resolveId: 識別名(タイトル等) → 現スナップショットの Qualys ID。未解決は '' を返す。
 export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (rawName: string) => string = () => ''): QamEvent[] {
@@ -101,17 +141,53 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
   const keyIdx = spec.keyCols.map(idx).filter((i) => i >= 0);
   const nameIdx = spec.name.map(idx).filter((i) => i >= 0);
   const extraDefs = spec.extras.map(([label, re]) => [label, idx(re)] as [string, number]).filter(([, i]) => i >= 0);
+  const marker = 'CSVインポートで登録';
+
+  // domain は IP_from/IP_to を「同日・同ドメイン・同種別」で1レコードに集約し、IP範囲を統合する。
+  if (entity === 'domain') {
+    const fromI = idx(/from/i); const toI = idx(/to/i); const sidI = idx(/接続点ID/i);
+    interface DG { date: string; change: QamChange; id: string; name: string; sid: string; pairs: [string, string][] }
+    const groups = new Map<string, DG>();
+    for (const r of rows.slice(1)) {
+      const get = (j: number): string => (j >= 0 ? (r[j] ?? '').trim() : '');
+      const date = normDate(get(dateI));
+      const rawKey = keyIdx.map(get).find((v) => v) || '';
+      if (!date || !rawKey) continue;
+      const id = resolveId(rawKey) || rawKey; // domain はドメイン名がキー
+      const change = mapChange(get(typeI)) ?? inferChange('');
+      const key = `${date}|${id}|${change}`;
+      const g = groups.get(key) ?? { date, change, id, name: rawKey, sid: get(sidI), pairs: [] };
+      if (!g.sid) g.sid = get(sidI);
+      g.pairs.push([get(fromI), get(toI)]);
+      groups.set(key, g);
+    }
+    const events: QamEvent[] = [];
+    let i = 0;
+    for (const g of groups.values()) {
+      const ranges = consolidateRanges(g.pairs);
+      const extras = [g.sid ? `接続点ID:${g.sid}` : '', ranges ? `IP:${ranges}` : ''].filter(Boolean);
+      events.push({
+        eid: `domain:${g.id}:${g.date}:import:${i++}`, ts: `${g.date}T00-00-00`,
+        entity: 'domain', id: g.id, name: g.name, change: g.change, field: '', old: '',
+        new: [marker, ...extras].join(' / '),
+      });
+    }
+    if (!events.length) throw new Error('取り込める行がありません（更新日・ドメイン名列を確認してください）');
+    return events;
+  }
 
   const events: QamEvent[] = [];
   rows.slice(1).forEach((r, i) => {
     const get = (j: number): string => (j >= 0 ? (r[j] ?? '').trim() : '');
     const date = normDate(get(dateI));
-    const rawKey = keyIdx.map(get).find((v) => v) || '';
+    let rawKey = keyIdx.map(get).find((v) => v) || '';
+    if (entity === 'host') rawKey = stripProtocol(rawKey); // FQDN の http(s):// を除去
     if (!date || !rawKey) return; // 更新日・識別名が無い行はスキップ
     // Qualys ID へ解決。group/host は表示名(タイトル/FQDN)を ID に流用しない（未解決は空）。
     // domain/user は keyCols 自体が Qualys キーなので未解決でもそのまま採用。接続点IDは ID にしない。
     const id = resolveId(rawKey) || (spec.keyIsIdentity ? rawKey : '');
-    const name = nameIdx.map(get).find((v) => v) || rawKey;
+    let name = nameIdx.map(get).find((v) => v) || rawKey;
+    if (entity === 'host') name = stripProtocol(name);
     const content = get(contentI);
     const extras = extraDefs.map(([label, j]) => [label, get(j)] as [string, string])
       .filter(([, v]) => v).map(([k, v]) => `${k}:${v}`);
@@ -124,7 +200,7 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
       field: '',
       old: '',
       // 全種別統一: 変更後/追加 列の先頭に「CSVインポートで登録」を入れ、取込履歴と分かるようにする。
-      new: ['CSVインポートで登録', content, ...extras].filter(Boolean).join(' / '),
+      new: [marker, content, ...extras].filter(Boolean).join(' / '),
     });
   });
   if (!events.length) throw new Error('取り込める行がありません（更新日・識別名列を確認してください）');
@@ -136,8 +212,8 @@ export const parseGroupHistoryCsv = (text: string, resolveId?: (n: string) => st
 
 // 取込モーダルに表示する各 entity の想定ヘッダ。
 export const HIST_HEADER_HINT: Record<QamEntity, string> = {
-  group: '更新日, 変更種別, 更新内容, 接続点ID, 事業場名, タイトル, 接続点名称(Function), 拠点名称(Location), コメント(comments)',
-  domain: '更新日, 変更種別, 更新内容, 接続点ID, 事業場名, ドメイン名, IPアドレス範囲_from, IPアドレス範囲_to, 外接番号',
-  host: '更新日, 変更種別, 接続点名, IPアドレス, FQDN, メモ, 外接番号',
+  group: '更新日, 変更種別, 接続点ID, 事業場名(Division), タイトル, 接続名称(Function), 拠点名称(Location), メモ',
+  domain: '更新日, 変更種別, 接続点ID, ドメイン名, IP_from, IP_to（同日はIP範囲を統合して1行に集約）',
+  host: '更新日, 変更種別, 接続点ID, IPアドレス, FQDN（http(s):// は自動除去）',
   user: '更新日, 変更種別, 更新内容, 接続点ID, 氏名, 名前, 姓, 事業場名, TEL, e_mail, アカウント名, Language, 権限, ログイン方法(SAML), スキャン結果通知',
 };
