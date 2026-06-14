@@ -5,6 +5,16 @@ function evt(entity: QamEntity, id: string, name: string, change: QamEvent['chan
   return { eid: `${entity}:${id}:${date}:_`, ts: date, entity, id, name, change };
 }
 
+// 削除直前の資産プロパティを表示用に平坦化（name→scalar→set(カンマ結合)→info、空値は除外）。
+function recordProps(rec: QamRecord): { k: string; v: string }[] {
+  const out: { k: string; v: string }[] = [];
+  if (rec.name) out.push({ k: 'name', v: rec.name });
+  for (const k of Object.keys(rec.scalar)) out.push({ k, v: rec.scalar[k] ?? '' });
+  for (const k of Object.keys(rec.set)) out.push({ k, v: (rec.set[k] ?? []).join(', ') });
+  for (const k of Object.keys(rec.info)) out.push({ k, v: rec.info[k] ?? '' });
+  return out.filter((p) => p.v !== '');
+}
+
 function fieldDiffs(entity: QamEntity, id: string, name: string, p: QamRecord, c: QamRecord, date: string): QamEvent[] {
   const out: QamEvent[] = [];
   const sKeys = Array.from(new Set([...Object.keys(p.scalar), ...Object.keys(c.scalar)])).sort();
@@ -33,7 +43,7 @@ export function compareSnapshots(prev: QamRecords | null, curr: QamRecords, enti
     if (!prev || !(k in prev)) events.push(evt(entity, k, curr[k].name, 'added', date));
   }
   for (const k of prevKeys) {
-    if (!(k in curr)) events.push(evt(entity, k, prev![k].name, 'deleted', date));
+    if (!(k in curr)) { const e = evt(entity, k, prev![k].name, 'deleted', date); e.props = recordProps(prev![k]); events.push(e); }
   }
   for (const k of currKeys) {
     if (prev && k in prev && prev[k].hash !== curr[k].hash) {

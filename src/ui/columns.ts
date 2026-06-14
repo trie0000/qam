@@ -1,6 +1,7 @@
 // 資産一覧 / 変更履歴 の列定義（共通テーブル §25 用）。
 import { el, esc, clear } from './dom';
 import { icon } from '../icons';
+import { openModal } from './modal';
 import { fmtStamp } from '../config';
 import type { Column } from './table';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from '../types';
@@ -133,7 +134,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
     c('SETTEN', '接続点ID', (r) => esc(settenId(r.name)), true),
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
     c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
-    editCol('DIVISION', '部門(Division)', 'DIVISION'), editCol('FUNCTION', '接続名称(Function)', 'FUNCTION'),
+    editCol('DIVISION', '事業場名(Division)', 'DIVISION'), editCol('FUNCTION', '接続名称(Function)', 'FUNCTION'),
     editCol('LOCATION', '拠点名称(Location)', 'LOCATION'), editCol('COMMENTS', 'コメント(Comments)', 'COMMENTS'),
     c('LAST_UPDATE', '最終更新', (r) => esc(r.info.LAST_UPDATE ?? ''), true), comment,
   ];
@@ -165,9 +166,47 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
 const HIST_ID_LABEL: Record<QamEntity, string> = { group: 'AssetGroup ID', host: 'Host ID', domain: 'ドメイン名', user: 'ユーザID' };
 const HIST_NAME_LABEL: Record<QamEntity, string> = { group: 'タイトル', host: 'FQDN', domain: '名前', user: '氏名' };
 
+// 削除プロパティ表示のフィールド名→ラベル（資産一覧の列ラベルと揃える）。
+const FIELD_LABELS: Record<string, string> = {
+  OWNER_ID: 'オーナーID', IPS: 'IP', DNS_LIST: 'DNS', DOMAIN_LIST: 'ドメイン',
+  DIVISION: '事業場名(Division)', FUNCTION: '接続名称(Function)', LOCATION: '拠点名称(Location)', COMMENTS: 'コメント(Comments)',
+  LAST_UPDATE: '最終更新',
+  IP: 'IP', OS: 'OS', TRACKING_METHOD: '追跡', NETBIOS: 'NetBIOS', LAST_VULN_SCAN_DATETIME: '最終スキャン',
+  USER_LOGIN: 'ログイン', NAME: '氏名', EMAIL: 'メール', USER_ROLE: 'ロール', USER_STATUS: '状態', TITLE: '役職',
+  SCOPE_TAGS: 'スコープ(タグ)', ASSIGNED_GROUPS: 'アクセス可能AG', LAST_LOGIN_DATE: '最終ログイン',
+  NETWORK_NAME: 'ネットワーク', NETBLOCK: 'ネットブロック',
+};
+const fieldLabel = (entity: QamEntity, k: string): string =>
+  k === 'name' ? HIST_NAME_LABEL[entity] : k === 'key' ? HIST_ID_LABEL[entity] : (FIELD_LABELS[k] ?? k);
+
+// 削除資産のプロパティをプロパティシート風（ラベル｜値）にモーダル表示。
+function openDeletedProps(e: QamEvent): void {
+  const body = el('div', { class: 'qam-props' });
+  body.append(el('div', { class: 'qam-props-head' }, [
+    el('span', { class: 'qam-tag qam-tag--deleted' }, ['削除']),
+    el('span', { class: 'qam-props-id' }, [`${HIST_ID_LABEL[e.entity]}: ${e.id}`]),
+  ]));
+  const rows = e.props ?? [];
+  for (const p of rows) {
+    body.append(el('div', { class: 'qam-prop-row' }, [
+      el('div', { class: 'qam-prop-k' }, [fieldLabel(e.entity, p.k)]),
+      el('div', { class: 'qam-prop-v', title: p.v }, [p.v]),
+    ]));
+  }
+  openModal({ title: `削除資産のプロパティ — ${e.name || e.id}`, body });
+}
+
 // agSetten: host ID → 所属AGの接続点ID（host履歴用、main から渡す）。group はタイトルから算出。
 export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}): Column[] {
-  const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
+  // 削除イベントは「変更前/削除」セルに削除資産のプロパティを開くボタンを出す（記録があれば）。
+  const oldCell = (e: QamEvent): string | Node => {
+    if (e.change === 'deleted' && e.props?.length) {
+      const btn = el('button', { class: 'qam-prop-btn', html: `${icon('file', 12)}<span>プロパティを表示</span>` });
+      btn.addEventListener('click', (ev) => { ev.stopPropagation(); openDeletedProps(e); });
+      return btn;
+    }
+    return e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
+  };
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   // 接続点ID: group はタイトル(e.name)から算出、host は所属AGの接続点ID(agSetten[e.id])。
   const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));

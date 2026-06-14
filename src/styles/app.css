@@ -234,6 +234,22 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-add { color: var(--ok); }
 .qam-rem { color: var(--danger); }
 
+/* 削除イベントの「プロパティを表示」ボタン＋プロパティシート（ラベル｜値） */
+.qam-prop-btn { display: inline-flex; align-items: center; gap: var(--s-2); border: 1px solid var(--line);
+  background: var(--paper-2); color: var(--ink-3); font: inherit; font-size: var(--fs-sm);
+  padding: 2px var(--s-3); border-radius: var(--r-2); cursor: pointer; }
+.qam-prop-btn:hover { background: var(--paper-2-strong); color: var(--ink); }
+.qam-prop-btn svg { width: 12px; height: 12px; }
+.qam-props { display: flex; flex-direction: column; gap: 0; min-width: 360px; }
+.qam-props-head { display: flex; align-items: center; gap: var(--s-3); padding-bottom: var(--s-3);
+  margin-bottom: var(--s-2); border-bottom: 1px solid var(--line); }
+.qam-props-id { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--ink-4); }
+.qam-prop-row { display: grid; grid-template-columns: 160px 1fr; gap: var(--s-4); padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--line); font-size: var(--fs-md); }
+.qam-prop-row:last-child { border-bottom: 0; }
+.qam-prop-k { color: var(--ink-4); }
+.qam-prop-v { color: var(--ink); overflow-wrap: anywhere; white-space: pre-wrap; }
+
 /* ---------- states ---------- */
 .qam-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--s-3);
   color: var(--ink-3); padding: var(--s-9); text-align: center; }
