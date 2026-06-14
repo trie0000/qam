@@ -150,9 +150,12 @@ body {
 .qam-colmenu-note { font-size: var(--fs-xs); color: var(--ink-4); padding: var(--s-2) var(--s-3) 0; }
 /* フィルタが効いている列の目印 */
 .qam-th-filtered > span:first-child, .qam-th-filtered .qam-th-caret { color: var(--accent-strong); }
-/* ヘッダのドロップダウン caret（Excel風）。常時うっすら、ホバーで濃く。 */
-.qam-th .qam-th-caret { display: inline-flex; align-items: center; margin-left: auto; color: var(--ink-4); }
+/* ヘッダ右のアイコン群（じょうご＝絞り込み中 / caret＝ドロップダウン）。Excel風。 */
+.qam-th .qam-th-lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qam-th .qam-th-icons { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; flex: none; }
+.qam-th .qam-th-caret { display: inline-flex; align-items: center; color: var(--ink-4); }
 .qam-table thead th:hover .qam-th-caret { color: var(--ink-3); }
+.qam-th .qam-th-funnel { display: inline-flex; align-items: center; color: var(--accent-strong); }
 table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; table-layout: fixed; font-size: var(--fs-md); }
 .qam-table th, .qam-table td { padding: var(--s-4) var(--s-5); text-align: left; border-bottom: 1px solid var(--line);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top; }

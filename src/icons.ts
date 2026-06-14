@@ -20,6 +20,8 @@ const INNER: Record<string, string> = {
   send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
   // 取り込み: 受信トレイ（データが入ってくる）。Export(上矢印)/Download(下矢印)と区別する。
   inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  // フィルタ（じょうご）。絞り込み中の列ヘッダの目印。
+  filter: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
 };
 
 export function icon(name: keyof typeof INNER | string, size = 16): string {

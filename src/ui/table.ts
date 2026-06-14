@@ -298,7 +298,8 @@ export function renderTable(opts: TableOpts): HTMLElement {
     const sorted = st.sort?.col === c.id;
     const filtered = (st.excluded[c.id]?.length ?? 0) > 0;
     const rightIcon = sorted ? icon(st.sort!.dir === 1 ? 'chevronUp' : 'chevronDown', 12) : icon('chevronDown', 12);
-    const inner = el('div', { class: 'qam-th' + (filtered ? ' qam-th-filtered' : ''), html: `<span>${c.label}</span><span class="qam-th-caret">${rightIcon}</span>` });
+    const funnel = filtered ? `<span class="qam-th-funnel" title="この列で絞り込み中">${icon('filter', 12)}</span>` : '';
+    const inner = el('div', { class: 'qam-th' + (filtered ? ' qam-th-filtered' : ''), html: `<span class="qam-th-lbl">${c.label}</span><span class="qam-th-icons">${funnel}<span class="qam-th-caret">${rightIcon}</span></span>` });
     // 列名クリックで Excel オートフィルタ（並べ替え＋値リスト）。外側クリック判定で即閉じしないよう伝播停止。
     inner.addEventListener('click', (e) => { e.stopPropagation(); openValueFilter(th, c); });
     th.append(inner);
