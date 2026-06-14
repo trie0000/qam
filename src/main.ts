@@ -8,7 +8,7 @@ import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns, type CommentApi } from './ui/columns';
+import { assetColumns, historyColumns, settenId, type CommentApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
@@ -235,6 +235,23 @@ function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef
 }
 let filterOutsideBound = false;
 
+// host/domain が所属する AssetGroup の接続点IDを逆引き（group の HOST_IDS / DOMAIN_LIST から）。
+// 戻り値: メンバーキー(host ID / domain名) → 接続点ID（複数AGはカンマ区切り全件）。
+async function buildAgSetten(entity: QamEntity, asof: string): Promise<Record<string, string>> {
+  if (entity !== 'host' && entity !== 'domain') return {};
+  const gStamp = resolveAsof(await getSnapshotStamps(backend, 'group'), asof || undefined);
+  if (!gStamp) return {};
+  const gSnap = await readSnapshot(backend, 'group', gStamp);
+  const acc: Record<string, Set<string>> = {};
+  for (const g of Object.values(gSnap?.records ?? {}) as QamRecord[]) {
+    const sid = settenId(g.name);
+    if (!sid) continue; // 接続点IDとして妥当なタイトルのAGのみ
+    const members = (entity === 'host' ? g.set.HOST_IDS : g.set.DOMAIN_LIST) ?? [];
+    for (const m of members) (acc[m] ??= new Set()).add(sid);
+  }
+  return Object.fromEntries(Object.entries(acc).map(([k, v]) => [k, [...v].sort().join(', ')]));
+}
+
 // 全資産一括 Excel: 全種別の最新スナップショットを種別ごとのシートに。フィルタ非適用（全件・全列）。
 async function exportAllAssets(): Promise<void> {
   const sheets: Sheet[] = [];
@@ -242,7 +259,7 @@ async function exportAllAssets(): Promise<void> {
     const stamps = await getSnapshotStamps(backend, e.key);
     const stamp = resolveAsof(stamps); // 最新
     const comments = await commentApi(e.key);
-    const cols = assetColumns(e.key, comments);
+    const cols = assetColumns(e.key, comments, await buildAgSetten(e.key, ''));
     let rows: QamRecord[] = [];
     if (stamp) rows = Object.values((await readSnapshot(backend, e.key, stamp))?.records ?? {}) as QamRecord[];
     sheets.push({ name: e.label, headers: cols.map((c) => c.label || c.id), rows: rows.map((r) => cols.map((c) => cellText(c, r))) });
@@ -316,11 +333,12 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
   rows = rows.filter((r) => matchAsset(r, state.q));
   count.textContent = `${rows.length} 件 / ${fmtStamp(stamp)} 時点`;
   const comments = await commentApi(state.entity);
+  const agSetten = await buildAgSetten(state.entity, state.asof);
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   clear(host);
   host.append(renderTable({
-    viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments),
+    viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments, agSetten),
     rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef, filterRef,
   }));
   addFilterUI(toolbar, filterBar, filterRef);

@@ -108,6 +108,7 @@ function readDomain(d: Element): QamRecord {
   if (!name && d.getElementsByTagName('*').length === 0) name = (d.textContent ?? '').trim();
   r.key = name;
   r.name = name;
+  r.scalar.DOMAIN_NAME = name; // 一覧の「ドメイン名」列はこれを参照
   r.scalar.DOMAIN_ID = text(d, 'DOMAIN_ID');
   const net = d.getElementsByTagName('NETWORK')[0] ?? null;
   r.scalar.NETWORK_NAME = net ? text(net, 'NETWORK_NAME') : '';
