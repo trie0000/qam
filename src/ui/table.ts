@@ -205,7 +205,12 @@ export function renderTable(opts: TableOpts): HTMLElement {
   }
 
   colPop.addEventListener('click', (e) => e.stopPropagation());
-  if (!colMenuBound) { document.addEventListener('click', () => document.getElementById('qam-colmenu')?.classList.remove('on')); colMenuBound = true; }
+  if (!colMenuBound) {
+    document.addEventListener('click', () => document.getElementById('qam-colmenu')?.classList.remove('on'));
+    // ESC で列フィルタ/列表示メニューを閉じる（検索ボックスにフォーカスがあっても document まで伝播する）。
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('qam-colmenu')?.classList.remove('on'); });
+    colMenuBound = true;
+  }
 
   // フィルタ: (1)チップ substring(カンマOR/複数列AND) (2)列ごとオートフィルタ(除外値)。両方 AND。
   function passesFilters(row: any): boolean {
