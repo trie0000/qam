@@ -318,6 +318,7 @@ async function buildAnnot(entity: QamEntity): Promise<AnnotApi | undefined> {
   return {
     get: (id, field) => map[id]?.[field] ?? '',
     save: async (id, field, v) => {
+      await ensureAuthor(); // 記載の直前に記入者名が未設定なら促す
       await setAnnotation(backend, entity, id, field, v);
       const rec = (map[id] ??= {}); if (v) rec[field] = v; else delete rec[field];
       recordOp(`${field}編集`, `${id}: ${v || '(クリア)'}`, entity);
@@ -449,6 +450,7 @@ async function commentApi(entity: QamEntity): Promise<CommentApi> {
     byId,
     openThread,
     save: async (e, id, ts, text) => {
+      await ensureAuthor(); // 記載の直前に記入者名が未設定なら促す
       if (ts) await editComment(backend, e, id, ts, text);
       else await addComment(backend, { ts: new Date().toISOString(), entity: e, id, author: localStorage.getItem(LS.author) || '', text });
       recordOp(ts ? 'メモ編集' : 'メモ追加', `${id}`, e);
@@ -477,6 +479,7 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
   const delBtn = el('button', { class: 'btn btn--sm btn--danger', title: '表示中の取込日時のスナップショットを削除' }, ['この取込を削除']);
   delBtn.addEventListener('click', async () => {
     if (!(await confirmModal('スナップショット削除', `${state.entity} の ${fmtStamp(stamp)} のスナップショット（とこの取込の履歴）を削除します。よろしいですか？`))) return;
+    await ensureAuthor(); // 削除（更新作業）の直前に記入者名が未設定なら促す
     try { await deleteSnapshot(backend, state.entity, stamp); recordOp('スナップショット削除', fmtStamp(stamp), state.entity); state.asof = ''; toast('削除しました', 'ok'); refresh(); }
     catch (e) { toast('削除に失敗: ' + (e as Error).message, 'error'); }
   });
@@ -652,6 +655,7 @@ function histBulk(keys: string[]): HTMLElement[] {
   const b = el('button', { class: 'btn btn--sm btn--danger', html: `${icon('x', 14)}<span>選択した履歴を削除</span>` });
   b.addEventListener('click', async () => {
     if (!(await confirmModal('変更履歴の削除', `選択した ${keys.length} 件の変更履歴を削除します。よろしいですか？（元に戻せません）`, '削除'))) return;
+    await ensureAuthor(); // 削除（更新作業）の直前に記入者名が未設定なら促す
     try { const n = await removeHistoryEvents(backend, state.entity, keys); recordOp('変更履歴削除', `${n}件`, state.entity); state.selected.clear(); toast(`変更履歴を ${n} 件削除しました`, 'ok'); refresh(); }
     catch (e) { toast('削除に失敗: ' + (e as Error).message, 'error'); }
   });
@@ -677,6 +681,7 @@ async function openThread(entity: QamEntity, id: string): Promise<void> {
   }
   async function submit(): Promise<void> {
     const text = ta.value.trim(); if (!text) return;
+    await ensureAuthor(); // 記載の直前に記入者名が未設定なら促す
     send.setAttribute('disabled', 'true');
     try {
       const c: QamComment = { ts: new Date().toISOString(), entity, id, author: localStorage.getItem(LS.author) || '', text };
@@ -787,6 +792,7 @@ function openIngest(): void {
     ENTITIES.forEach((e) => sel.append(el('option', { value: e.key }, [e.label])));
     const go = el('button', { class: 'btn btn--primary', html: `${icon('download', 16)}<span>ダウンロードして取込</span>` });
     go.addEventListener('click', async () => {
+      await ensureAuthor(); // 取込（更新作業）の直前に記入者名が未設定なら促す
       go.setAttribute('disabled', 'true'); sel.setAttribute('disabled', 'true');
       try {
         const cfg = await getConfig();
@@ -834,6 +840,7 @@ function openIngest(): void {
     const go = el('button', { class: 'btn btn--primary', html: `${icon('upload', 16)}<span>取込</span>` });
     go.addEventListener('click', async () => {
       if (!file.files?.length) { toast('XML ファイルを選択してください', 'error'); return; }
+      await ensureAuthor(); // 取込（更新作業）の直前に記入者名が未設定なら促す
       go.setAttribute('disabled', 'true');
       try {
         setProg('解析中…', true);
@@ -859,6 +866,7 @@ function openIngest(): void {
     go.addEventListener('click', async () => {
       if (!file.files?.length) { toast('CSV ファイルを選択してください', 'error'); return; }
       const entity = sel.value as QamEntity;
+      await ensureAuthor(); // 取込（更新作業）の直前に記入者名が未設定なら促す
       go.setAttribute('disabled', 'true');
       setRelayBusy(true); // 取込中は死活ポーリングを止める（連続書き込みで誤検知しないように）
       try {
@@ -887,6 +895,7 @@ function openIngest(): void {
     const go = el('button', { class: 'btn btn--primary', html: `${icon('inbox', 16)}<span>値を取込（上書き）</span>` });
     go.addEventListener('click', async () => {
       if (!file.files?.length) { toast('CSV ファイルを選択してください', 'error'); return; }
+      await ensureAuthor(); // 取込（更新作業）の直前に記入者名が未設定なら促す
       go.setAttribute('disabled', 'true');
       setRelayBusy(true); // 取込中は死活ポーリングを止める（1行ごとに書き込むため）
       try {
@@ -1048,6 +1057,8 @@ function startRelayPolling(): void {
 }
 
 // 初回起動: 記入者名が未設定なら設定モーダルを出す（操作履歴・メモの作業者に使う）。
+// 記入者名が未設定なら入力モーダルを出す（更新作業の直前に呼ぶ）。設定済みなら即解決。
+// 閉じる/キャンセルされても解決する＝作業はブロックしない（未設定のままなら次回の更新時にまた促す）。
 function ensureAuthor(): Promise<void> {
   if (localStorage.getItem(LS.author)) return Promise.resolve();
   return new Promise((resolve) => {
@@ -1056,10 +1067,10 @@ function ensureAuthor(): Promise<void> {
     const body = el('div', {}, [el('div', { class: 'qam-field' }, [
       el('label', {}, ['記入者名']),
       inp,
-      callout('操作履歴やメモに「作業者」として記録されます。設定でいつでも変更できます。'),
+      callout('この更新の「作業者」として操作履歴・メモに記録されます。設定でいつでも変更できます。'),
     ])]);
     openModal({
-      title: '記入者名の設定', body, primaryLabel: '保存',
+      title: '記入者名の入力', body, primaryLabel: '保存',
       onPrimary: () => { const v = inp.value.trim(); if (!v) { toast('記入者名を入力してください', 'error'); return false; } localStorage.setItem(LS.author, v); resolve(); return true; },
       onClose: () => resolve(),
     });
@@ -1069,7 +1080,7 @@ function ensureAuthor(): Promise<void> {
 async function start(): Promise<void> {
   startRelayPolling(); // 30秒間隔で中継サーバを死活監視（落ちたら警告・復帰で自動クローズ）
   if (!(await checkRelay())) { showRelayDownModal(); return; }
-  await ensureAuthor();
+  // 起動時に記入者名を強制入力させない。更新作業（取込/メモ・注釈の記載/削除）の直前に未設定なら促す。
   refresh();
 }
 start();
