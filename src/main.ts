@@ -9,7 +9,7 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout, checkRelay } from './relay';
+import { backend, getConfig, setConfig, shutdownRelay, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT } from './ingest/history-csv';
@@ -659,24 +659,12 @@ function openIngest(): void {
           if (!ok) { setProg('取込を中止しました', false); toast('取込を中止しました', 'info'); return; }
           dup.decided = true; dup.proceed = true; // 確認済み → 各 commit では再確認しない
         }
-        // session login は「できれば」。失敗しても止めず、従来どおり Basic 認証で続行する
-        // （login 必須化で動かなくなった反省）。relay は session があれば Cookie、無ければ Basic を使う。
-        setProg('Qualys にログイン中…', true);
-        let useSession = false;
-        try {
-          const lg = await qualysLogin(creds);
-          useSession = !!lg.ok;
-          if (!useSession) toast('セッションログイン不可のため Basic 認証で続行します' + (lg.error ? `（${lg.error}）` : ''), 'info');
-        } catch { useSession = false; }
-        try {
-          for (const k of kinds) {
-            setProg(`${labelOf(k)}: ダウンロード中…`, true);
-            const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
-            setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
-            await commitOne(dl.snapshot, dl.raw, dup);
-          }
-        } finally {
-          if (useSession) { setProg('Qualys からログアウト中…', true); await qualysLogout().catch(() => undefined); }
+        // 取得は Basic 認証のみ（セッションCookieは環境により 401 で拒否されるため使わない）。
+        for (const k of kinds) {
+          setProg(`${labelOf(k)}: ダウンロード中…`, true);
+          const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
+          setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
+          await commitOne(dl.snapshot, dl.raw, dup);
         }
         setProg('完了しました', false);
         refresh();

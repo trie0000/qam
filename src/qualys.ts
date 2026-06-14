@@ -18,17 +18,10 @@ function failReason(res: { error?: string; xml?: string }): string {
 }
 
 export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProgress?: DownloadProgress): Promise<DownloadResult> {
-  // セッションが 401/403 で拒否される環境では Basic に落とす。一度落ちたらラン全体（ページング含む）を
-  // Basic 固定にする（ページ追従が毎回セッションに戻って 401 になるのを防ぐ）。
-  let noSession = false;
-  const fetchPage = async (body: Record<string, unknown>): Promise<FetchResult> => {
-    let r = await fetchQualys({ ...body, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession });
-    if (!r.ok && (r.status === 401 || r.status === 403) && !noSession) {
-      noSession = true; // 以降は Basic 固定
-      r = await fetchQualys({ ...body, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
-    }
-    return r;
-  };
+  // 取得は Basic 認証固定。セッションCookieは環境により 401(Bad Login)で拒否され、ページ追従でも
+  // 毎回 401 を出すため使わない（Basic は安定して通る）。
+  const fetchPage = (body: Record<string, unknown>): Promise<FetchResult> =>
+    fetchQualys({ ...body, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
 
   let res = await fetchPage({ kind, base: creds.base });
   if (!res.ok) throw new Error(`Qualys 取得失敗 (status ${res.status}): ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
