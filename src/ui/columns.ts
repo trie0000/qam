@@ -139,7 +139,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
   ];
   if (entity === 'host') return [
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'FQDN', (r) => esc(r.name)),
-    c('AG_SETTEN', '接続点ID(所属AG)', (r) => esc(agSetten[r.key] ?? ''), true),
+    c('AG_SETTEN', '接続点ID', (r) => esc(agSetten[r.key] ?? ''), true),
     c('IP', 'IP', sc('IP'), true), c('OS', 'OS', sc('OS')),
     c('TRACKING_METHOD', '追跡', sc('TRACKING_METHOD')), c('NETBIOS', 'NetBIOS', sc('NETBIOS')),
     c('LAST_VULN_SCAN_DATETIME', '最終スキャン', (r) => esc(r.info.LAST_VULN_SCAN_DATETIME ?? ''), true), comment,
@@ -155,7 +155,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
   ];
   return [
     c('key', 'ドメイン名', (r) => esc(r.key)),
-    c('AG_SETTEN', '接続点ID(所属AG)', (r) => esc(agSetten[r.key] ?? ''), true),
+    c('AG_SETTEN', '接続点ID', (r) => esc(agSetten[r.key] ?? ''), true),
     c('NETWORK_NAME', 'ネットワーク', sc('NETWORK_NAME')),
     c('NETBLOCK', 'ネットブロック', stc('NETBLOCK')), comment,
   ];
