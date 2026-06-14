@@ -5,7 +5,7 @@ import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
-import { renderTable, cellText, type ExportMatrix, type FilterRef } from './ui/table';
+import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, type CommentApi, type AnnotApi } from './ui/columns';
@@ -14,14 +14,20 @@ import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, type QamOp,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
+
+// 操作履歴記録: 作業者(個人設定の記入者名)＋時刻で登録/削除/変更を残す。失敗しても本処理は止めない。
+function recordOp(action: string, detail: string, entity?: QamEntity): void {
+  const op: QamOp = { ts: new Date().toISOString(), author: localStorage.getItem(LS.author) || '', action, entity, detail };
+  logOp(backend, op).catch(() => undefined);
+}
 
 const GUARD_RATIO = 0.5;
 
 const state = {
-  mode: 'assets' as 'assets' | 'history',
+  mode: 'assets' as 'assets' | 'history' | 'ops',
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
@@ -100,9 +106,9 @@ function renderLeft(): void {
   clear(left);
   left.append(el('div', { class: 'qam-navhead' }, ['ビュー']));
   const nav = el('div', { class: 'qam-nav' });
-  const modes: [typeof state.mode, string][] = [['assets', '資産一覧'], ['history', '変更履歴']];
-  for (const [m, label] of modes) {
-    const b = el('button', { 'aria-current': String(state.mode === m), html: `${icon(m === 'assets' ? 'file' : 'refresh', 16)}<span>${label}</span>` });
+  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['ops', '操作履歴', 'message']];
+  for (const [m, label, ic] of modes) {
+    const b = el('button', { 'aria-current': String(state.mode === m), html: `${icon(ic, 16)}<span>${label}</span>` });
     b.addEventListener('click', () => { state.mode = m; state.selected.clear(); refresh(); });
     nav.append(b);
   }
@@ -115,16 +121,16 @@ const leftCalHost = el('div', { class: 'qam-cal-host' });
 async function refresh(): Promise<void> {
   renderLeft();
   clear(main);
-  // tabs
+  // tabs（操作履歴は全種別共通なので種別タブは出さない。行数維持のため空のタブ行は残す）
   const tabs = el('div', { class: 'qam-tabs' });
-  for (const e of ENTITIES) {
+  if (state.mode !== 'ops') for (const e of ENTITIES) {
     const t = el('button', { class: 'qam-tab', 'aria-current': String(state.entity === e.key) }, [e.label]);
     t.addEventListener('click', () => { state.entity = e.key; state.selected.clear(); refresh(); });
     tabs.append(t);
   }
   // subbar
   const subbar = el('div', { class: 'qam-subbar' });
-  const title = el('span', { class: 'qam-title' }, [state.mode === 'assets' ? '資産一覧' : '変更履歴']);
+  const title = el('span', { class: 'qam-title' }, [state.mode === 'assets' ? '資産一覧' : state.mode === 'history' ? '変更履歴' : '操作履歴']);
   const count = el('span', { class: 'qam-count' });
   subbar.append(title, count, el('span', { class: 'qam-spacer' }));
   // toolbar
@@ -149,7 +155,8 @@ async function refresh(): Promise<void> {
   main.append(tabs, subbar, toolbar, filterBar, tableHost);
 
   if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, filterBar, tableHost);
-  else await renderHistory(subbar, count, toolbar, filterBar, tableHost);
+  else if (state.mode === 'history') await renderHistory(subbar, count, toolbar, filterBar, tableHost);
+  else await renderOps(subbar, count, toolbar, filterBar, tableHost);
 }
 
 const skeleton = (): HTMLElement => el('div', {}, Array.from({ length: 6 }, () => el('div', { class: 'qam-skeleton' })));
@@ -268,6 +275,7 @@ async function buildAnnot(entity: QamEntity): Promise<AnnotApi | undefined> {
     save: async (id, field, v) => {
       await setAnnotation(backend, entity, id, field, v);
       const rec = (map[id] ??= {}); if (v) rec[field] = v; else delete rec[field];
+      recordOp(`${field}編集`, `${id}: ${v || '(クリア)'}`, entity);
     },
   };
 }
@@ -338,6 +346,7 @@ async function commentApi(entity: QamEntity): Promise<CommentApi> {
     save: async (e, id, ts, text) => {
       if (ts) await editComment(backend, e, id, ts, text);
       else await addComment(backend, { ts: new Date().toISOString(), entity: e, id, author: localStorage.getItem(LS.author) || '', text });
+      recordOp(ts ? 'メモ編集' : 'メモ追加', `${id}`, e);
       return (await readComments(backend, e, id)).sort((a, b) => a.ts.localeCompare(b.ts));
     },
   };
@@ -363,7 +372,7 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
   const delBtn = el('button', { class: 'btn btn--sm btn--danger', title: '表示中の取込日時のスナップショットを削除' }, ['この取込を削除']);
   delBtn.addEventListener('click', async () => {
     if (!(await confirmModal('スナップショット削除', `${state.entity} の ${fmtStamp(stamp)} のスナップショット（とこの取込の履歴）を削除します。よろしいですか？`))) return;
-    try { await deleteSnapshot(backend, state.entity, stamp); state.asof = ''; toast('削除しました', 'ok'); refresh(); }
+    try { await deleteSnapshot(backend, state.entity, stamp); recordOp('スナップショット削除', fmtStamp(stamp), state.entity); state.asof = ''; toast('削除しました', 'ok'); refresh(); }
     catch (e) { toast('削除に失敗: ' + (e as Error).message, 'error'); }
   });
   subbar.append(delBtn);
@@ -453,6 +462,33 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
+// 操作履歴ビュー: 登録/削除/変更などの操作を 作業者・日時つきで一覧表示（全種別共通）。
+async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
+  clear(leftCalHost);
+  const entLabel = (k?: QamEntity): string => (k ? ENTITIES.find((e) => e.key === k)?.label ?? k : '');
+  const rows = (await readOps(backend)).reverse() // 新しい順
+    .filter((o) => matchQ([o.author, o.action, o.entity, o.detail, o.ts]));
+  count.textContent = `${rows.length} 件`;
+  const cols: Column[] = [
+    { id: 'ts', label: '操作日時', mono: true, render: (o: QamOp) => esc(o.ts.slice(0, 19).replace('T', ' ')), sortVal: (o: QamOp) => o.ts },
+    { id: 'author', label: '作業者', render: (o: QamOp) => esc(o.author || '(未設定)') },
+    { id: 'action', label: '操作', render: (o: QamOp) => esc(o.action) },
+    { id: 'entity', label: '対象', render: (o: QamOp) => esc(entLabel(o.entity)) },
+    { id: 'detail', label: '詳細', render: (o: QamOp) => esc(o.detail) },
+  ];
+  const exportRef: { fn?: () => ExportMatrix } = {};
+  const filterRef = {} as FilterRef;
+  const columnRef: { open?: (a: HTMLElement) => void } = {};
+  clear(host);
+  host.append(renderTable({
+    viewId: 'ops', columns: cols, rows, getKey: (o: QamOp) => `${o.ts}|${o.action}|${o.detail}|${o.author}`,
+    selected: state.selected, exportRef, filterRef, columnRef,
+  }));
+  addFilterUI(toolbar, filterBar, filterRef);
+  addExportButtons(toolbar, '操作履歴', exportRef, columnRef);
+  host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
+}
+
 const emptyState = (t: string, d: string): HTMLElement => el('div', { class: 'qam-empty' }, [el('div', { class: 'qam-empty-title' }, [t]), el('div', {}, [d])]);
 
 function bulkComment(keys: string[]): HTMLElement[] {
@@ -466,7 +502,7 @@ function histBulk(keys: string[]): HTMLElement[] {
   const b = el('button', { class: 'btn btn--sm btn--danger', html: `${icon('x', 14)}<span>選択した履歴を削除</span>` });
   b.addEventListener('click', async () => {
     if (!(await confirmModal('変更履歴の削除', `選択した ${keys.length} 件の変更履歴を削除します。よろしいですか？（元に戻せません）`, '削除'))) return;
-    try { const n = await removeHistoryEvents(backend, state.entity, keys); state.selected.clear(); toast(`変更履歴を ${n} 件削除しました`, 'ok'); refresh(); }
+    try { const n = await removeHistoryEvents(backend, state.entity, keys); recordOp('変更履歴削除', `${n}件`, state.entity); state.selected.clear(); toast(`変更履歴を ${n} 件削除しました`, 'ok'); refresh(); }
     catch (e) { toast('削除に失敗: ' + (e as Error).message, 'error'); }
   });
   return [b];
@@ -495,6 +531,7 @@ async function openThread(entity: QamEntity, id: string): Promise<void> {
     try {
       const c: QamComment = { ts: new Date().toISOString(), entity, id, author: localStorage.getItem(LS.author) || '', text };
       await addComment(backend, c); ta.value = ''; await reload(); toast('コメントを追加しました', 'ok');
+      recordOp('メモ追加', `${id}`, entity);
     } catch (e) { toast('コメントの追加に失敗しました: ' + (e as Error).message, 'error'); }
     finally { send.removeAttribute('disabled'); }
   }
@@ -535,6 +572,7 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   }
   const sum = res.baseline ? '初回取込・基準確立' : `+${res.added}/~${res.modified}/-${res.deleted}`;
   toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
+  recordOp('取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
 }
 
 function confirmModal(title: string, message: string, primaryLabel = '取り込む'): Promise<boolean> {
@@ -575,7 +613,8 @@ function openIngest(): void {
       go.setAttribute('disabled', 'true'); sel.setAttribute('disabled', 'true');
       try {
         const cfg = await getConfig();
-        const creds = { base: cfg.qualysBase, user: cfg.qualysUser, pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+        // アカウント・パスワードは個人設定(ブラウザ保持)。旧 env 設定があれば後方互換でフォールバック。
+        const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
         if (!creds.base || !creds.user) { setProg('設定で Qualys 接続先とアカウントを入力してください', false); toast('設定が未入力です', 'error'); return; }
         const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
         // ダウンロード前の重複チェック: 対象種別に本日分の取込が既にあれば、ダウンロード前に1回だけ確認する。
@@ -657,6 +696,7 @@ function openIngest(): void {
         const n = await importHistory(backend, entity, events);
         setProg(`完了しました（${n.toLocaleString()} 件追加 / ${(events.length - n).toLocaleString()} 件は重複でスキップ）`, false);
         toast(`変更履歴を ${n.toLocaleString()} 件取り込みました`, 'ok');
+        recordOp('変更履歴CSV取込', `${n.toLocaleString()}件追加`, entity);
         refresh();
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
       finally { go.removeAttribute('disabled'); }
@@ -679,7 +719,8 @@ async function openSettings(): Promise<void> {
     el('div', { class: 'qam-field' }, [el('label', {}, [label]), input, ...(hint ? [el('div', { class: 'qam-count' }, [hint])] : [])]);
   // 入力は一度だけ生成（ペイン切替で値は保持）。
   const base = el('input', { class: 'in', value: cfg.qualysBase || '', placeholder: 'https://YOUR-POD.qualysapi.example.com' }) as HTMLInputElement;
-  const user = el('input', { class: 'in', value: cfg.qualysUser || '' }) as HTMLInputElement;
+  // アカウントは個人設定（ブラウザ保持）。旧 env(cfg.qualysUser) があれば移行用に初期表示。
+  const user = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '' }) as HTMLInputElement;
   const proxy = el('input', { class: 'in', value: cfg.proxy || '', placeholder: 'http://proxy:8080' }) as HTMLInputElement;
   const ret = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.retentionDays || 90) }) as HTMLInputElement;
   const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
@@ -691,18 +732,18 @@ async function openSettings(): Promise<void> {
   // 開発者: 登録情報のリセット（接続設定・認証・記入者名を初期化。資産データ/履歴は消さない）。
   const resetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['登録情報をリセット']);
   resetBtn.addEventListener('click', async () => {
-    if (!(await confirmModal('登録情報のリセット', '接続先POD・アカウント・パスワード・プロキシ・記入者名を初期化します。取り込んだ資産データ・変更履歴・メモは消えません。よろしいですか？', 'リセット'))) return;
+    if (!(await confirmModal('登録情報のリセット', '接続先POD・Qualysアカウント・パスワード・プロキシ・記入者名を初期化します。取り込んだ資産データ・変更履歴・メモは消えません。よろしいですか？', 'リセット'))) return;
     try {
-      await setConfig({ qualysBase: '', qualysUser: '', proxy: '', retentionDays: 90 });
-      localStorage.removeItem(LS.qualysPass); localStorage.removeItem(LS.author);
+      await setConfig({ qualysBase: '', proxy: '', retentionDays: 90 });
+      localStorage.removeItem(LS.qualysUser); localStorage.removeItem(LS.qualysPass); localStorage.removeItem(LS.author);
       base.value = ''; user.value = ''; proxy.value = ''; ret.value = '90'; pass.value = ''; author.value = '';
       toast('登録情報をリセットしました', 'ok');
     } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
   });
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
-    { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモの作成者）', author), field('テーマ', theme), field('パスワード（このブラウザに保存）', pass)] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('アカウント', user), field('プロキシ URL', proxy), field('保存期間（日）', ret)] },
+    { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret)] },
     { id: 'dev', label: '開発者', pane: () => [field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'), field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [String(BUILD)]))] },
   ];
   const nav = el('div', { class: 'qam-settings-nav' });
@@ -719,7 +760,8 @@ async function openSettings(): Promise<void> {
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
-        await setConfig({ qualysBase: base.value.trim(), qualysUser: user.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90 });
+        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90 });
+        if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
         if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
         if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
@@ -757,8 +799,28 @@ function showRelayDownModal(): void {
   });
 }
 
+// 初回起動: 記入者名が未設定なら設定モーダルを出す（操作履歴・メモの作業者に使う）。
+function ensureAuthor(): Promise<void> {
+  if (localStorage.getItem(LS.author)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const inp = el('input', { class: 'in', placeholder: '例: 山田' }) as HTMLInputElement;
+    onEnter(inp, () => { const v = inp.value.trim(); if (v) { localStorage.setItem(LS.author, v); } });
+    const body = el('div', {}, [el('div', { class: 'qam-field' }, [
+      el('label', {}, ['記入者名']),
+      inp,
+      el('div', { class: 'qam-count' }, ['操作履歴やメモに「作業者」として記録されます。設定でいつでも変更できます。']),
+    ])]);
+    openModal({
+      title: '記入者名の設定', body, primaryLabel: '保存',
+      onPrimary: () => { const v = inp.value.trim(); if (!v) { toast('記入者名を入力してください', 'error'); return false; } localStorage.setItem(LS.author, v); resolve(); return true; },
+      onClose: () => resolve(),
+    });
+  });
+}
+
 async function start(): Promise<void> {
-  if (await checkRelay()) { refresh(); return; }
-  showRelayDownModal();
+  if (!(await checkRelay())) { showRelayDownModal(); return; }
+  await ensureAuthor();
+  refresh();
 }
 start();

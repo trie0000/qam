@@ -8,8 +8,9 @@ export const RELAY = location.origin; // relay が配信しているので同一
 
 export const LS = {
   theme: 'qam.theme',
-  qualysPass: 'qam.qualys.pass', // パスワードは env でなくブラウザに保持
-  author: 'qam.author',          // メモ(コメント)の記入者名
+  qualysUser: 'qam.qualys.user', // Qualys アカウント（個人設定・ブラウザ保持）
+  qualysPass: 'qam.qualys.pass', // Qualys パスワード（env でなくブラウザに保持）
+  author: 'qam.author',          // メモ(コメント)/操作履歴の記入者名
   table: (view: string) => `qam.table.${view}`,
 };
 

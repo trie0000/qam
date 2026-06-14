@@ -94,6 +94,12 @@ export async function deleteSnapshot(b: FileBackend, e: QamEntity, stamp: string
   await b.remove(`raw/${dateOfStamp(stamp)}/${e}-${stamp}.xml`); // 無ければ no-op
 }
 
+// --- 操作履歴（監査ログ）: 登録/削除/変更などの操作を 作業者・日時つきで記録 ---
+export interface QamOp { ts: string; author: string; action: string; entity?: QamEntity; detail: string }
+const OPS = 'ops.jsonl';
+export const logOp = (b: FileBackend, op: QamOp): Promise<void> => b.write(OPS, JSON.stringify(op) + '\n', true);
+export const readOps = (b: FileBackend): Promise<QamOp[]> => readJsonl<QamOp>(b, OPS);
+
 // --- 手動メタ情報（注釈）: API で取れない項目を一覧から手入力する（Function/Location 等） ---
 // entity ごとに 1 ファイル。{ [id]: { [field]: value } }。Qualys スナップショット/差分とは独立。
 const annotPath = (e: QamEntity) => `annotations/${e}.json`;

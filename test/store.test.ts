@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
-  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, removeHistoryEvents,
+  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps,
 } from '../src/store';
 
 class MemBackend implements FileBackend {
@@ -129,6 +129,15 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     const c = await readComments(b, 'host', '1');
     expect(c.length).toBe(1);
     expect(c[0].text).toBe('対応済み');
+  });
+
+  it('操作履歴(ops)を追記・取得', async () => {
+    await logOp(b, { ts: '2026-06-14T09:00:00Z', author: '山田', action: '取込', entity: 'group', detail: '100件' });
+    await logOp(b, { ts: '2026-06-14T10:00:00Z', author: '佐藤', action: 'スナップショット削除', entity: 'host', detail: 's1' });
+    const ops = await readOps(b);
+    expect(ops.length).toBe(2);
+    expect(ops[0].author).toBe('山田');
+    expect(ops[1].action).toBe('スナップショット削除');
   });
 
   it('手入力メタ(annotations)を保存・取得・削除（空で消える）', async () => {
