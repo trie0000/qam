@@ -77,6 +77,16 @@ async function removeHistoryForStamp(b: FileBackend, e: QamEntity, stamp: string
   if (kept.length !== all.length) await b.write(histPath(e), kept.map((x) => JSON.stringify(x)).join('\n') + (kept.length ? '\n' : ''));
 }
 
+// 変更履歴の手動削除: 指定 eid のイベントを history から除去。削除件数を返す。
+export async function removeHistoryEvents(b: FileBackend, e: QamEntity, eids: string[]): Promise<number> {
+  const set = new Set(eids);
+  const all = await readJsonl<QamEvent>(b, histPath(e));
+  const kept = all.filter((ev) => !set.has(ev.eid));
+  const removed = all.length - kept.length;
+  if (removed) await b.write(histPath(e), kept.map((x) => JSON.stringify(x)).join('\n') + (kept.length ? '\n' : ''));
+  return removed;
+}
+
 // スナップショット手動削除: 当該 stamp の snapshot・履歴・raw を消す（前後の点は残る）。
 export async function deleteSnapshot(b: FileBackend, e: QamEntity, stamp: string): Promise<void> {
   await b.remove(snapPath(e, stamp));

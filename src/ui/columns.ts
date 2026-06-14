@@ -165,7 +165,7 @@ export function historyColumns(comments: CommentApi): Column[] {
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   return [
-    { id: 'ts', label: '取込日時', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
+    { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
     { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => e.change },
     { id: 'id', label: 'ID', mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
     { id: 'name', label: '名前', render: (e: QamEvent) => esc(e.name) },

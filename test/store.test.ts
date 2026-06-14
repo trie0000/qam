@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
-  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation,
+  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, removeHistoryEvents,
 } from '../src/store';
 
 class MemBackend implements FileBackend {
@@ -110,6 +110,18 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     await deleteSnapshot(b, 'group', S2);
     expect(await getSnapshotStamps(b, 'group')).toEqual([S1]);
     expect((await readHistory(b, 'group')).length).toBe(0); // S2 の 4 件削除
+  });
+
+  it('removeHistoryEvents は指定 eid の履歴のみ削除', async () => {
+    await ingestSnapshot(b, parseQualysXml(GROUP1), { ...OPTS, stamp: S1 });
+    await ingestSnapshot(b, parseQualysXml(GROUP2), { ...OPTS, stamp: S2 });
+    const before = await readHistory(b, 'group');
+    expect(before.length).toBeGreaterThan(1);
+    const n = await removeHistoryEvents(b, 'group', [before[0].eid]);
+    expect(n).toBe(1);
+    const after = await readHistory(b, 'group');
+    expect(after.length).toBe(before.length - 1);
+    expect(after.find((e) => e.eid === before[0].eid)).toBeUndefined();
   });
 
   it('コメントは資産単位', async () => {

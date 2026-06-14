@@ -14,7 +14,7 @@ import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseGroupHistoryCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
 
@@ -422,6 +422,7 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   host.append(renderTable({
     viewId: `history.${state.entity}`, columns: historyColumns(comments),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef,
+    bulkActions: histBulk,
   }));
   addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '変更履歴', exportRef);
@@ -434,6 +435,17 @@ function bulkComment(keys: string[]): HTMLElement[] {
   const b = el('button', { class: 'btn btn--sm', html: `${icon('message', 14)}<span>選択にコメント</span>` });
   b.addEventListener('click', () => openThread(state.entity, keys[0]));
   return keys.length === 1 ? [b] : [];
+}
+
+// 変更履歴の手動削除（選択した eid を history から除去）。
+function histBulk(keys: string[]): HTMLElement[] {
+  const b = el('button', { class: 'btn btn--sm btn--danger', html: `${icon('x', 14)}<span>選択した履歴を削除</span>` });
+  b.addEventListener('click', async () => {
+    if (!(await confirmModal('変更履歴の削除', `選択した ${keys.length} 件の変更履歴を削除します。よろしいですか？（元に戻せません）`, '削除'))) return;
+    try { const n = await removeHistoryEvents(backend, state.entity, keys); state.selected.clear(); toast(`変更履歴を ${n} 件削除しました`, 'ok'); refresh(); }
+    catch (e) { toast('削除に失敗: ' + (e as Error).message, 'error'); }
+  });
+  return [b];
 }
 
 // ---- comment thread ----
@@ -501,11 +513,11 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
 }
 
-function confirmModal(title: string, message: string): Promise<boolean> {
+function confirmModal(title: string, message: string, primaryLabel = '取り込む'): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
     openModal({
-      title, body: el('div', { style: 'user-select:text' }, [message]), primaryLabel: '取り込む',
+      title, body: el('div', { style: 'user-select:text' }, [message]), primaryLabel,
       onPrimary: () => { done = true; resolve(true); return true; },
       onClose: () => { if (!done) resolve(false); },
     });
