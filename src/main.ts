@@ -12,7 +12,7 @@ import { assetColumns, historyColumns, settenId, type CommentApi, type AnnotApi 
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
-import { parseHistoryCsv, HIST_HEADER_HINT } from './ingest/history-csv';
+import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
   getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, resetData, type QamOp,
 } from './store';
@@ -284,6 +284,39 @@ async function buildAnnot(entity: QamEntity): Promise<AnnotApi | undefined> {
       recordOp(`${field}編集`, `${id}: ${v || '(クリア)'}`, entity);
     },
   };
+}
+
+// AssetGroup の手動値CSV取込: 接続点IDをキーに、一覧の列名で値列をマッチして注釈を上書き。
+// 取込対象は API で取れない手動項目（部門/接続名称/拠点名称/コメント）。
+const ASSET_VALUE_FIELDS: [string, RegExp][] = [
+  ['DIVISION', /部門|division/i],
+  ['FUNCTION', /function|接続名称|機能/i],
+  ['LOCATION', /location|拠点/i],
+  ['COMMENTS', /comments/i],
+];
+async function importAssetValues(text: string): Promise<{ updated: number; unmatched: number; fields: string[] }> {
+  const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ''));
+  if (!rows.length) throw new Error('CSV が空です');
+  const header = rows[0].map((h) => h.trim());
+  const idx = (re: RegExp): number => header.findIndex((h) => re.test(h));
+  const sidCol = idx(/接続点ID/i);
+  if (sidCol < 0) throw new Error('ヘッダに「接続点ID」が必要です');
+  const fieldCols = ASSET_VALUE_FIELDS.map(([f, re]) => [f, idx(re)] as [string, number]).filter(([, i]) => i >= 0);
+  if (!fieldCols.length) throw new Error('取り込める値列（部門/接続名称/拠点名称/コメント）がありません');
+  // 接続点ID → group ID（最新スナップショットのタイトルから算出）
+  const gStamp = resolveAsof(await getSnapshotStamps(backend, 'group'));
+  const snap = gStamp ? await readSnapshot(backend, 'group', gStamp) : null;
+  const sidToId: Record<string, string> = {};
+  for (const g of Object.values(snap?.records ?? {}) as QamRecord[]) { const sid = settenId(g.name); if (sid) sidToId[sid] = g.key; }
+  let updated = 0; let unmatched = 0;
+  for (const r of rows.slice(1)) {
+    const get = (i: number): string => (i >= 0 ? (r[i] ?? '').trim() : '');
+    const sid = get(sidCol); if (!sid) continue;
+    const gid = sidToId[sid]; if (!gid) { unmatched++; continue; }
+    for (const [field, i] of fieldCols) await setAnnotation(backend, 'group', gid, field, get(i)); // 上書き（空はクリア）
+    updated++;
+  }
+  return { updated, unmatched, fields: fieldCols.map(([f]) => f) };
 }
 
 // host/domain が所属する AssetGroup の接続点IDを逆引き（group の HOST_IDS / DOMAIN_LIST から）。
@@ -623,8 +656,9 @@ function openIngest(): void {
   const apiBtn = el('button', { class: 'btn btn--sm' }, ['API ダウンロード']);
   const xmlBtn = el('button', { class: 'btn btn--sm' }, ['XML アップロード']);
   const histBtn = el('button', { class: 'btn btn--sm' }, ['変更履歴CSV']);
+  const valBtn = el('button', { class: 'btn btn--sm' }, ['値CSV(AssetGroup)']);
   const prog = el('div', { class: 'qam-progress', style: 'display:none' });
-  seg.append(apiBtn, xmlBtn, histBtn); body.append(seg, panel, prog);
+  seg.append(apiBtn, xmlBtn, histBtn, valBtn); body.append(seg, panel, prog);
 
   const labelOf = (k: QamEntity): string => ENTITIES.find((e) => e.key === k)?.label ?? k;
   function setProg(msg: string, busy: boolean): void {
@@ -633,7 +667,7 @@ function openIngest(): void {
   }
 
   function showApi(): void {
-    apiBtn.className = 'btn btn--sm btn--primary'; xmlBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm';
+    apiBtn.className = 'btn btn--sm btn--primary'; xmlBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm'; valBtn.className = 'btn btn--sm';
     clear(panel);
     const sel = el('select', { class: 'in' }) as HTMLSelectElement;
     sel.append(el('option', { value: 'all' }, ['すべて']));
@@ -681,7 +715,7 @@ function openIngest(): void {
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['取得対象']), sel]), go);
   }
   function showXml(): void {
-    xmlBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm';
+    xmlBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm'; valBtn.className = 'btn btn--sm';
     clear(panel);
     const file = el('input', { type: 'file', accept: '.xml', class: 'in' }) as HTMLInputElement;
     const go = el('button', { class: 'btn btn--primary', html: `${icon('upload', 16)}<span>取込</span>` });
@@ -703,7 +737,7 @@ function openIngest(): void {
   }
   // 既存の変更履歴を CSV で取り込む（現在は AssetGroup のみ。種別ごとに個別指定）。
   function showHist(): void {
-    histBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; xmlBtn.className = 'btn btn--sm';
+    histBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; xmlBtn.className = 'btn btn--sm'; valBtn.className = 'btn btn--sm';
     clear(panel);
     const sel = el('select', { class: 'in' }) as HTMLSelectElement;
     ENTITIES.forEach((e) => sel.append(el('option', { value: e.key, selected: e.key === 'group' }, [e.label])));
@@ -731,7 +765,29 @@ function openIngest(): void {
     sel.addEventListener('change', setHint); setHint();
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['対象（種別ごとに個別取込）']), sel]), el('div', { class: 'qam-field' }, [el('label', {}, ['変更履歴 CSV']), file]), hint, go);
   }
-  apiBtn.addEventListener('click', showApi); xmlBtn.addEventListener('click', showXml); histBtn.addEventListener('click', showHist);
+  // AssetGroup の手動値を CSV で一括取込（接続点IDをキーに上書き。列名は一覧の列名と同じ）。
+  function showAssetValues(): void {
+    valBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; xmlBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm';
+    clear(panel);
+    const file = el('input', { type: 'file', accept: '.csv', class: 'in' }) as HTMLInputElement;
+    const go = el('button', { class: 'btn btn--primary', html: `${icon('inbox', 16)}<span>値を取込（上書き）</span>` });
+    go.addEventListener('click', async () => {
+      if (!file.files?.length) { toast('CSV ファイルを選択してください', 'error'); return; }
+      go.setAttribute('disabled', 'true');
+      try {
+        setProg('解析・取込中…', true);
+        const res = await importAssetValues(await file.files[0].text());
+        setProg(`完了しました（${res.updated.toLocaleString()} 件更新 / 未マッチ ${res.unmatched.toLocaleString()} 件）`, false);
+        toast(`AssetGroup の値を ${res.updated.toLocaleString()} 件取り込みました`, 'ok');
+        recordOp('値CSV取込', `${res.updated.toLocaleString()}件更新(${res.fields.join('/')})`, 'group');
+        refresh();
+      } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
+      finally { go.removeAttribute('disabled'); }
+    });
+    const hint = callout('CSVヘッダは一覧の列名と同じに。接続点ID をキーに、部門(Division)/接続名称(Function)/拠点名称(Location)/コメント(Comments) を上書き取込します（空欄はクリア）。先に AssetGroup を取込済みであること（接続点ID→AssetGroupの突き合わせに使用）。');
+    panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['AssetGroup 値 CSV']), file]), hint, go);
+  }
+  apiBtn.addEventListener('click', showApi); xmlBtn.addEventListener('click', showXml); histBtn.addEventListener('click', showHist); valBtn.addEventListener('click', showAssetValues);
   showApi();
   openModal({ title: '取り込み', body });
 }
