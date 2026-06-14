@@ -10,6 +10,7 @@ export const RELAY = location.origin; // relay が配信しているので同一
 
 export const LS = {
   theme: 'qam.theme',
+  fontsize: 'qam.fontsize', // 文字サイズ sm/md/lg（既定 md）
   qualysUser: 'qam.qualys.user', // Qualys アカウント（個人設定・ブラウザ保持）
   qualysPass: 'qam.qualys.pass', // Qualys パスワード（env でなくブラウザに保持）
   author: 'qam.author',          // メモ(コメント)/操作履歴の記入者名

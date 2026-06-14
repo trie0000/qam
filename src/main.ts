@@ -71,6 +71,12 @@ function matchAsset(r: QamRecord, q: string): boolean {
 // ---- shell ----
 const style = document.createElement('style'); style.textContent = css; document.head.append(style);
 document.documentElement.dataset.theme = localStorage.getItem(LS.theme) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+document.documentElement.dataset.fontsize = localStorage.getItem(LS.fontsize) || 'md'; // 文字サイズ 大中小
+
+// 注意書きのコールアウト（小さめ・左アクセント線）。
+function callout(text: string): HTMLElement {
+  return el('div', { class: 'qam-callout' }, [el('span', { html: icon('alert', 13) }), el('span', {}, [text])]);
+}
 
 const root = document.getElementById('qam-root')!;
 const main = el('div', { class: 'qam-main' });
@@ -582,7 +588,7 @@ function promptQualysCreds(curUser: string, curPass: string): Promise<{ user: st
     const u = el('input', { class: 'in', value: curUser, placeholder: 'Qualys アカウント' }) as HTMLInputElement;
     const p = el('input', { class: 'in', type: 'password', value: curPass, placeholder: 'Qualys パスワード' }) as HTMLInputElement;
     const body = el('div', {}, [
-      el('div', { class: 'qam-count', style: 'margin-bottom:var(--s-4)' }, ['Qualys のアカウントとパスワードが未登録です。入力してください（個人設定としてこのブラウザに保存されます）。']),
+      el('div', { style: 'margin-bottom:var(--s-4)' }, [callout('Qualys のアカウントとパスワードが未登録です。入力してください（個人設定としてこのブラウザに保存されます）。')]),
       el('div', { class: 'qam-field' }, [el('label', {}, ['Qualys アカウント']), u]),
       el('div', { class: 'qam-field' }, [el('label', {}, ['Qualys パスワード']), p]),
     ]);
@@ -734,7 +740,7 @@ function openIngest(): void {
 async function openSettings(): Promise<void> {
   const cfg = await getConfig();
   const field = (label: string, input: HTMLElement, hint?: string) =>
-    el('div', { class: 'qam-field' }, [el('label', {}, [label]), input, ...(hint ? [el('div', { class: 'qam-count' }, [hint])] : [])]);
+    el('div', { class: 'qam-field' }, [el('label', {}, [label]), input, ...(hint ? [callout(hint)] : [])]);
   // 入力は一度だけ生成（ペイン切替で値は保持）。
   const base = el('input', { class: 'in', value: cfg.qualysBase || '', placeholder: 'https://YOUR-POD.qualysapi.example.com' }) as HTMLInputElement;
   // アカウントは個人設定（ブラウザ保持）。旧 env(cfg.qualysUser) があれば移行用に初期表示。
@@ -746,6 +752,9 @@ async function openSettings(): Promise<void> {
   const theme = el('select', { class: 'in' }) as HTMLSelectElement;
   ([['', 'システム既定'], ['light', 'ライト'], ['dark', 'ダーク']] as [string, string][])
     .forEach(([v, t]) => theme.append(el('option', { value: v, selected: (localStorage.getItem(LS.theme) || '') === v }, [t])));
+  const fontsize = el('select', { class: 'in' }) as HTMLSelectElement;
+  ([['lg', '大'], ['md', '中'], ['sm', '小']] as [string, string][])
+    .forEach(([v, t]) => fontsize.append(el('option', { value: v, selected: (localStorage.getItem(LS.fontsize) || 'md') === v }, [t])));
 
   // 開発者: データのリセット（資産データ/履歴/メモを選んで全削除）。
   const ckSnap = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -783,7 +792,7 @@ async function openSettings(): Promise<void> {
   });
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
-    { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存')] },
+    { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
     { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret)] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
@@ -811,6 +820,7 @@ async function openSettings(): Promise<void> {
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
         if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
         document.documentElement.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        localStorage.setItem(LS.fontsize, fontsize.value); document.documentElement.dataset.fontsize = fontsize.value;
         toast('設定を保存しました', 'ok'); return true;
       } catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
     },
@@ -831,7 +841,7 @@ function showRelayDownModal(): void {
       el('span', { style: 'color:var(--danger);flex:none', html: icon('alert', 20) }),
       el('div', {}, ['QAM のローカル中継サーバ（127.0.0.1）に接続できません。データの読み書きには中継サーバが必要です。']),
     ]),
-    el('div', { class: 'qam-count', style: 'margin-top:var(--s-4);user-select:text' }, ['qam-start.bat（または qam-start.ps1）を実行して中継サーバを起動してから、「再接続」を押してください。']),
+    el('div', { style: 'margin-top:var(--s-4)' }, [callout('qam-start.bat（または qam-start.ps1）を実行して中継サーバを起動してから、「再接続」を押してください。')]),
   ]);
   openModal({
     title: '中継サーバに接続できません',
@@ -853,7 +863,7 @@ function ensureAuthor(): Promise<void> {
     const body = el('div', {}, [el('div', { class: 'qam-field' }, [
       el('label', {}, ['記入者名']),
       inp,
-      el('div', { class: 'qam-count' }, ['操作履歴やメモに「作業者」として記録されます。設定でいつでも変更できます。']),
+      callout('操作履歴やメモに「作業者」として記録されます。設定でいつでも変更できます。'),
     ])]);
     openModal({
       title: '記入者名の設定', body, primaryLabel: '保存',

@@ -26,6 +26,9 @@
   --paper: #1d1b18; --paper-2: #25231f; --paper-2-strong: #2c2a25; --paper-3: #3a3731;
   --line: rgba(232,228,216,0.14); --line-strong: rgba(232,228,216,0.22);
 }
+/* 文字サイズ（個人設定 大/中/小）。中=既定(:root)。--fs-* を上書きして全体に効かせる。 */
+[data-fontsize="sm"] { --fs-xs: 10px; --fs-sm: 11px; --fs-md: 12px; --fs-base: 13px; --fs-lg: 15px; --fs-xl: 16px; }
+[data-fontsize="lg"] { --fs-xs: 12px; --fs-sm: 14px; --fs-md: 15px; --fs-base: 17px; --fs-lg: 19px; --fs-xl: 22px; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
@@ -234,14 +237,18 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-modal-body { padding: var(--s-7); overflow: auto; }
 .qam-modal-foot { display: flex; justify-content: flex-end; gap: var(--s-3); padding: var(--s-5) var(--s-7); border-top: 1px solid var(--line); }
 /* 設定モーダル: 左ペインに分類、右ペインに項目（Spira風） */
-/* 共通: 項目を切り替えてもモーダルのサイズは変えない（幅固定＋ペイン固定高さ＝中身で伸縮しない） */
-.qam-settings { display: grid; grid-template-columns: 150px 1fr; gap: var(--s-6); width: 560px; max-width: 100%; height: 340px; }
+/* 共通: 項目を切り替えてもモーダルのサイズは変えない。項目数に対し十分大きくしスクロール不要に。 */
+.qam-settings { display: grid; grid-template-columns: 160px 1fr; gap: var(--s-7); width: 620px; max-width: 100%; height: 440px; }
 .qam-settings-nav { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); padding-right: var(--s-4); }
 /* 左ライン（accent）でアクティブ分類を視覚区別。app の qam-nav と同じ Spira 流の規約。 */
 .qam-settings-nav button { text-align: left; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--ink); font: inherit; padding: var(--s-3) var(--s-4); border-radius: var(--r-2); cursor: pointer; }
 .qam-settings-nav button:hover { background: var(--paper-2); }
 .qam-settings-nav button[aria-current="true"] { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
 .qam-settings-pane { display: flex; flex-direction: column; gap: var(--s-5); min-width: 0; height: 100%; overflow-y: auto; }
+/* 注意書き: コールアウト形式（小さめ・左アクセント線・薄背景）。無駄に大きいフォントにしない。 */
+.qam-callout { display: flex; gap: var(--s-2); align-items: flex-start; font-size: var(--fs-xs); line-height: 1.5; color: var(--ink-3);
+  background: var(--paper-2); border-left: 3px solid var(--accent); border-radius: var(--r-1); padding: var(--s-2) var(--s-3); }
+.qam-callout svg { width: 13px; height: 13px; flex: none; color: var(--accent-strong); margin-top: 1px; }
 .qam-field { display: flex; flex-direction: column; gap: var(--s-2); margin-bottom: var(--s-5); }
 .qam-field label { font-size: var(--fs-sm); color: var(--ink-3); }
 .qam-field .in { width: 100%; }
