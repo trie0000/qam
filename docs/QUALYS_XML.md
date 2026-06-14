@@ -37,7 +37,7 @@ DOCTYPE: `ASSET_GROUP_LIST_OUTPUT`。`?show_attributes=ALL` で全項目。
 注: v2 はオーナーが `OWNER_ID`（ユーザー名は v1 `asset_group_list.php` の `OWNER`）。
 `DNS_LIST`/`HOST_IDS` は属性指定時に出る。`DOMAIN` はテキスト=ドメイン名、`netblock` 属性付き。
 
-## Host — `/api/2.0/fo/asset/host/?action=list`
+## Host — `/api/5.0/fo/asset/host/?action=list`（v2 は EOS のため 5.0 を使用）
 
 DOCTYPE: `HOST_LIST_OUTPUT`。`?details=All` で全項目。
 

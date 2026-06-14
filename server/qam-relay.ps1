@@ -117,7 +117,9 @@ function Invoke-QualysFetch { param($Body)
     if (-not $url) {
         switch ($Body.kind) {
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
-            'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
+            # host は v2 が EOS（EOL予告）。v5.0 に切替（同じ action=list/details=All、HOST_LIST_OUTPUT、
+            # WARNING/URL ページング。次ページURLは応答が返すものに従うので自動で 5.0 になる）。
+            'host'   { $url = "$base/api/5.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
             # user 一覧は QPS RBAC: POST /qps/rest/2.0/search/am/user/（末尾スラッシュ必須）。
             # 応答 ServiceResponse(XML)。role/scopeTags を含む。Active ユーザのみ返る。
