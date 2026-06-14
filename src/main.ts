@@ -666,6 +666,7 @@ function openIngest(): void {
           dup.decided = true; dup.proceed = true; // 確認済み → 各 commit では再確認しない
         }
         // 取得は Basic 認証のみ（セッションCookieは環境により 401 で拒否されるため使わない）。
+        setRelayBusy(true); // 取得中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
         for (const k of kinds) {
           setProg(`${labelOf(k)}: ダウンロード中…`, true);
           const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
@@ -675,7 +676,7 @@ function openIngest(): void {
         setProg('完了しました', false);
         refresh();
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
-      finally { go.removeAttribute('disabled'); sel.removeAttribute('disabled'); }
+      finally { setRelayBusy(false); go.removeAttribute('disabled'); sel.removeAttribute('disabled'); }
     });
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['取得対象']), sel]), go);
   }
@@ -835,7 +836,12 @@ async function doShutdown(): Promise<void> {
 }
 
 // 中継サーバが起動していなければ警告モーダルを出す（起動後に「再接続」で続行）。
+let relayModal: { close: () => void } | null = null; // 表示中の中継ダウンモーダル（多重表示防止）
+let relayBusy = 0; // 取込/インポート等の実行中（単一スレッド relay が応答できずポーリング誤検知するのを防ぐ）
+const setRelayBusy = (on: boolean): void => { relayBusy += on ? 1 : -1; };
+
 function showRelayDownModal(): void {
+  if (relayModal) return; // 既に表示中なら何もしない
   const body = el('div', {}, [
     el('div', { style: 'display:flex;gap:var(--s-3);align-items:flex-start' }, [
       el('span', { style: 'color:var(--danger);flex:none', html: icon('alert', 20) }),
@@ -843,15 +849,27 @@ function showRelayDownModal(): void {
     ]),
     el('div', { style: 'margin-top:var(--s-4)' }, [callout('qam-start.bat（または qam-start.ps1）を実行して中継サーバを起動してから、「再接続」を押してください。')]),
   ]);
-  openModal({
+  relayModal = openModal({
     title: '中継サーバに接続できません',
     body,
     primaryLabel: '再接続',
     onPrimary: async () => {
-      if (await checkRelay()) { toast('中継サーバに接続しました', 'ok'); refresh(); return true; }
+      if (await checkRelay()) { relayModal = null; toast('中継サーバに接続しました', 'ok'); refresh(); return true; }
       toast('まだ接続できません。中継サーバの起動を確認してください', 'error'); return false;
     },
+    onClose: () => { relayModal = null; },
   });
+}
+
+// 30秒間隔で relay を死活監視。落ちていたら警告、復帰したら自動でモーダルを閉じる。
+// 取込/インポート中(relayBusy>0)は単一スレッド relay が応答できず誤検知するのでスキップ。
+function startRelayPolling(): void {
+  setInterval(async () => {
+    if (relayBusy > 0) return;
+    const ok = await checkRelay();
+    if (!ok) { showRelayDownModal(); return; }
+    if (relayModal) { relayModal.close(); relayModal = null; toast('中継サーバに再接続しました', 'ok'); refresh(); }
+  }, 30000);
 }
 
 // 初回起動: 記入者名が未設定なら設定モーダルを出す（操作履歴・メモの作業者に使う）。
@@ -874,6 +892,7 @@ function ensureAuthor(): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  startRelayPolling(); // 30秒間隔で中継サーバを死活監視（落ちたら警告・復帰で自動クローズ）
   if (!(await checkRelay())) { showRelayDownModal(); return; }
   await ensureAuthor();
   refresh();
