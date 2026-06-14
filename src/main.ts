@@ -14,7 +14,7 @@ import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamRecord, QamRecords } from './types';
@@ -333,7 +333,7 @@ const ASSET_VALUE_FIELDS: [string, RegExp][] = [
   ['LOCATION', /location|拠点/i],
   ['COMMENTS', /comments/i],
 ];
-async function importAssetValues(text: string, onProgress?: (done: number, total: number) => void): Promise<{ updated: number; unmatched: number; fields: string[] }> {
+async function importAssetValues(text: string, onProgress?: (done: number, total: number, phase: 'scan' | 'save') => void): Promise<{ updated: number; unmatched: number; fields: string[] }> {
   const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ''));
   if (!rows.length) throw new Error('CSV が空です');
   const header = rows[0].map((h) => h.trim());
@@ -347,19 +347,26 @@ async function importAssetValues(text: string, onProgress?: (done: number, total
   const snap = gStamp ? await readSnapshot(backend, 'group', gStamp) : null;
   const sidToId: Record<string, string> = {};
   for (const g of Object.values(snap?.records ?? {}) as QamRecord[]) { const sid = settenId(g.name); if (sid) sidToId[sid] = g.key; }
+  // 全行をメモリ上で集計し、注釈はまとめて1回だけ書き込む（1項目ごとの read+write を避ける）。
   const data = rows.slice(1);
+  const total = data.length;
+  const updates: { id: string; field: string; value: string }[] = [];
   let updated = 0; let unmatched = 0;
-  for (let i = 0; i < data.length; i++) {
+  for (let i = 0; i < total; i++) {
     const r = data[i];
     const get = (j: number): string => (j >= 0 ? (r[j] ?? '').trim() : '');
     const sid = get(sidCol);
     if (sid) {
       const gid = sidToId[sid];
       if (!gid) unmatched++;
-      else { for (const [field, j] of fieldCols) await setAnnotation(backend, 'group', gid, field, get(j)); updated++; } // 上書き（空はクリア）
+      else { for (const [field, j] of fieldCols) updates.push({ id: gid, field, value: get(j) }); updated++; } // 上書き（空はクリア）
     }
-    onProgress?.(i + 1, data.length);
+    // 集計はメモリ操作で高速。500行ごとに進捗通知＋イベントループへ譲ってUIを更新。
+    if (i % 500 === 0) { onProgress?.(i, total, 'scan'); await new Promise((res) => setTimeout(res)); }
   }
+  onProgress?.(total, total, 'scan');
+  onProgress?.(updated, updated, 'save');
+  await setAnnotationsBulk(backend, 'group', updates); // ← 1回だけ書き込み
   return { updated, unmatched, fields: fieldCols.map(([f]) => f) };
 }
 
@@ -862,7 +869,8 @@ function openIngest(): void {
       setRelayBusy(true); // 取込中は死活ポーリングを止める（1行ごとに書き込むため）
       try {
         setProg('CSV を解析中…', true);
-        const res = await importAssetValues(await file.files[0].text(), (done, total) => setProg(`値を取込中… ${done.toLocaleString()} / ${total.toLocaleString()} 件`, true));
+        const res = await importAssetValues(await file.files[0].text(), (done, total, phase) =>
+          setProg(phase === 'save' ? `${total.toLocaleString()} 件を保存中…` : `CSV を照合中… ${done.toLocaleString()} / ${total.toLocaleString()} 行`, true));
         setProg(`完了しました（${res.updated.toLocaleString()} 件更新 / 未マッチ ${res.unmatched.toLocaleString()} 件）`, false);
         toast(`AssetGroup の値を ${res.updated.toLocaleString()} 件取り込みました`, 'ok');
         recordOp('値CSV取込', `${res.updated.toLocaleString()}件更新(${res.fields.join('/')})`, 'group');

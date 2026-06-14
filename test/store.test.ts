@@ -2,14 +2,16 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
-  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, importHistory,
+  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, importHistory,
 } from '../src/store';
 import type { QamEvent } from '../src/types';
 
 class MemBackend implements FileBackend {
   files = new Map<string, string>();
+  writes = 0;
   async read(p: string) { return this.files.has(p) ? this.files.get(p)! : null; }
   async write(p: string, c: string, append?: boolean) {
+    this.writes++;
     this.files.set(p, append && this.files.has(p) ? this.files.get(p)! + c : c);
   }
   async list(dir: string) {
@@ -176,5 +178,20 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     expect(n2).toBe(0);
     expect(prog2).toEqual([]);
     expect((await readHistory(b, 'host')).length).toBe(2500);
+  });
+
+  it('setAnnotationsBulk は多数の更新でも書き込みは1回だけ', async () => {
+    const updates = Array.from({ length: 1000 }, (_, i) => ({ id: `g${i % 250}`, field: ['DIVISION', 'FUNCTION', 'LOCATION', 'COMMENTS'][i % 4], value: `v${i}` }));
+    b.writes = 0;
+    await setAnnotationsBulk(b, 'group', updates);
+    expect(b.writes).toBe(1); // ← 1項目ごとではなく一括書き込み
+    const map = await readAnnotations(b, 'group');
+    expect(Object.keys(map).length).toBe(250);
+    // g0 への更新は i=0,250,500,750（field=DIVISION,LOCATION,DIVISION,LOCATION）→ 同id同fieldは後勝ち
+    expect(map['g0'].DIVISION).toBe('v500');
+    expect(map['g0'].LOCATION).toBe('v750');
+    // 空文字はクリア
+    await setAnnotationsBulk(b, 'group', [{ id: 'g0', field: 'DIVISION', value: '' }]);
+    expect((await readAnnotations(b, 'group'))['g0'].DIVISION).toBeUndefined();
   });
 });

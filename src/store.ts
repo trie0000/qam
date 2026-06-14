@@ -139,9 +139,22 @@ export async function readAnnotations(b: FileBackend, e: QamEntity): Promise<Rec
 }
 export async function setAnnotation(b: FileBackend, e: QamEntity, id: string, field: string, value: string): Promise<void> {
   const all = await readAnnotations(b, e);
+  applyAnnot(all, id, field, value);
+  await b.write(annotPath(e), JSON.stringify(all));
+}
+
+function applyAnnot(all: Record<string, Record<string, string>>, id: string, field: string, value: string): void {
   const rec = all[id] ?? {};
   if (value) rec[field] = value; else delete rec[field];
   if (Object.keys(rec).length) all[id] = rec; else delete all[id];
+}
+
+// 複数注釈をまとめて適用（CSV一括取込用）。全体を1回だけ読み、メモリ上で更新して1回だけ書き込む。
+// 1項目ごとに read+write していた従来方式（R行×F項目の往復）の遅さを解消する。
+export async function setAnnotationsBulk(b: FileBackend, e: QamEntity, updates: { id: string; field: string; value: string }[]): Promise<void> {
+  if (!updates.length) return;
+  const all = await readAnnotations(b, e);
+  for (const u of updates) applyAnnot(all, u.id, u.field, u.value);
   await b.write(annotPath(e), JSON.stringify(all));
 }
 
