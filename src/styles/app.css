@@ -71,9 +71,8 @@ body {
 .qam-cal-day { border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-sm);
   aspect-ratio: 1; border-radius: var(--r-2); cursor: pointer; position: relative; padding: 0; }
 .qam-cal-day:hover { background: var(--paper-2); }
-/* 変更があった日: 日付の背景を薄い赤の丸に（ドットより視認しやすく） */
-.qam-cal-marked { font-weight: 700; background: rgba(184,83,74,0.16); border-radius: 50%; }
-.qam-cal-marked:hover { background: rgba(184,83,74,0.28); }
+/* 変更があった日: 日付の背景を薄い赤の小さめの丸に（ドットより視認しやすく・セルより小さく） */
+.qam-cal-marked { font-weight: 700; background: radial-gradient(circle closest-side, rgba(184,83,74,0.18) 0 58%, transparent 60%); }
 .qam-cal-preview { background: var(--accent-soft); border-radius: 0; }
 .qam-cal-range { background: var(--accent-soft); border-radius: 0; }
 .qam-cal-sel { background: var(--accent); color: #fff; border-radius: 50%; }
@@ -81,7 +80,9 @@ body {
 .qam-cal-all { width: 100%; margin-top: var(--s-2); }
 
 /* ---------- main / tabs / subbar / toolbar ---------- */
-.qam-main { display: grid; grid-template-rows: auto auto auto 1fr; min-width: 0; min-height: 0; }
+/* 行: tabs / subbar / toolbar / filterBar / table(1fr)。filterBar を足したので行も5つにする
+   （4行のままだと 1fr を filterBar が占有しテーブルが最下部にはみ出していた）。 */
+.qam-main { display: grid; grid-template-rows: auto auto auto auto 1fr; min-width: 0; min-height: 0; }
 .qam-tabs { display: flex; gap: var(--s-1); padding: var(--s-3) var(--gutter) 0; border-bottom: 1px solid var(--line); }
 .qam-tab { border: 0; background: transparent; color: var(--ink-3); font: inherit; font-size: var(--fs-md);
   padding: var(--s-3) var(--s-5); border-bottom: 2px solid transparent; cursor: pointer; }
