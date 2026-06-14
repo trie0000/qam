@@ -84,12 +84,13 @@ FQDN は `DNS_DATA/FQDN`、無ければ `DNS`。
 </DOMAIN_LIST>
 ```
 
-## User — `/api/2.0/fo/user/`（POST `action=list`）
+## User — `/msp/user_list.php`（MSP/v1・Basic 認証・GET）
 
-DOCTYPE: `USER_LIST_OUTPUT`（RESPONSE/DATETIME ラッパは無い）。XML を返す。
-注: GET（`?action=list`）だと環境により Web 層で 403（HTML の「Forbidden Access」）になることがある
-ため、**POST で `action=list`** を送る。認証は session Cookie か Basic。キーは `USER_ID`
-（MSP 形式など USER_ID が無い場合に備えパーサは `USER_ID || USER_LOGIN` をキーにする）。
+DOCTYPE: `USER_LIST_OUTPUT`。XML を返す（curl で取得確認済み）。
+注: v2 `/api/2.0/fo/user/` は環境により Web 層で 403（HTML）になるため、Basic 認証で使える MSP API を使う。
+リクエストには **`User-Agent` を付与**する（無いと WAF が空応答を返すことがある＝curl では返る差分）。
+`X-Requested-With` は v2 専用なので MSP には付けない。session Cookie では認証されないため Basic 固定。
+キーは `USER_ID`（MSP で無い場合に備えパーサは `USER_ID || USER_LOGIN`）。
 
 ```xml
 <USER_LIST_OUTPUT>
