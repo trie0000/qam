@@ -25,7 +25,8 @@ export interface QamSnapshot {
 //   scalar 変更 → old/new、set 変更 → added/removed、資産自体の追加/削除 → field なし。
 export interface QamEvent {
   eid: string;
-  ts: string; // yyyy-MM-dd
+  ts: string; // 更新日。API差分は XML上の更新時刻(AssetGroup=LAST_UPDATE等)、無ければ取込スタンプ。
+  ingestStamp?: string; // 取込スタンプ（同一取込の上書き判定に使う。ts と別管理）。
   entity: QamEntity;
   id: string;
   name: string;

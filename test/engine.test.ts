@@ -85,6 +85,21 @@ describe('diff', () => {
     expect(add.props && add.props.length).toBeTruthy();
     expect(add.props!.some((p) => p.k === 'name' && p.v)).toBe(true);
   });
+  it('group: 更新日(ts) は LAST_UPDATE 由来、取込スタンプは ingestStamp に保持', () => {
+    const a = `<ASSET_GROUP_LIST_OUTPUT><RESPONSE><ASSET_GROUP_LIST>
+      <ASSET_GROUP><ID>100</ID><TITLE><![CDATA[P]]></TITLE><OWNER_ID>1</OWNER_ID><LAST_UPDATE>2026-06-10T01:00:00Z</LAST_UPDATE></ASSET_GROUP>
+    </ASSET_GROUP_LIST></RESPONSE></ASSET_GROUP_LIST_OUTPUT>`;
+    const b = `<ASSET_GROUP_LIST_OUTPUT><RESPONSE><ASSET_GROUP_LIST>
+      <ASSET_GROUP><ID>100</ID><TITLE><![CDATA[P]]></TITLE><OWNER_ID>2</OWNER_ID><LAST_UPDATE>2026-06-13T05:00:00Z</LAST_UPDATE></ASSET_GROUP>
+    </ASSET_GROUP_LIST></RESPONSE></ASSET_GROUP_LIST_OUTPUT>`;
+    const stamp = '2026-06-14T09-00-00'; // 取込スタンプ（更新日とは別）
+    const ev = compareSnapshots(parseQualysXml(a).records, parseQualysXml(b).records, 'group', stamp);
+    const mod = ev.find((e) => e.field === 'OWNER_ID')!;
+    // 更新日は LAST_UPDATE(06-13) 由来＝取込スタンプ(06-14)ではない。TZ差で時刻はずれても取込日にはならない。
+    expect(mod.ts).not.toBe(stamp);
+    expect(mod.ts.slice(0, 10)).not.toBe('2026-06-14');
+    expect(mod.ingestStamp).toBe(stamp);
+  });
   it('host: OS 変更', () => {
     const ev = compareSnapshots(parseQualysXml(HOST1).records, parseQualysXml(HOST2).records, 'host', '2026-06-13');
     expect(countByChange(ev, 'added')).toBe(1);

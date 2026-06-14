@@ -80,7 +80,8 @@ export async function importHistory(b: FileBackend, e: QamEntity, events: QamEve
 // 同じ取込日時(stamp)の履歴を除去（同 stamp の再取込＝上書き、手動削除に使う）。
 async function removeHistoryForStamp(b: FileBackend, e: QamEntity, stamp: string): Promise<void> {
   const all = await readJsonl<QamEvent>(b, histPath(e));
-  const kept = all.filter((ev) => ev.ts !== stamp);
+  // 取込スタンプで判定（ts は XML更新時刻になり得るため）。旧データは ingestStamp 未設定なので ts にフォールバック。
+  const kept = all.filter((ev) => (ev.ingestStamp ?? ev.ts) !== stamp);
   if (kept.length !== all.length) await b.write(histPath(e), kept.map((x) => JSON.stringify(x)).join('\n') + (kept.length ? '\n' : ''));
 }
 
