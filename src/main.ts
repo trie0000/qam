@@ -756,6 +756,8 @@ async function openSettings(): Promise<void> {
   const fontsize = el('select', { class: 'in' }) as HTMLSelectElement;
   ([['lg', '大'], ['md', '中'], ['sm', '小']] as [string, string][])
     .forEach(([v, t]) => fontsize.append(el('option', { value: v, selected: (localStorage.getItem(LS.fontsize) || 'md') === v }, [t])));
+  // 文字サイズはその場で反映（＋保存）。保存ボタンを待たない。
+  fontsize.addEventListener('change', () => { localStorage.setItem(LS.fontsize, fontsize.value); document.documentElement.dataset.fontsize = fontsize.value; });
 
   // 開発者: データのリセット（資産データ/履歴/メモを選んで全削除）。
   const ckSnap = el('input', { type: 'checkbox' }) as HTMLInputElement;
