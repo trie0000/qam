@@ -71,12 +71,12 @@ body {
 .qam-cal-day { border: 0; background: transparent; color: var(--ink); font: inherit; font-size: var(--fs-sm);
   aspect-ratio: 1; border-radius: var(--r-2); cursor: pointer; position: relative; padding: 0; }
 .qam-cal-day:hover { background: var(--paper-2); }
-.qam-cal-marked { font-weight: 700; }
-.qam-cal-marked::after { content: ''; position: absolute; left: 50%; bottom: 3px; transform: translateX(-50%);
-  width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
-.qam-cal-sel { background: var(--accent); color: #fff; }
-.qam-cal-sel.qam-cal-marked::after { background: #fff; }
+/* 変更があった日: 日付の背景を薄い赤の丸に（ドットより視認しやすく） */
+.qam-cal-marked { font-weight: 700; background: rgba(184,83,74,0.16); border-radius: 50%; }
+.qam-cal-marked:hover { background: rgba(184,83,74,0.28); }
+.qam-cal-preview { background: var(--accent-soft); border-radius: 0; }
 .qam-cal-range { background: var(--accent-soft); border-radius: 0; }
+.qam-cal-sel { background: var(--accent); color: #fff; border-radius: 50%; }
 .qam-cal-hint { font-size: var(--fs-xs); color: var(--ink-4); margin-top: var(--s-3); text-align: center; }
 .qam-cal-all { width: 100%; margin-top: var(--s-2); }
 

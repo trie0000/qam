@@ -388,7 +388,8 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   clear(leftCalHost);
   leftCalHost.append(el('div', { class: 'qam-navhead' }, ['変更カレンダー']));
   leftCalHost.append(renderCalendar({
-    marked: markedDays, from: state.histFrom, to: state.histTo,
+    // カレンダーは日付単位。datetime 入力と共有する state は先頭10桁(YYYY-MM-DD)で渡す。
+    marked: markedDays, from: state.histFrom.slice(0, 10), to: state.histTo.slice(0, 10),
     onRange: (f, t) => { state.histFrom = f; state.histTo = t; state.histStamp = ''; refresh(); },
   }));
 
