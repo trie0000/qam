@@ -161,15 +161,19 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
   ];
 }
 
-export function historyColumns(comments: CommentApi): Column[] {
+// 種別ごとに ID/名前 のラベルを資産一覧と合わせる（汎用の「ID/名前」をやめる）。
+const HIST_ID_LABEL: Record<QamEntity, string> = { group: 'AssetGroup ID', host: 'Host ID', domain: 'ドメイン名', user: 'ユーザID' };
+const HIST_NAME_LABEL: Record<QamEntity, string> = { group: 'タイトル', host: 'FQDN', domain: '名前', user: '氏名' };
+
+export function historyColumns(entity: QamEntity, comments: CommentApi): Column[] {
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   return [
     { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
     { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => e.change },
-    { id: 'id', label: 'ID', mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
-    { id: 'name', label: '名前', render: (e: QamEvent) => esc(e.name) },
-    { id: 'field', label: '項目', render: (e: QamEvent) => esc(e.field ?? ''), sortVal: (e: QamEvent) => e.field ?? '' },
+    { id: 'id', label: HIST_ID_LABEL[entity], mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
+    { id: 'name', label: HIST_NAME_LABEL[entity], render: (e: QamEvent) => esc(e.name) },
+    { id: 'field', label: '変更項目', render: (e: QamEvent) => esc(e.field ?? ''), sortVal: (e: QamEvent) => e.field ?? '' },
     { id: 'old', label: '変更前/削除', render: oldCell, sortable: false },
     { id: 'new', label: '変更後/追加', render: newCell, sortable: false },
     { id: '_c', label: 'メモ', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) },

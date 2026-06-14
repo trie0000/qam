@@ -440,7 +440,7 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
   host.append(renderTable({
-    viewId: `history.${state.entity}`, columns: historyColumns(comments),
+    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
     bulkActions: histBulk,
   }));
