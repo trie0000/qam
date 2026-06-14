@@ -84,13 +84,35 @@ FQDN は `DNS_DATA/FQDN`、無ければ `DNS`。
 </DOMAIN_LIST>
 ```
 
-## User — `/msp/user_list.php`（MSP/v1・Basic 認証・GET）
+## User — `/qps/rest/2.0/search/am/user`（QPS REST・Basic 認証・POST）
 
-DOCTYPE: `USER_LIST_OUTPUT`。XML を返す（curl で取得確認済み）。
-注: v2 `/api/2.0/fo/user/` は環境により Web 層で 403（HTML）になるため、Basic 認証で使える MSP API を使う。
-リクエストには **`User-Agent` を付与**する（無いと WAF が空応答を返すことがある＝curl では返る差分）。
-`X-Requested-With` は v2 専用なので MSP には付けない。session Cookie では認証されないため Basic 固定。
-キーは `USER_ID`（MSP で無い場合に備えパーサは `USER_ID || USER_LOGIN`）。
+v2 `/api/2.0/fo/user/`（403 HTML）や MSP `/msp/user_list.php`（空応答）が環境で使えないため、
+QPS REST(Asset Management) の user 検索を使う。Basic 認証・**POST**・本文は `<ServiceRequest></ServiceRequest>`
+（空＝全件）。応答はルート `ServiceResponse`（XML）:
+
+```xml
+<ServiceResponse>
+ <responseCode>SUCCESS</responseCode>
+ <count>N</count>
+ <data>
+  <User>
+   <id>12345</id><username>acme_ab1</username>
+   <firstName>..</firstName><lastName>..</lastName><title>..</title>
+   <emailAddress>..</emailAddress><company>..</company><active>true</active>
+   <roleList><UserRole><name>Manager</name></UserRole></roleList>
+   <lastLoginDate>..</lastLoginDate>
+  </User>
+ </data>
+</ServiceResponse>
+```
+注: 要素は camelCase（FO/MSP の `USER_LIST_OUTPUT` とは別）。パーサは `ServiceResponse` を検知して
+`<User>` を読む。`responseCode != SUCCESS` は `errorMessage` を出して中断。`User-Agent` を付与（WAF 空応答対策）。
+ページングは `hasMoreRecords`/`lastId`（当面は1ページ）。キーは `id || username`。
+
+## User（参考: 旧 FO/MSP 形式）— `USER_LIST_OUTPUT`
+
+DOCTYPE: `USER_LIST_OUTPUT`。`USER_LOGIN`/`USER_ID`/`CONTACT_INFO` 構造。パーサは互換のため引き続き解釈する
+（キーは `USER_ID || USER_LOGIN`）。
 
 ```xml
 <USER_LIST_OUTPUT>

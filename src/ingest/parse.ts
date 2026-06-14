@@ -139,6 +139,28 @@ function readUser(u: Element): QamRecord {
   return r;
 }
 
+// QPS REST(ServiceResponse) の <User>。FO/MSP の USER_LIST_OUTPUT とは要素名が異なる（camelCase）。
+function readUserQps(u: Element): QamRecord {
+  const r = newRecord();
+  const pick = (...tags: string[]): string => { for (const t of tags) { const v = text(u, t); if (v) return v; } return ''; };
+  const login = pick('username', 'login', 'userLogin');
+  r.key = pick('id', 'userId') || login;
+  r.scalar.USER_LOGIN = login;
+  const fn = pick('firstName', 'firstname'); const ln = pick('lastName', 'lastname');
+  r.scalar.NAME = [ln, fn].filter(Boolean).join(' ');
+  r.scalar.EMAIL = pick('emailAddress', 'email');
+  r.scalar.TITLE = pick('title');
+  r.scalar.COMPANY = pick('company');
+  const active = pick('active');
+  r.scalar.USER_STATUS = active ? (active.toLowerCase() === 'true' ? 'Active' : 'Inactive') : pick('userStatus', 'status');
+  // ロール: roleName/role か、roleList 配下の name を連結。
+  const roleList = u.getElementsByTagName('roleList')[0] ?? null;
+  r.scalar.USER_ROLE = pick('roleName', 'role') || uniq(tagValues(roleList, 'name')).join(', ');
+  r.info.LAST_LOGIN_DATE = pick('lastLoginDate', 'lastLogin', 'lastLoginDatetime');
+  r.name = login || r.scalar.NAME;
+  return r;
+}
+
 export function parseQualysXml(xml: string, entity?: QamEntity): QamSnapshot {
   // 先頭の BOM と空白/改行を除去（XML 宣言 <?xml は必ず先頭。先頭に空白/改行があると
   // それだけで parsererror になる＝Qualys/Windows 由来ファイルでよくある）。
@@ -157,6 +179,23 @@ export function parseQualysXml(xml: string, entity?: QamEntity): QamSnapshot {
   if (rootName === 'SIMPLE_RETURN') {
     const t = doc.getElementsByTagName('TEXT')[0];
     throw new Error('Qualys エラー応答: ' + (t && t.textContent ? t.textContent.trim() : 'エラーが返されました'));
+  }
+  // QPS REST 応答（user は /qps/rest/2.0/search/am/user）。ルートは ServiceResponse。
+  if (rootName === 'ServiceResponse') {
+    const rc = text(root, 'responseCode');
+    if (rc && rc !== 'SUCCESS') {
+      const em = text(root, 'errorMessage');
+      throw new Error('Qualys QPS エラー: ' + rc + (em ? ' ' + em : ''));
+    }
+    if (entity && entity !== 'user') throw new Error(`種別が一致しません（QPS 応答は user のみ対応 / 要求: ${entity}）`);
+    const recs: QamRecords = {};
+    Array.from(doc.getElementsByTagName('User')).forEach((n) => {
+      const r = readUserQps(n);
+      if (!r.key) return;
+      r.hash = hashRecord(r);
+      recs[r.key] = r;
+    });
+    return { entity: 'user', datetime: '', records: recs };
   }
   const detected = entityFromRoot(rootName);
   if (!detected) throw new Error(`未対応の XML ルート要素です: ${rootName}`);

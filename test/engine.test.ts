@@ -121,6 +121,25 @@ describe('user', () => {
     expect(countByChange(ev, 'added')).toBe(1);     // 64
     expect(ev.find((e) => e.field === 'USER_ROLE')!.new).toBe('Reader');
   });
+  it('parse: QPS ServiceResponse の User を読む（id/username/role など）', () => {
+    const qps = `<?xml version="1.0"?><ServiceResponse><responseCode>SUCCESS</responseCode><count>1</count><data>
+      <User><id>12345</id><username>acme_ab1</username>
+       <firstName>Alex</firstName><lastName>Kim</lastName><title>Eng</title>
+       <emailAddress>a@e.x</emailAddress><active>true</active>
+       <roleList><UserRole><name>Manager</name></UserRole></roleList>
+       <lastLoginDate>2026-06-01T00:00:00Z</lastLoginDate></User>
+    </data></ServiceResponse>`;
+    const s = parseQualysXml(qps, 'user');
+    expect(s.entity).toBe('user');
+    expect(s.records['12345'].scalar.USER_LOGIN).toBe('acme_ab1');
+    expect(s.records['12345'].scalar.NAME).toBe('Kim Alex');
+    expect(s.records['12345'].scalar.USER_STATUS).toBe('Active');
+    expect(s.records['12345'].scalar.USER_ROLE).toBe('Manager');
+  });
+  it('parse: QPS responseCode != SUCCESS は中断', () => {
+    const err = `<ServiceResponse><responseCode>INVALID_REQUEST</responseCode><errorMessage>bad</errorMessage></ServiceResponse>`;
+    expect(() => parseQualysXml(err, 'user')).toThrow(/QPS/);
+  });
   it('parse: MSP user_list.php（USER_ID なし）は USER_LOGIN をキーにする', () => {
     const msp = `<USER_LIST_OUTPUT><USER_LIST>
       <USER><USER_LOGIN>acme_zz9</USER_LOGIN>

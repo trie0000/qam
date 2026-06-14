@@ -10,6 +10,11 @@ export const changeTag = (c: string): string => `<span class="qam-tag qam-tag--$
 
 const joined = (a?: string[]): string => esc((a ?? []).join(', '));
 
+// 接続点ID: AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出す。
+// 有効なのは「先頭2文字が英字 + 数字3〜4桁 + 末尾は D または数字」の形のみ（不一致は空）。
+const SETTEN_RE = /^[A-Za-z]{2}\d{3,4}D?$/;
+export const settenId = (title: string): string => { const t = (title || '').split(' ')[0]; return SETTEN_RE.test(t) ? t : ''; };
+
 // その資産の最新コメント本文（無ければ空）。フィルタ・並べ替え・エクスポートの照合に使う。
 const latestText = (api: CommentApi, id: string): string => {
   const l = api.byId[id] ?? [];
@@ -76,6 +81,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi): Column[] 
   const comment: Column = { id: '_c', label: 'コメント', sortable: false, render: (r: QamRecord) => commentCell(entity, r.key, comments), sortVal: (r: QamRecord) => latestText(comments, r.key) };
   if (entity === 'group') return [
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'タイトル', (r) => esc(r.name)),
+    c('SETTEN', '接続点ID', (r) => esc(settenId(r.name)), true),
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
     c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
     c('DIVISION', '部門(Division)', sc('DIVISION')), c('FUNCTION', '機能(Function)', sc('FUNCTION')),

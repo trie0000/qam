@@ -105,7 +105,7 @@ function Get-QamText1 { param([string]$Xml, [string]$Pattern)
 
 # Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
 function Invoke-QualysFetch { param($Body)
-    # user は MSP(v1) /msp/user_list.php を Basic 認証・GET で叩く（curl で取得確認済み）。
+    # user は QPS REST(/qps/rest/2.0/search/am/user) を Basic 認証・POST で叩く。応答は ServiceResponse(XML)。
     # session Cookie では認証されないので、user は常に Basic（noSession 同等）。
     $isUserList = (-not $Body.url) -and ($Body.kind -eq 'user')
     $useSession = $script:QSession -and -not $Body.noSession -and -not $isUserList
@@ -118,8 +118,8 @@ function Invoke-QualysFetch { param($Body)
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
             'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
-            # user 一覧は MSP(v1) API。Basic 認証で XML(USER_LIST_OUTPUT) を返す（curl で確認済み）。
-            'user'   { $url = "$base/msp/user_list.php" }
+            # user 一覧は QPS REST(Asset Management)。Basic 認証・POST(ServiceRequest)で ServiceResponse(XML)。
+            'user'   { $url = "$base/qps/rest/2.0/search/am/user" }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }
@@ -138,9 +138,16 @@ function Invoke-QualysFetch { param($Body)
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
-        Write-Host "[qam] fetch GET $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
-        Add-QamLog "FETCH start GET $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
-        $resp = $client.GetAsync($url).Result
+        $method = if ($isUserList) { 'POST' } else { 'GET' }
+        Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
+        Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
+        if ($isUserList) {
+            # QPS は POST。空の ServiceRequest で全件取得（ページングは hasMoreRecords。当面1ページ）。
+            $reqXml = New-Object System.Net.Http.StringContent('<ServiceRequest></ServiceRequest>', [Text.Encoding]::UTF8, 'application/xml')
+            $resp = $client.PostAsync($url, $reqXml).Result
+        } else {
+            $resp = $client.GetAsync($url).Result
+        }
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
         # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
         $content = $resp.Content
