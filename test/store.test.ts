@@ -2,8 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
-  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps,
+  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, importHistory,
 } from '../src/store';
+import type { QamEvent } from '../src/types';
 
 class MemBackend implements FileBackend {
   files = new Map<string, string>();
@@ -159,5 +160,21 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     const c = await readComments(b, 'host', '1');
     expect(c.map((x) => x.text)).toEqual(['初稿', '二稿(修正)']);
     expect(c[1].author).toBe('t'); // 本文以外は保持
+  });
+
+  it('importHistory は重複を除いて追記し、onProgress で done/total を通知する', async () => {
+    const mk = (n: number): QamEvent[] => Array.from({ length: n }, (_, i) => ({ eid: `host:${i}:2026-06-13:_`, ts: '2026-06-13', entity: 'host', id: String(i), name: `h${i}`, change: 'added' }));
+    const events = mk(2500); // バッチ(1000)を跨ぐ件数
+    const prog: [number, number][] = [];
+    const n = await importHistory(b, 'host', events, (done, total) => prog.push([done, total]));
+    expect(n).toBe(2500);
+    expect(prog[prog.length - 1]).toEqual([2500, 2500]); // 最終通知は全件完了
+    expect(prog.every(([, total]) => total === 2500)).toBe(true);
+    // 同じ events を再取込 → 全件重複でスキップ（追記0・進捗通知なし）
+    const prog2: [number, number][] = [];
+    const n2 = await importHistory(b, 'host', events, (d, t) => prog2.push([d, t]));
+    expect(n2).toBe(0);
+    expect(prog2).toEqual([]);
+    expect((await readHistory(b, 'host')).length).toBe(2500);
   });
 });

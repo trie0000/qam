@@ -333,7 +333,7 @@ const ASSET_VALUE_FIELDS: [string, RegExp][] = [
   ['LOCATION', /location|拠点/i],
   ['COMMENTS', /comments/i],
 ];
-async function importAssetValues(text: string): Promise<{ updated: number; unmatched: number; fields: string[] }> {
+async function importAssetValues(text: string, onProgress?: (done: number, total: number) => void): Promise<{ updated: number; unmatched: number; fields: string[] }> {
   const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ''));
   if (!rows.length) throw new Error('CSV が空です');
   const header = rows[0].map((h) => h.trim());
@@ -347,13 +347,18 @@ async function importAssetValues(text: string): Promise<{ updated: number; unmat
   const snap = gStamp ? await readSnapshot(backend, 'group', gStamp) : null;
   const sidToId: Record<string, string> = {};
   for (const g of Object.values(snap?.records ?? {}) as QamRecord[]) { const sid = settenId(g.name); if (sid) sidToId[sid] = g.key; }
+  const data = rows.slice(1);
   let updated = 0; let unmatched = 0;
-  for (const r of rows.slice(1)) {
-    const get = (i: number): string => (i >= 0 ? (r[i] ?? '').trim() : '');
-    const sid = get(sidCol); if (!sid) continue;
-    const gid = sidToId[sid]; if (!gid) { unmatched++; continue; }
-    for (const [field, i] of fieldCols) await setAnnotation(backend, 'group', gid, field, get(i)); // 上書き（空はクリア）
-    updated++;
+  for (let i = 0; i < data.length; i++) {
+    const r = data[i];
+    const get = (j: number): string => (j >= 0 ? (r[j] ?? '').trim() : '');
+    const sid = get(sidCol);
+    if (sid) {
+      const gid = sidToId[sid];
+      if (!gid) unmatched++;
+      else { for (const [field, j] of fieldCols) await setAnnotation(backend, 'group', gid, field, get(j)); updated++; } // 上書き（空はクリア）
+    }
+    onProgress?.(i + 1, data.length);
   }
   return { updated, unmatched, fields: fieldCols.map(([f]) => f) };
 }
@@ -826,18 +831,19 @@ function openIngest(): void {
       if (!file.files?.length) { toast('CSV ファイルを選択してください', 'error'); return; }
       const entity = sel.value as QamEntity;
       go.setAttribute('disabled', 'true');
+      setRelayBusy(true); // 取込中は死活ポーリングを止める（連続書き込みで誤検知しないように）
       try {
-        setProg('解析中…', true);
+        setProg('CSV を解析中…', true);
         const resolveId = await buildIdResolver(entity); // 名前→Qualys ID（接続点IDは ID にしない）
         const events = parseHistoryCsv(entity, await file.files[0].text(), resolveId);
-        setProg(`変更履歴を取込中…（${events.length.toLocaleString()} 行）`, true);
-        const n = await importHistory(backend, entity, events);
+        setProg(`解析完了（${events.length.toLocaleString()} 行）。取込を開始します…`, true);
+        const n = await importHistory(backend, entity, events, (done, total) => setProg(`変更履歴を取込中… ${done.toLocaleString()} / ${total.toLocaleString()} 件`, true));
         setProg(`完了しました（${n.toLocaleString()} 件追加 / ${(events.length - n).toLocaleString()} 件は重複でスキップ）`, false);
         toast(`変更履歴を ${n.toLocaleString()} 件取り込みました`, 'ok');
         recordOp('変更履歴CSV取込', `${n.toLocaleString()}件追加`, entity);
         refresh();
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
-      finally { go.removeAttribute('disabled'); }
+      finally { setRelayBusy(false); go.removeAttribute('disabled'); }
     });
     const hint = el('div', { class: 'qam-count', style: 'margin-top:var(--s-3);user-select:text' });
     const setHint = (): void => { clear(hint); hint.append(`CSVヘッダ: ${HIST_HEADER_HINT[sel.value as QamEntity]}`); };
@@ -853,15 +859,16 @@ function openIngest(): void {
     go.addEventListener('click', async () => {
       if (!file.files?.length) { toast('CSV ファイルを選択してください', 'error'); return; }
       go.setAttribute('disabled', 'true');
+      setRelayBusy(true); // 取込中は死活ポーリングを止める（1行ごとに書き込むため）
       try {
-        setProg('解析・取込中…', true);
-        const res = await importAssetValues(await file.files[0].text());
+        setProg('CSV を解析中…', true);
+        const res = await importAssetValues(await file.files[0].text(), (done, total) => setProg(`値を取込中… ${done.toLocaleString()} / ${total.toLocaleString()} 件`, true));
         setProg(`完了しました（${res.updated.toLocaleString()} 件更新 / 未マッチ ${res.unmatched.toLocaleString()} 件）`, false);
         toast(`AssetGroup の値を ${res.updated.toLocaleString()} 件取り込みました`, 'ok');
         recordOp('値CSV取込', `${res.updated.toLocaleString()}件更新(${res.fields.join('/')})`, 'group');
         refresh();
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
-      finally { go.removeAttribute('disabled'); }
+      finally { setRelayBusy(false); go.removeAttribute('disabled'); }
     });
     const hint = callout('CSVヘッダは一覧の列名と同じに。接続点ID をキーに、部門(Division)/接続名称(Function)/拠点名称(Location)/コメント(Comments) を上書き取込します（空欄はクリア）。先に AssetGroup を取込済みであること（接続点ID→AssetGroupの突き合わせに使用）。');
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['AssetGroup 値 CSV']), file]), hint, go);

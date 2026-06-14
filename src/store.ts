@@ -63,11 +63,18 @@ const appendHistory = (b: FileBackend, e: QamEntity, events: QamEvent[]) =>
   events.length ? b.write(histPath(e), events.map((x) => JSON.stringify(x)).join('\n') + '\n', true) : Promise.resolve();
 
 // 既存の変更履歴を取り込む（CSV 由来など）。eid 重複は除いて追記し、追記件数を返す。
-export async function importHistory(b: FileBackend, e: QamEntity, events: QamEvent[]): Promise<number> {
+// onProgress: 重複除外後の追記対象件数(total)に対し、書き込み済み件数(done)を逐次通知（進捗表示用）。
+export async function importHistory(b: FileBackend, e: QamEntity, events: QamEvent[], onProgress?: (done: number, total: number) => void): Promise<number> {
   const seen = new Set((await readJsonl<QamEvent>(b, histPath(e))).map((x) => x.eid));
   const fresh = events.filter((x) => !seen.has(x.eid));
-  await appendHistory(b, e, fresh);
-  return fresh.length;
+  const total = fresh.length;
+  const BATCH = 1000; // 大量行は分割追記し、バッチごとに進捗を通知
+  for (let i = 0; i < total; i += BATCH) {
+    const chunk = fresh.slice(i, i + BATCH);
+    await b.write(histPath(e), chunk.map((x) => JSON.stringify(x)).join('\n') + '\n', true);
+    onProgress?.(Math.min(i + BATCH, total), total);
+  }
+  return total;
 }
 
 // 同じ取込日時(stamp)の履歴を除去（同 stamp の再取込＝上書き、手動削除に使う）。
