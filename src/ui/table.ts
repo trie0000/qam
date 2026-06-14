@@ -33,6 +33,7 @@ export interface TableOpts {
   // 現在の表示（フィルタ・並べ替え後）をテキスト行列で取り出す関数を受け取る箱（エクスポート用）。
   exportRef?: { fn?: () => ExportMatrix };
   filterRef?: FilterRef;                                          // フィルタ操作の窓口（任意）
+  columnRef?: { open?: (anchor: HTMLElement) => void };          // 列表示メニューを開く窓口（ボタンは外側に置く）
 }
 
 // 描画上限。通常（数千件まで）は全件描画してスクロール表示。極端（数万件）の
@@ -74,8 +75,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
   const section = el('div', { class: 'qam-section', style: 'display:grid;grid-template-rows:auto 1fr;min-height:0;height:100%' });
   const bulk = el('div', { class: 'qam-bulk' });
   const bulkInfo = el('div', { class: 'qam-bulk-info' });
-  const colBtn = el('button', { class: 'btn btn--sm qam-colbtn', title: '表示する列を選択', html: `${icon('settings', 14)}<span>列</span>` });
-  bulk.append(bulkInfo, colBtn);
+  bulk.append(bulkInfo);
   const wrap = el('div', { class: 'qam-tablewrap' });
   const table = el('table', { class: 'qam-table' });
   wrap.append(table);
@@ -118,15 +118,15 @@ export function renderTable(opts: TableOpts): HTMLElement {
       colPop.append(lab);
     });
   }
-  colBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
+  // ボタンは main 側（エクスポート群の隣）に置く。ここでは開閉処理だけ公開する。
+  if (opts.columnRef) opts.columnRef.open = (anchor: HTMLElement) => {
     if (colPop.classList.contains('on')) { colPop.classList.remove('on'); return; }
     renderColMenu();
-    const r = colBtn.getBoundingClientRect();
+    const r = anchor.getBoundingClientRect();
     colPop.style.left = `${Math.max(8, Math.min(r.right - 220, window.innerWidth - 228))}px`;
     colPop.style.top = `${r.bottom + 6}px`;
     colPop.classList.add('on');
-  });
+  };
   colPop.addEventListener('click', (e) => e.stopPropagation());
   if (!colMenuBound) { document.addEventListener('click', () => document.getElementById('qam-colmenu')?.classList.remove('on')); colMenuBound = true; }
 

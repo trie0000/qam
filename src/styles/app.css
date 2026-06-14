@@ -126,7 +126,6 @@ body {
 .qam-bulk { display: flex; align-items: center; gap: var(--s-4); min-height: 32px; padding: var(--s-2) var(--gutter); color: var(--ink-3); font-size: var(--fs-sm); }
 .qam-bulk-info { display: flex; align-items: center; gap: var(--s-4); }
 .qam-bulk .qam-bulk-actions { display: flex; gap: var(--s-2); }
-.qam-colbtn { margin-left: auto; }
 /* 列表示メニュー（チェックで表示/非表示） */
 .qam-colmenu { position: fixed; display: none; width: 220px; max-height: 360px; overflow-y: auto; padding: var(--s-3); z-index: 1000;
   background: var(--paper); border: 1px solid var(--paper-3); border-radius: var(--r-3); box-shadow: var(--shadow-flyout); font-family: var(--font-sans); }

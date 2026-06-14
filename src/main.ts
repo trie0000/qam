@@ -283,8 +283,8 @@ async function exportAllAssets(): Promise<void> {
   toast('全資産Excelを出力しました', 'ok');
 }
 
-// エクスポートボタン（CSV / Excel）。exportRef.fn は renderTable が描画時にセットする。
-function addExportButtons(toolbar: HTMLElement, sheetName: string, exportRef: { fn?: () => ExportMatrix }): void {
+// エクスポート（CSV / Excel）＋列表示ボタン。exportRef.fn / columnRef.open は renderTable が描画時にセットする。
+function addExportButtons(toolbar: HTMLElement, sheetName: string, exportRef: { fn?: () => ExportMatrix }, columnRef: { open?: (anchor: HTMLElement) => void }): void {
   const fname = (ext: string) => `QAM_${sheetName}_${state.entity}_${stampNow().slice(0, 10)}.${ext}`;
   const sheet = (m: ExportMatrix) => ({ name: sheetName, headers: m.headers, rows: m.rows });
   const mk = (label: string, run: (s: ReturnType<typeof sheet>, fn: string) => void, ext: string) => {
@@ -296,9 +296,12 @@ function addExportButtons(toolbar: HTMLElement, sheetName: string, exportRef: { 
     });
     return b;
   };
+  const colBtn = el('button', { class: 'btn btn--sm', title: '表示する列を選択', html: `${icon('settings', 14)}<span>列表示</span>` });
+  colBtn.addEventListener('click', (e) => { e.stopPropagation(); columnRef.open?.(colBtn); });
   toolbar.append(el('div', { class: 'qam-export-group' }, [
     mk('CSV', exportCsv, 'csv'),
     mk('Excel', exportXlsx, 'xlsx'),
+    colBtn,
   ]));
 }
 
@@ -351,13 +354,14 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
   const annot = await buildAnnot(state.entity);
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
+  const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
   host.append(renderTable({
     viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments, agSetten, annot),
-    rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef, filterRef,
+    rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef, filterRef, columnRef,
   }));
   addFilterUI(toolbar, filterBar, filterRef);
-  addExportButtons(toolbar, '資産一覧', exportRef);
+  addExportButtons(toolbar, '資産一覧', exportRef, columnRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
@@ -418,14 +422,15 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   const comments = await commentApi(state.entity);
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
+  const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
   host.append(renderTable({
     viewId: `history.${state.entity}`, columns: historyColumns(comments),
-    rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef,
+    rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
     bulkActions: histBulk,
   }));
   addFilterUI(toolbar, filterBar, filterRef);
-  addExportButtons(toolbar, '変更履歴', exportRef);
+  addExportButtons(toolbar, '変更履歴', exportRef, columnRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
