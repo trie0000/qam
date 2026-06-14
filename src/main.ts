@@ -8,7 +8,7 @@ import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, type CommentApi, type AnnotApi } from './ui/columns';
+import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
@@ -499,6 +499,7 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
   host.append(renderTable({
     viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments, agSetten, annot),
     rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef, filterRef, columnRef,
+    defaultHidden: ASSET_DEFAULT_HIDDEN[state.entity],
   }));
   addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '資産一覧', exportRef, columnRef);
@@ -565,6 +566,7 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
     bulkActions: histBulk, onRowClick: (e: QamEvent) => openEventProps(e), // 行クリックで追加/削除/変更したアセットの情報を表示
+    defaultHidden: HISTORY_DEFAULT_HIDDEN[state.entity],
   }));
   addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '変更履歴', exportRef, columnRef);

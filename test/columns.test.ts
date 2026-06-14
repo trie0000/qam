@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { settenId, fmtJst, historyColumns } from '../src/ui/columns';
+import { settenId, fmtJst, historyColumns, assetColumns, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN } from '../src/ui/columns';
 import type { QamEvent } from '../src/types';
+
+const noComments2 = { byId: {}, openThread: () => undefined, save: async () => [] } as any;
+// 既定で見える列（hidden を除いた順）。
+const visibleIds = (cols: { id: string }[], hidden: string[]): string[] => cols.map((c) => c.id).filter((id) => !hidden.includes(id));
 
 const noComments = { byId: {}, openThread: () => undefined, save: async () => [] };
 const cellOf = (cols: ReturnType<typeof historyColumns>, id: string, e: QamEvent): string => {
@@ -85,6 +89,24 @@ describe('historyColumns 追加/削除 値列', () => {
     expect(cellOf(cols, 'rem_ip', deleted)).toBe('10.1.1.1');
     expect(cellOf(cols, 'rem_fqdn', deleted)).toBe('h1.example');
     expect(cellOf(cols, 'add_ip', deleted)).toBe('');
+  });
+
+  it('既定の表示列と順番（一覧）', () => {
+    expect(visibleIds(assetColumns('group', noComments2), ASSET_DEFAULT_HIDDEN.group))
+      .toEqual(['SETTEN', 'name', 'DIVISION', 'FUNCTION', 'LOCATION', 'IPS', 'DNS_LIST', 'COMMENTS', 'LAST_UPDATE', '_c']);
+    expect(visibleIds(assetColumns('host', noComments2), ASSET_DEFAULT_HIDDEN.host))
+      .toEqual(['AG_SETTEN', 'IP', 'name', 'TRACKING_METHOD', 'LAST_VULN_SCAN_DATETIME', '_c']);
+    expect(visibleIds(assetColumns('domain', noComments2), ASSET_DEFAULT_HIDDEN.domain))
+      .toEqual(['key', 'AG_SETTEN', 'NETBLOCK', '_c']);
+  });
+
+  it('既定の表示列と順番（変更履歴）', () => {
+    expect(visibleIds(historyColumns('group', noComments2), HISTORY_DEFAULT_HIDDEN.group))
+      .toEqual(['ts', 'setten', 'name', 'change', 'field', 'add_ip', 'add_dns', 'rem_ip', 'rem_dns', 'old', 'new', '_c']);
+    expect(visibleIds(historyColumns('host', noComments2), HISTORY_DEFAULT_HIDDEN.host))
+      .toEqual(['ts', 'setten', 'change', 'field', 'add_ip', 'add_fqdn', 'rem_ip', 'rem_fqdn', 'old', 'new', '_c']);
+    expect(visibleIds(historyColumns('domain', noComments2), HISTORY_DEFAULT_HIDDEN.domain))
+      .toEqual(['ts', 'id', 'change', 'field', 'add_ip', 'rem_ip', '_c']);
   });
 
   it('domain/host は名前列を出さない（host は IP列も無し）', () => {

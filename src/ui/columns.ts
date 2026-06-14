@@ -139,22 +139,25 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
     sortVal: (r: QamRecord) => (annot ? (annot.get(r.key, field) || (r.scalar[field] ?? '')) : (r.scalar[field] ?? '')),
   });
   const comment: Column = { id: '_c', label: 'メモ', sortable: false, render: (r: QamRecord) => commentCell(entity, r.key, comments), sortVal: (r: QamRecord) => latestText(comments, r.key) };
+  // 並びは既定表示順。既定で隠す列（ASSET_DEFAULT_HIDDEN）は末尾に置く。
   if (entity === 'group') return [
-    c('key', 'ID', (r) => esc(r.key), true), c('name', 'タイトル', (r) => esc(r.name)),
-    c('SETTEN', '接続点ID', (r) => esc(settenId(r.name)), true),
-    editCol('EXT_CONN_NO', '外接番号', 'EXT_CONN_NO'),
-    c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
-    c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
+    c('SETTEN', '接続点ID', (r) => esc(settenId(r.name)), true), c('name', 'タイトル', (r) => esc(r.name)),
     editCol('DIVISION', '事業場名(Division)', 'DIVISION'), editCol('FUNCTION', '接続名称(Function)', 'FUNCTION'),
-    editCol('LOCATION', '拠点名称(Location)', 'LOCATION'), editCol('COMMENTS', 'コメント(Comments)', 'COMMENTS'),
+    editCol('LOCATION', '拠点名称(Location)', 'LOCATION'),
+    c('IPS', 'IP', stc('IPS')), c('DNS_LIST', 'DNS', stc('DNS_LIST')),
+    editCol('COMMENTS', 'コメント(Comments)', 'COMMENTS'),
     c('LAST_UPDATE', '最終更新', (r) => esc(fmtJst(r.info.LAST_UPDATE ?? '')), true), comment,
+    // 既定非表示
+    c('key', 'ID', (r) => esc(r.key), true), c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true),
+    c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')), editCol('EXT_CONN_NO', '外接番号', 'EXT_CONN_NO'),
   ];
   if (entity === 'host') return [
-    c('key', 'ID', (r) => esc(r.key), true), c('name', 'FQDN', (r) => esc(r.name)),
     c('AG_SETTEN', '接続点ID', (r) => esc(agSetten[r.key] ?? ''), true),
-    c('IP', 'IP', sc('IP'), true), c('OS', 'OS', sc('OS')),
-    c('TRACKING_METHOD', 'Tracking', sc('TRACKING_METHOD')), c('NETBIOS', 'NetBIOS', sc('NETBIOS')),
+    c('IP', 'IP', sc('IP'), true), c('name', 'FQDN', (r) => esc(r.name)),
+    c('TRACKING_METHOD', 'Tracking', sc('TRACKING_METHOD')),
     c('LAST_VULN_SCAN_DATETIME', '最終スキャン', (r) => esc(fmtJst(r.info.LAST_VULN_SCAN_DATETIME ?? '')), true), comment,
+    // 既定非表示
+    c('key', 'ID', (r) => esc(r.key), true), c('OS', 'OS', sc('OS')), c('NETBIOS', 'NetBIOS', sc('NETBIOS')),
   ];
   if (entity === 'user') return [
     c('key', 'ユーザID', (r) => esc(r.key), true), c('USER_LOGIN', 'ログイン', sc('USER_LOGIN'), true),
@@ -168,10 +171,19 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
   return [
     c('key', 'ドメイン名', (r) => esc(r.key)),
     c('AG_SETTEN', '接続点ID', (r) => esc(agSetten[r.key] ?? ''), true),
-    c('NETWORK_NAME', 'ネットワーク', sc('NETWORK_NAME')),
     c('NETBLOCK', 'ネットブロック', stc('NETBLOCK')), comment,
+    // 既定非表示
+    c('NETWORK_NAME', 'ネットワーク', sc('NETWORK_NAME')),
   ];
 }
+
+// 既定で隠す列（一覧）。ユーザーは「列表示」でいつでも表示できる。
+export const ASSET_DEFAULT_HIDDEN: Record<QamEntity, string[]> = {
+  group: ['key', 'OWNER_ID', 'DOMAIN_LIST', 'EXT_CONN_NO'],
+  host: ['key', 'OS', 'NETBIOS'],
+  domain: ['NETWORK_NAME'],
+  user: [],
+};
 
 // 種別ごとに ID/名前 のラベルを資産一覧と合わせる（汎用の「ID/名前」をやめる）。
 const HIST_ID_LABEL: Record<QamEntity, string> = { group: 'AssetGroup ID', host: 'Host ID', domain: 'ドメイン名', user: 'ユーザID' };
@@ -259,23 +271,29 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
   const newCol: Column = { id: 'new', label: '変更後/追加', render: newCell, sortable: false };
   const memoCol: Column = { id: '_c', label: 'メモ', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) };
 
-  // 追加/削除された値の専用列（種別ごと）。
+  // 追加/削除された値の専用列（種別ごと）。並びは「追加…→削除…」。
   const extra: Column[] = entity === 'group'
-    ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'IPS'), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'IPS'), true),
-       mkChg('add_dns', '追加DNS', (e) => addedOf(e, null, 'DNS_LIST')), mkChg('rem_dns', '削除DNS', (e) => removedOf(e, null, 'DNS_LIST'))]
+    ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'IPS'), true), mkChg('add_dns', '追加DNS', (e) => addedOf(e, null, 'DNS_LIST')),
+       mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'IPS'), true), mkChg('rem_dns', '削除DNS', (e) => removedOf(e, null, 'DNS_LIST'))]
     : entity === 'host'
-      ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, 'IP', null), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, 'IP', null), true),
-         mkChg('add_fqdn', '追加FQDN', (e) => addedOf(e, 'FQDN', null)), mkChg('rem_fqdn', '削除FQDN', (e) => removedOf(e, 'FQDN', null))]
+      ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, 'IP', null), true), mkChg('add_fqdn', '追加FQDN', (e) => addedOf(e, 'FQDN', null)),
+         mkChg('rem_ip', '削除IP', (e) => removedOf(e, 'IP', null), true), mkChg('rem_fqdn', '削除FQDN', (e) => removedOf(e, 'FQDN', null))]
       : entity === 'domain'
         ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'NETBLOCK'), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'NETBLOCK'), true)]
         : [];
 
-  // 列構成（entityごと）:
-  //  - domain は「名前」列を出さない（ドメイン名=ID列と重複するため）。
-  //  - host は「名前(FQDN)」「IP」列を出さない（追加/削除FQDN・IP列で代替）。
-  const cols: Column[] = [tsCol, changeCol, idCol];
-  if (entity === 'group' || entity === 'host') cols.push(settenCol);
-  if (entity === 'group' || entity === 'user') cols.push(nameCol);
-  cols.push(fieldCol, ...extra, oldCol, newCol, memoCol);
-  return cols;
+  // 列構成（entityごと・既定表示順）。既定で隠す列（HISTORY_DEFAULT_HIDDEN）は末尾。
+  //  - group: 更新日 接続点ID タイトル 変更種別 変更項目 追加IP 追加DNS 削除IP 削除DNS 変更前 変更後 メモ ／ ID は非表示
+  //  - host : 更新日 接続点ID 変更種別 変更項目 追加IP 追加FQDN 削除IP 削除FQDN 変更前 変更後 メモ ／ ID は非表示
+  //  - domain: 更新日 ドメイン名 変更種別 変更項目 追加IP 削除IP メモ ／ 変更前・変更後 は非表示
+  //  - user : 更新日 変更種別 ユーザID 氏名 変更項目 変更前 変更後 メモ
+  if (entity === 'group') return [tsCol, settenCol, nameCol, changeCol, fieldCol, ...extra, oldCol, newCol, memoCol, idCol];
+  if (entity === 'host') return [tsCol, settenCol, changeCol, fieldCol, ...extra, oldCol, newCol, memoCol, idCol];
+  if (entity === 'domain') return [tsCol, idCol, changeCol, fieldCol, ...extra, memoCol, oldCol, newCol];
+  return [tsCol, changeCol, idCol, nameCol, fieldCol, oldCol, newCol, memoCol];
 }
+
+// 既定で隠す列（変更履歴）。ユーザーは「列表示」でいつでも表示できる。
+export const HISTORY_DEFAULT_HIDDEN: Record<QamEntity, string[]> = {
+  group: ['id'], host: ['id'], domain: ['old', 'new'], user: [],
+};

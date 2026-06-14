@@ -36,6 +36,7 @@ export interface TableOpts {
   filterRef?: FilterRef;                                          // フィルタ操作の窓口（任意）
   columnRef?: { open?: (anchor: HTMLElement) => void };          // 列表示メニューを開く窓口（ボタンは外側に置く）
   onRowClick?: (row: any) => void;                                // 行クリック（チェックボックス/編集セル等は stopPropagation 済みなので発火しない）
+  defaultHidden?: string[];                                       // 既定で隠す列ID（保存状態が無い/レイアウト版更新時に適用）
 }
 
 // 描画上限。通常は全件描画してスクロール表示。極端な件数でのフリーズだけ保護する高い上限。
@@ -45,17 +46,25 @@ const MAX_ROWS = 20000;
 
 interface FilterCond { field: string; value: string }
 // excluded: 列ID → その列で「チェックを外した（＝非表示にする）値」の配列（Excel オートフィルタ相当）。
-interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: FilterCond[]; hidden: string[]; excluded: Record<string, string[]> }
+interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: FilterCond[]; hidden: string[]; excluded: Record<string, string[]>; v?: number }
 
-function loadState(viewId: string): TState {
+// 既定の列順・表示/非表示を変えたら上げる。旧保存状態の order/hidden を1度だけ既定へ初期化（widths/sort/filters は保持）。
+const TABLE_VERSION = 2;
+
+function loadState(viewId: string, defaultHidden: string[] = []): TState {
+  const def = (): TState => ({ order: [], widths: {}, sort: null, filters: [], hidden: [...defaultHidden], excluded: {}, v: TABLE_VERSION });
+  const raw = localStorage.getItem(LS.table(viewId));
+  if (!raw) return def();
   try {
-    const s = { order: [], widths: {}, sort: null, filters: [], hidden: [], excluded: {}, ...JSON.parse(localStorage.getItem(LS.table(viewId)) || '{}') } as TState;
+    const s = { ...def(), ...JSON.parse(raw) } as TState;
     // 旧形式（列ごとの Record<string,string>）からの移行: 値ありを追加順の配列へ。
     if (s.filters && !Array.isArray(s.filters)) s.filters = Object.entries(s.filters as Record<string, string>).filter(([, v]) => v).map(([field, value]) => ({ field, value }));
     if (!Array.isArray(s.hidden)) s.hidden = [];
     if (!s.excluded || typeof s.excluded !== 'object') s.excluded = {};
+    // 既定レイアウト更新時は order/hidden を既定へ初期化（1度だけ）。
+    if (s.v !== TABLE_VERSION) { s.order = []; s.hidden = [...defaultHidden]; s.v = TABLE_VERSION; }
     return s;
-  } catch { return { order: [], widths: {}, sort: null, filters: [], hidden: [], excluded: {} }; }
+  } catch { return def(); }
 }
 const saveState = (viewId: string, s: TState) => localStorage.setItem(LS.table(viewId), JSON.stringify(s));
 
@@ -70,7 +79,7 @@ export function cellText(col: Column, row: any): string {
 let colMenuBound = false;
 
 export function renderTable(opts: TableOpts): HTMLElement {
-  const st = loadState(opts.viewId);
+  const st = loadState(opts.viewId, opts.defaultHidden ?? []);
   const byId = new Map(opts.columns.map((c) => [c.id, c]));
   let cols = st.order.map((id) => byId.get(id)!).filter(Boolean);
   for (const c of opts.columns) if (!cols.includes(c)) cols.push(c);
