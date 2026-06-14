@@ -236,6 +236,21 @@ function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef
 }
 let filterOutsideBound = false;
 
+// 変更履歴CSV取込用: 識別名(タイトル/FQDN/ドメイン名/アカウント名)→ 現スナップショットの Qualys ID。
+// CSV には Qualys ID が無いので名前で突き合わせる。未解決は '' を返し、呼び出し側で名前を ID にフォールバック。
+async function buildIdResolver(entity: QamEntity): Promise<(rawName: string) => string> {
+  const stamp = resolveAsof(await getSnapshotStamps(backend, entity));
+  if (!stamp) return () => '';
+  const snap = await readSnapshot(backend, entity, stamp);
+  const map: Record<string, string> = {};
+  for (const r of Object.values(snap?.records ?? {}) as QamRecord[]) {
+    // user はログイン名でも引けるように。group/host は表示名(タイトル/FQDN)、domain は名前=キー。
+    const names = entity === 'user' ? [r.scalar.USER_LOGIN, r.name, r.key] : [r.name, r.key];
+    for (const n of names) if (n && !(n.toLowerCase() in map)) map[n.toLowerCase()] = r.key;
+  }
+  return (raw: string) => map[raw.trim().toLowerCase()] || '';
+}
+
 // 手入力メタ情報（Function/Location 等）の窓口。現状は group のみ。
 async function buildAnnot(entity: QamEntity): Promise<AnnotApi | undefined> {
   if (entity !== 'group') return undefined;
@@ -632,7 +647,8 @@ function openIngest(): void {
       go.setAttribute('disabled', 'true');
       try {
         setProg('解析中…', true);
-        const events = parseHistoryCsv(entity, await file.files[0].text());
+        const resolveId = await buildIdResolver(entity); // 名前→Qualys ID（接続点IDは ID にしない）
+        const events = parseHistoryCsv(entity, await file.files[0].text(), resolveId);
         setProg(`変更履歴を取込中…（${events.length.toLocaleString()} 行）`, true);
         const n = await importHistory(backend, entity, events);
         setProg(`完了しました（${n.toLocaleString()} 件追加 / ${(events.length - n).toLocaleString()} 件は重複でスキップ）`, false);

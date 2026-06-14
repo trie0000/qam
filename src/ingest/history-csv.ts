@@ -36,41 +36,45 @@ function inferChange(content: string): QamChange {
   return 'modified';
 }
 
-// entity ごとの列仕様。id/name は候補正規表現の先頭から非空値を採用。
+// entity ごとの列仕様。
+// keyCols: その値を resolveId() で現スナップショットの Qualys ID に解決し、ID 列にする
+//   （AssetGroup=タイトル / Host=FQDN / Domain=ドメイン名 / User=アカウント名）。
+//   解決できなければ名前そのものを ID にする。接続点ID/外接番号は ID にせず extras に併記。
 interface HistSpec {
   date: RegExp;
   content: RegExp | null;          // 本文に使う列（更新内容 / host はメモ）。
   field: string;                   // 「項目」列の表示ラベル。
-  id: RegExp[];
-  name: RegExp[];
+  keyCols: RegExp[];               // Qualys ID へ解決する識別名（タイトル/FQDN/ドメイン名/アカウント名）。
+  name: RegExp[];                  // 表示名。
   extras: [string, RegExp][];      // [併記ラベル, ヘッダ正規表現]
 }
 const SPECS: Record<QamEntity, HistSpec> = {
   group: {
     date: /更新日/, content: /更新内容/, field: '更新内容',
-    id: [/接続点ID/i, /タイトル/], name: [/タイトル/],
-    extras: [['事業場', /事業/], ['Function', /Function|機能|接続.*名称/i], ['Location', /Location|拠点/i], ['コメント', /comment|コメント/i]],
+    keyCols: [/タイトル/], name: [/タイトル/],
+    extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['Function', /Function|機能|接続.*名称/i], ['Location', /Location|拠点/i], ['コメント', /comment|コメント/i]],
   },
   domain: {
     date: /更新日/, content: /更新内容/, field: '更新内容',
-    id: [/接続点ID/i, /ドメイン名/], name: [/ドメイン名/, /接続点ID/i],
-    extras: [['事業場', /事業/], ['IP範囲from', /from/i], ['IP範囲to', /to/i], ['外接番号', /外接/]],
+    keyCols: [/ドメイン名/], name: [/ドメイン名/],
+    extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['IP範囲from', /from/i], ['IP範囲to', /to/i], ['外接番号', /外接/]],
   },
   host: {
     date: /更新日/, content: /メモ/, field: 'メモ',
-    id: [/外接/, /FQDN/i], name: [/FQDN/i, /接続[店点]名/],
-    extras: [['接続点名', /接続[店点]名/], ['IP', /IP|アドレス/i]],
+    keyCols: [/FQDN/i], name: [/FQDN/i, /接続[店点]名/],
+    extras: [['接続点名', /接続[店点]名/], ['IP', /IP|アドレス/i], ['外接番号', /外接/]],
   },
   user: {
     date: /更新日/, content: /更新内容/, field: '更新内容',
-    id: [/アカウント名/, /接続点ID/i], name: [/氏名/, /アカウント名/],
+    keyCols: [/アカウント名/], name: [/氏名/, /アカウント名/],
     extras: [['接続点ID', /接続点ID/i], ['姓', /姓/], ['名', /名前/], ['事業場', /事業/], ['TEL', /TEL|電話/i],
       ['Email', /mail|メール/i], ['Language', /Language|言語/i], ['権限', /権限|role/i],
       ['ログイン方法', /ログイン方法|SAML/i], ['スキャン結果通知', /スキャン|通知/]],
   },
 };
 
-export function parseHistoryCsv(entity: QamEntity, text: string): QamEvent[] {
+// resolveId: 識別名(タイトル等) → 現スナップショットの Qualys ID。未解決は '' を返す。
+export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (rawName: string) => string = () => ''): QamEvent[] {
   const spec = SPECS[entity];
   const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ''));
   if (!rows.length) throw new Error('CSV が空です');
@@ -79,7 +83,7 @@ export function parseHistoryCsv(entity: QamEntity, text: string): QamEvent[] {
   const dateI = idx(spec.date);
   if (dateI < 0) throw new Error('ヘッダに「更新日」が必要です');
   const contentI = spec.content ? idx(spec.content) : -1;
-  const idIdx = spec.id.map(idx).filter((i) => i >= 0);
+  const keyIdx = spec.keyCols.map(idx).filter((i) => i >= 0);
   const nameIdx = spec.name.map(idx).filter((i) => i >= 0);
   const extraDefs = spec.extras.map(([label, re]) => [label, idx(re)] as [string, number]).filter(([, i]) => i >= 0);
 
@@ -87,9 +91,10 @@ export function parseHistoryCsv(entity: QamEntity, text: string): QamEvent[] {
   rows.slice(1).forEach((r, i) => {
     const get = (j: number): string => (j >= 0 ? (r[j] ?? '').trim() : '');
     const date = normDate(get(dateI));
-    const id = idIdx.map(get).find((v) => v) || '';
-    if (!date || !id) return; // 更新日・識別子が無い行はスキップ
-    const name = nameIdx.map(get).find((v) => v) || id;
+    const rawKey = keyIdx.map(get).find((v) => v) || '';
+    if (!date || !rawKey) return; // 更新日・識別名が無い行はスキップ
+    const id = resolveId(rawKey) || rawKey; // Qualys ID へ解決（無ければ名前）。接続点IDは ID にしない。
+    const name = nameIdx.map(get).find((v) => v) || rawKey;
     const content = get(contentI);
     const extras = extraDefs.map(([label, j]) => [label, get(j)] as [string, string])
       .filter(([, v]) => v).map(([k, v]) => `${k}:${v}`);
@@ -103,12 +108,12 @@ export function parseHistoryCsv(entity: QamEntity, text: string): QamEvent[] {
       new: [content, ...extras].filter(Boolean).join(' / '),
     });
   });
-  if (!events.length) throw new Error('取り込める行がありません（更新日・識別子列を確認してください）');
+  if (!events.length) throw new Error('取り込める行がありません（更新日・識別名列を確認してください）');
   return events;
 }
 
 // 既存呼び出し/テスト用の薄いラッパ。
-export const parseGroupHistoryCsv = (text: string): QamEvent[] => parseHistoryCsv('group', text);
+export const parseGroupHistoryCsv = (text: string, resolveId?: (n: string) => string): QamEvent[] => parseHistoryCsv('group', text, resolveId);
 
 // 取込モーダルに表示する各 entity の想定ヘッダ。
 export const HIST_HEADER_HINT: Record<QamEntity, string> = {
