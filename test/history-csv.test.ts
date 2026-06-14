@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseGroupHistoryCsv } from '../src/ingest/history-csv';
+import { parseGroupHistoryCsv, parseHistoryCsv } from '../src/ingest/history-csv';
 
 describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
   const header = '更新日,更新内容,接続点ID,事業場名,タイトル,接続点名称(Function),拠点名称(Location),コメント(comments)';
@@ -33,5 +33,38 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
   it('更新日や識別子が無い行はスキップ', () => {
     const csv = header + '\n' + ',内容のみ,,事業場,,F,L,c';
     expect(() => parseGroupHistoryCsv(csv)).toThrow(/取り込める行/);
+  });
+
+  it('domain: 接続点ID=id / ドメイン名=name / IP範囲・外接番号を併記', () => {
+    const csv = '更新日,更新内容,接続点ID,事業場名,ドメイン名,IPアドレス範囲_from,IPアドレス範囲_to,外接番号\n'
+      + '2026-06-01,新規,DM12,東京,example.com,10.0.0.1,10.0.0.255,EXT9';
+    const ev = parseHistoryCsv('domain', csv);
+    expect(ev[0].id).toBe('DM12');
+    expect(ev[0].name).toBe('example.com');
+    expect(ev[0].change).toBe('added');
+    expect(ev[0].new).toContain('IP範囲from:10.0.0.1');
+    expect(ev[0].new).toContain('IP範囲to:10.0.0.255');
+    expect(ev[0].new).toContain('外接番号:EXT9');
+  });
+
+  it('host: 更新内容が無く メモ を本文に / 外接番号=id / FQDN=name', () => {
+    const csv = '更新日,接続点名,IPアドレス,FQDN,メモ,外接番号\n'
+      + '2026-06-02,東京拠点,10.1.1.1,host1.example,初期構築,EXT1';
+    const ev = parseHistoryCsv('host', csv);
+    expect(ev[0].id).toBe('EXT1');
+    expect(ev[0].name).toBe('host1.example');
+    expect(ev[0].field).toBe('メモ');
+    expect(ev[0].new).toContain('初期構築');
+    expect(ev[0].new).toContain('接続点名:東京拠点');
+  });
+
+  it('user: アカウント名=id / 氏名=name / 権限などを併記', () => {
+    const csv = '更新日,更新内容,接続点ID,氏名,名前,姓,事業場名,TEL,e_mail,アカウント名,Language,権限,ログイン方法(SAML),スキャン結果通知\n'
+      + '2026-06-03,権限変更,U99,山田 太郎,太郎,山田,東京,03-0000,a@e.x,acme_yamada,ja,Manager,SAML,有効';
+    const ev = parseHistoryCsv('user', csv);
+    expect(ev[0].id).toBe('acme_yamada');
+    expect(ev[0].name).toBe('山田 太郎');
+    expect(ev[0].new).toContain('権限:Manager');
+    expect(ev[0].new).toContain('ログイン方法:SAML');
   });
 });

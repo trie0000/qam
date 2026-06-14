@@ -12,7 +12,7 @@ import { assetColumns, historyColumns, settenId, type CommentApi, type AnnotApi 
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
-import { parseGroupHistoryCsv } from './ingest/history-csv';
+import { parseHistoryCsv, HIST_HEADER_HINT } from './ingest/history-csv';
 import {
   getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents,
 } from './store';
@@ -623,26 +623,28 @@ function openIngest(): void {
     histBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; xmlBtn.className = 'btn btn--sm';
     clear(panel);
     const sel = el('select', { class: 'in' }) as HTMLSelectElement;
-    ENTITIES.forEach((e) => sel.append(el('option', { value: e.key, selected: e.key === 'group', disabled: e.key !== 'group' }, [e.label + (e.key === 'group' ? '' : '（未対応）')])));
+    ENTITIES.forEach((e) => sel.append(el('option', { value: e.key, selected: e.key === 'group' }, [e.label])));
     const file = el('input', { type: 'file', accept: '.csv', class: 'in' }) as HTMLInputElement;
     const go = el('button', { class: 'btn btn--primary', html: `${icon('inbox', 16)}<span>履歴を取込</span>` });
     go.addEventListener('click', async () => {
-      if (sel.value !== 'group') { toast('現在は AssetGroup のみ対応しています', 'error'); return; }
       if (!file.files?.length) { toast('CSV ファイルを選択してください', 'error'); return; }
+      const entity = sel.value as QamEntity;
       go.setAttribute('disabled', 'true');
       try {
         setProg('解析中…', true);
-        const events = parseGroupHistoryCsv(await file.files[0].text());
+        const events = parseHistoryCsv(entity, await file.files[0].text());
         setProg(`変更履歴を取込中…（${events.length.toLocaleString()} 行）`, true);
-        const n = await importHistory(backend, 'group', events);
+        const n = await importHistory(backend, entity, events);
         setProg(`完了しました（${n.toLocaleString()} 件追加 / ${(events.length - n).toLocaleString()} 件は重複でスキップ）`, false);
         toast(`変更履歴を ${n.toLocaleString()} 件取り込みました`, 'ok');
         refresh();
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
       finally { go.removeAttribute('disabled'); }
     });
-    const cols = el('div', { class: 'qam-count', style: 'margin-top:var(--s-3);user-select:text' }, ['CSVヘッダ: 更新日, 更新内容, 接続点ID, 事業場名, タイトル, 接続点名称(Function), 拠点名称(Location), コメント(comments)']);
-    panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['対象（種別ごとに個別取込）']), sel]), el('div', { class: 'qam-field' }, [el('label', {}, ['変更履歴 CSV']), file]), cols, go);
+    const hint = el('div', { class: 'qam-count', style: 'margin-top:var(--s-3);user-select:text' });
+    const setHint = (): void => { clear(hint); hint.append(`CSVヘッダ: ${HIST_HEADER_HINT[sel.value as QamEntity]}`); };
+    sel.addEventListener('change', setHint); setHint();
+    panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['対象（種別ごとに個別取込）']), sel]), el('div', { class: 'qam-field' }, [el('label', {}, ['変更履歴 CSV']), file]), hint, go);
   }
   apiBtn.addEventListener('click', showApi); xmlBtn.addEventListener('click', showXml); histBtn.addEventListener('click', showHist);
   showApi();
