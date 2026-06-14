@@ -238,7 +238,8 @@ export function renderTable(opts: TableOpts): HTMLElement {
     // 現在の並べ替え表示＋ドロップダウン（caret）。列名クリックで Excel 風メニューを開く。
     const sortIcon = st.sort?.col === c.id ? icon(st.sort.dir === 1 ? 'chevronUp' : 'chevronDown', 12) : '';
     const inner = el('div', { class: 'qam-th', html: `<span>${c.label}</span>${sortIcon}<span class="qam-th-caret">${icon('chevronDown', 12)}</span>` });
-    inner.addEventListener('click', () => openColMenu(th, c)); // 並べ替え＋表示/非表示メニュー
+    // クリックで Excel 風メニュー（並べ替え＋表示/非表示）。外側クリック判定に拾われて即閉じしないよう伝播停止。
+    inner.addEventListener('click', (e) => { e.stopPropagation(); openColMenu(th, c); });
     th.append(inner);
     attachReorder(th, c);
     th.append(buildResize(c));
