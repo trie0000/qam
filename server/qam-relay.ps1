@@ -105,6 +105,8 @@ function Get-QamText1 { param([string]$Xml, [string]$Pattern)
 
 # Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
 function Invoke-QualysFetch { param($Body)
+    # user 一覧(v2)は POST(action=list)で叩く。GET だと Qualys が 403(HTML)を返す（User API は POST 必須）。
+    $isUserList = (-not $Body.url) -and ($Body.kind -eq 'user')
     # noSession 指定時は Basic 認証で叩く（401/403 再試行用）。それ以外は session 優先。
     $useSession = $script:QSession -and -not $Body.noSession
     # プロキシは本文指定を優先（session 経路でも確実にプロキシを通す。proxy=なしで直結する不具合対策）。
@@ -116,9 +118,9 @@ function Invoke-QualysFetch { param($Body)
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
             'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
-            # user 一覧は v2 FO /api/2.0/fo/user/。USER_LIST_OUTPUT（ASSIGNED_ASSET_GROUPS＝割当AG含む）を返す。
-            # MSP(user_list.php)は VMDR では access denied になりがちなので v2 を使う。
-            'user'   { $url = "$base/api/2.0/fo/user/?action=list" }
+            # user 一覧は v2 FO /api/2.0/fo/user/（USER_LIST_OUTPUT、ASSIGNED_ASSET_GROUPS＝割当AG含む）。
+            # action=list は下で POST body として送る（GET だと 403 HTML になるため）。
+            'user'   { $url = "$base/api/2.0/fo/user/" }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }
@@ -136,9 +138,16 @@ function Invoke-QualysFetch { param($Body)
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
-        Write-Host "[qam] fetch GET $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
-        Add-QamLog "FETCH start GET $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
-        $resp = $client.GetAsync($url).Result
+        $method = if ($isUserList) { 'POST' } else { 'GET' }
+        Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
+        Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
+        if ($isUserList) {
+            # User API は POST(action=list)。USER_LIST_OUTPUT を返す。
+            $form = New-Object System.Net.Http.StringContent('action=list', [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
+            $resp = $client.PostAsync($url, $form).Result
+        } else {
+            $resp = $client.GetAsync($url).Result
+        }
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
         # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
         $content = $resp.Content
