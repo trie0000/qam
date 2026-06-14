@@ -20,6 +20,7 @@ export interface FilterRef {
   add: (id: string) => void;                                      // 空チップ追加
   setValue: (id: string, value: string) => void;                  // 値変更（本体のみ再描画＝入力フォーカス維持）
   remove: (id: string) => void;                                   // チップ削除
+  clear: () => void;                                              // 列フィルタを全消去
   onChange?: () => void;                                          // 追加/削除時に main がチップを再描画
 }
 export interface TableOpts {
@@ -165,6 +166,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
     fr.add = (id) => { if (!st.filters.some((f) => f.field === id)) st.filters.push({ field: id, value: '' }); saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
     fr.setValue = (id, val) => { const f = st.filters.find((x) => x.field === id); if (f) { f.value = val; saveState(opts.viewId, st); renderBody(); } };
     fr.remove = (id) => { st.filters = st.filters.filter((f) => f.field !== id); saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
+    fr.clear = () => { st.filters = []; saveState(opts.viewId, st); renderBody(); fr.onChange?.(); };
   }
 
   function renderBody(): void {

@@ -231,7 +231,15 @@ function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef
     document.addEventListener('click', () => document.getElementById('qam-flt-pop')?.classList.remove('on'));
     filterOutsideBound = true;
   }
-  toolbar.append(btn);
+  // 条件クリア: 検索・列フィルタ（履歴は期間・種別も）を一括リセット。
+  const clearBtn = el('button', { class: 'btn btn--sm', title: '検索・列フィルタ' + (state.mode === 'history' ? '・期間・種別' : '') + 'を一括クリア', html: `${icon('x', 14)}<span>条件クリア</span>` });
+  clearBtn.addEventListener('click', () => {
+    state.q = '';
+    fr.clear();
+    if (state.mode === 'history') { state.histFrom = ''; state.histTo = ''; state.histStamp = ''; state.change = new Set(['added', 'modified', 'deleted']); }
+    refresh();
+  });
+  toolbar.append(btn, clearBtn);
   renderChips();
 }
 let filterOutsideBound = false;
@@ -409,11 +417,6 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     el('span', { class: 'qam-count' }, ['〜']),
     mkDate(state.histTo, true, (v) => (state.histTo = v)),
   );
-  if (state.histFrom || state.histTo) {
-    const clr = el('button', { class: 'btn btn--sm btn--ghost', title: '期間をクリア' }, ['クリア']);
-    clr.addEventListener('click', () => { state.histFrom = ''; state.histTo = ''; state.histStamp = ''; refresh(); });
-    toolbar.append(clr);
-  }
   for (const ch of ['added', 'modified', 'deleted']) {
     const cb = el('input', { type: 'checkbox' }) as HTMLInputElement; cb.checked = state.change.has(ch);
     cb.addEventListener('change', () => { cb.checked ? state.change.add(ch) : state.change.delete(ch); refresh(); });
