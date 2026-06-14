@@ -163,7 +163,10 @@ export function renderTable(opts: TableOpts): HTMLElement {
     colPop.append(allLab, listWrap);
     if (values.length > capped.length) colPop.append(el('div', { class: 'qam-colmenu-note' }, [`値が多いため先頭 ${capped.length} 件のみ`]));
 
+    // 表示は常に ex の純粋関数。チェック切替のたびに再描画して「再表示時にチェック位置がずれる」のを防ぐ。
+    // スクロール位置は維持。
     const renderList = (q: string): void => {
+      const scroll = listWrap.scrollTop;
       clear(listWrap);
       const ql = q.trim().toLowerCase();
       const shown = capped.filter((v) => !ql || (v || '(空白)').toLowerCase().includes(ql));
@@ -173,10 +176,11 @@ export function renderTable(opts: TableOpts): HTMLElement {
         const lab = el('label', { class: 'qam-colmenu-item' });
         const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
         cb.checked = !ex.has(v);
-        cb.addEventListener('change', () => { if (cb.checked) ex.delete(v); else ex.add(v); apply(); allCb.checked = shown.every((x) => !ex.has(x)); });
+        cb.addEventListener('change', () => { if (cb.checked) ex.delete(v); else ex.add(v); apply(); renderList(search.value); });
         lab.append(cb, el('span', {}, [v === '' ? '(空白)' : v]));
         listWrap.append(lab);
       }
+      listWrap.scrollTop = scroll;
     };
     allCb.addEventListener('change', () => {
       const ql = search.value.trim().toLowerCase();
@@ -185,6 +189,8 @@ export function renderTable(opts: TableOpts): HTMLElement {
       apply(); renderList(search.value);
     });
     search.addEventListener('input', () => renderList(search.value));
+    // Enter で絞り込みポップオーバーを閉じる（値はチェック時に即適用済み）。IME 変換確定の Enter は無視。
+    search.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); colPop.classList.remove('on'); } });
     renderList('');
     openAt(anchor);
     setTimeout(() => search.focus(), 30);
