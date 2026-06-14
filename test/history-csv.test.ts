@@ -67,7 +67,7 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     const ev = parseHistoryCsv('host', csv);
     expect(ev[0].id).toBe('');               // 未解決は空（FQDN を Host ID に流用しない）
     expect(ev[0].name).toBe('host1.example'); // FQDN は「名前」列に残る
-    expect(ev[0].field).toBe('メモ');
+    expect(ev[0].field).toBe('');            // CSV取込は項目単位でないため「変更項目」は空
     expect(ev[0].new).toContain('初期構築');
     expect(ev[0].new).toContain('接続点名:東京拠点');
     expect(ev[0].new).toContain('外接番号:EXT1');

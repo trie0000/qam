@@ -57,7 +57,6 @@ interface HistSpec {
   date: RegExp;
   type: RegExp;                    // 変更種別の列（その値で 種別 を決める。無ければ content から推定）。
   content: RegExp | null;          // 本文に使う列（更新内容 / host はメモ）。
-  field: string;                   // 「項目」列の表示ラベル。
   keyCols: RegExp[];               // Qualys ID へ解決する識別名（タイトル/FQDN/ドメイン名/アカウント名）。
   keyIsIdentity: boolean;          // keyCols の値が Qualys キー自体か（true なら未解決でも ID に採用）。
   name: RegExp[];                  // 表示名。
@@ -65,22 +64,22 @@ interface HistSpec {
 }
 const SPECS: Record<QamEntity, HistSpec> = {
   group: {
-    date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
+    date: /更新日/, type: /種別/, content: /更新内容/,
     keyCols: [/タイトル/], keyIsIdentity: false, name: [/タイトル/],
     extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['Function', /Function|機能|接続.*名称/i], ['Location', /Location|拠点/i], ['コメント', /comment|コメント/i]],
   },
   domain: {
-    date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
+    date: /更新日/, type: /種別/, content: /更新内容/,
     keyCols: [/ドメイン名/], keyIsIdentity: true, name: [/ドメイン名/],
     extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['IP範囲from', /from/i], ['IP範囲to', /to/i], ['外接番号', /外接/]],
   },
   host: {
-    date: /更新日/, type: /種別/, content: /メモ/, field: 'メモ',
+    date: /更新日/, type: /種別/, content: /メモ/,
     keyCols: [/FQDN/i], keyIsIdentity: false, name: [/FQDN/i, /接続[店点]名/],
     extras: [['接続点名', /接続[店点]名/], ['IP', /IP|アドレス/i], ['外接番号', /外接/]],
   },
   user: {
-    date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
+    date: /更新日/, type: /種別/, content: /更新内容/,
     keyCols: [/アカウント名/], keyIsIdentity: true, name: [/氏名/, /アカウント名/],
     extras: [['接続点ID', /接続点ID/i], ['姓', /姓/], ['名', /名前/], ['事業場', /事業/], ['TEL', /TEL|電話/i],
       ['Email', /mail|メール/i], ['Language', /Language|言語/i], ['権限', /権限|role/i],
@@ -121,7 +120,8 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
       ts: `${date}T00-00-00`,
       entity, id, name,
       change: mapChange(get(typeI)) ?? inferChange(content || extras.join(' ')), // 変更種別列を優先、無ければ推定
-      field: spec.field,
+      // CSV取込は項目単位の差分ではないため「変更項目」は空（内容は変更後列にまとめて入れる）。
+      field: '',
       old: '',
       // 全種別統一: 変更後/追加 列の先頭に「CSVインポートで登録」を入れ、取込履歴と分かるようにする。
       new: ['CSVインポートで登録', content, ...extras].filter(Boolean).join(' / '),

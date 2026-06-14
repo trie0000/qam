@@ -237,7 +237,7 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
     { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => CHANGE_LABEL[e.change] ?? e.change },
     { id: 'id', label: HIST_ID_LABEL[entity], mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
     { id: 'name', label: HIST_NAME_LABEL[entity], render: (e: QamEvent) => esc(e.name) },
-    { id: 'field', label: '変更項目', render: (e: QamEvent) => esc(e.field ?? ''), sortVal: (e: QamEvent) => e.field ?? '' },
+    { id: 'field', label: '変更項目', render: (e: QamEvent) => esc(e.field ? fieldLabel(entity, e.field) : ''), sortVal: (e: QamEvent) => (e.field ? fieldLabel(entity, e.field) : '') },
     { id: 'old', label: '変更前/削除', render: oldCell, sortable: false },
     { id: 'new', label: '変更後/追加', render: newCell, sortable: false },
     { id: '_c', label: 'メモ', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) },
