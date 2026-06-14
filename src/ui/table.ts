@@ -35,6 +35,7 @@ export interface TableOpts {
   exportRef?: { fn?: () => ExportMatrix };
   filterRef?: FilterRef;                                          // フィルタ操作の窓口（任意）
   columnRef?: { open?: (anchor: HTMLElement) => void };          // 列表示メニューを開く窓口（ボタンは外側に置く）
+  onRowClick?: (row: any) => void;                                // 行クリック（チェックボックス/編集セル等は stopPropagation 済みなので発火しない）
 }
 
 // 描画上限。通常は全件描画してスクロール表示。極端な件数でのフリーズだけ保護する高い上限。
@@ -267,7 +268,8 @@ export function renderTable(opts: TableOpts): HTMLElement {
     const rows = displayedRows();
     for (const row of rows.slice(0, MAX_ROWS)) {
       const key = opts.getKey(row);
-      const tr = el('tr', { class: opts.selected.has(key) ? 'qam-selected' : '' });
+      const tr = el('tr', { class: (opts.selected.has(key) ? 'qam-selected' : '') + (opts.onRowClick ? ' qam-row-click' : '') });
+      if (opts.onRowClick) tr.addEventListener('click', () => opts.onRowClick!(row)); // チェック/編集セルは stopPropagation 済み
       const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
       cb.checked = opts.selected.has(key);
       cb.addEventListener('click', (e) => e.stopPropagation());

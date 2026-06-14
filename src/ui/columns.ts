@@ -191,34 +191,44 @@ const FIELD_LABELS: Record<string, string> = {
 const fieldLabel = (entity: QamEntity, k: string): string =>
   k === 'name' ? HIST_NAME_LABEL[entity] : k === 'key' ? HIST_ID_LABEL[entity] : (FIELD_LABELS[k] ?? k);
 
-// 削除資産のプロパティをプロパティシート風（ラベル｜値）にモーダル表示。
-function openDeletedProps(e: QamEvent): void {
+// 変更履歴イベントの資産情報をプロパティシート風（ラベル｜値）にモーダル表示（行クリックで開く）。
+// 追加/削除イベントは取込時に記録した資産スナップショット(props)を、変更イベントは変更項目の前後を出す。
+export function openEventProps(e: QamEvent): void {
   const body = el('div', { class: 'qam-props' });
   body.append(el('div', { class: 'qam-props-head' }, [
-    el('span', { class: 'qam-tag qam-tag--deleted' }, ['削除']),
+    el('span', { class: `qam-tag qam-tag--${e.change}` }, [CHANGE_LABEL[e.change] ?? e.change]),
     el('span', { class: 'qam-props-id' }, [`${HIST_ID_LABEL[e.entity]}: ${e.id}`]),
   ]));
-  const rows = e.props ?? [];
-  for (const p of rows) {
-    body.append(el('div', { class: 'qam-prop-row' }, [
-      el('div', { class: 'qam-prop-k' }, [fieldLabel(e.entity, p.k)]),
-      el('div', { class: 'qam-prop-v', title: p.v }, [p.v]),
+  const propRow = (k: string, v: string): HTMLElement => el('div', { class: 'qam-prop-row' }, [
+    el('div', { class: 'qam-prop-k' }, [k]),
+    el('div', { class: 'qam-prop-v', title: v }, [v]),
+  ]);
+  if (e.props?.length) {
+    // 追加/削除: 記録済みの資産スナップショット
+    for (const p of e.props) body.append(propRow(fieldLabel(e.entity, p.k), p.v));
+  } else if (e.change === 'modified') {
+    // 変更: 名前＋変更項目の前後
+    body.append(propRow(HIST_NAME_LABEL[e.entity], e.name || ''));
+    if (e.field) body.append(propRow('変更項目', fieldLabel(e.entity, e.field)));
+    const before = e.removed?.length ? e.removed.join(', ') : (e.old ?? '');
+    const after = e.added?.length ? e.added.join(', ') : (e.new ?? '');
+    body.append(propRow('変更前', before), propRow('変更後', after));
+  } else {
+    // props 未記録（この機能の導入前 / CSV取込の履歴）
+    body.append(propRow(HIST_NAME_LABEL[e.entity], e.name || ''));
+    body.append(el('div', { class: 'qam-callout', style: 'margin-top:var(--s-3)' }, [
+      el('span', { html: icon('alert', 13) }),
+      el('span', {}, ['この履歴には資産スナップショットが記録されていません（機能導入前、またはCSV取込の履歴）。']),
     ]));
   }
-  openModal({ title: `削除資産のプロパティ — ${e.name || e.id}`, body });
+  const label = CHANGE_LABEL[e.change] ?? e.change;
+  openModal({ title: `${label}アセットの情報 — ${e.name || e.id}`, body });
 }
 
 // agSetten: host ID → 所属AGの接続点ID（host履歴用、main から渡す）。group はタイトルから算出。
 export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}): Column[] {
-  // 削除イベントは「変更前/削除」セルに削除資産のプロパティを開くボタンを出す（記録があれば）。
-  const oldCell = (e: QamEvent): string | Node => {
-    if (e.change === 'deleted' && e.props?.length) {
-      const btn = el('button', { class: 'qam-prop-btn', html: `${icon('file', 12)}<span>プロパティを表示</span>` });
-      btn.addEventListener('click', (ev) => { ev.stopPropagation(); openDeletedProps(e); });
-      return btn;
-    }
-    return e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
-  };
+  // 資産情報は行クリックで開く（openEventProps）。ここは変更前/削除値の表示のみ。
+  const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   // 接続点ID: group はタイトル(e.name)から算出、host は所属AGの接続点ID(agSetten[e.id])。
   const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));

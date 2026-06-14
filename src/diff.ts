@@ -40,7 +40,7 @@ export function compareSnapshots(prev: QamRecords | null, curr: QamRecords, enti
   const prevKeys = prev ? Object.keys(prev) : [];
   const currKeys = Object.keys(curr);
   for (const k of currKeys) {
-    if (!prev || !(k in prev)) events.push(evt(entity, k, curr[k].name, 'added', date));
+    if (!prev || !(k in prev)) { const e = evt(entity, k, curr[k].name, 'added', date); e.props = recordProps(curr[k]); events.push(e); }
   }
   for (const k of prevKeys) {
     if (!(k in curr)) { const e = evt(entity, k, prev![k].name, 'deleted', date); e.props = recordProps(prev![k]); events.push(e); }

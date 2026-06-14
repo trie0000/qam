@@ -77,10 +77,13 @@ describe('diff', () => {
     const ips = ev.find((e) => e.field === 'IPS')!;
     expect(ips.added).toEqual(['10.0.0.9']);
     expect(ips.removed).toEqual([]);
-    // 削除イベントは削除直前の資産プロパティ（name 含む）を保持する。
+    // 追加/削除イベントはその時点の資産プロパティ（name 含む）を保持する。
     const del = ev.find((e) => e.change === 'deleted')!;
     expect(del.props && del.props.length).toBeTruthy();
     expect(del.props!.some((p) => p.k === 'name' && p.v)).toBe(true);
+    const add = ev.find((e) => e.change === 'added')!;
+    expect(add.props && add.props.length).toBeTruthy();
+    expect(add.props!.some((p) => p.k === 'name' && p.v)).toBe(true);
   });
   it('host: OS 変更', () => {
     const ev = compareSnapshots(parseQualysXml(HOST1).records, parseQualysXml(HOST2).records, 'host', '2026-06-13');

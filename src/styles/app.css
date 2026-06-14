@@ -215,6 +215,7 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-col-check { width: 38px; text-align: center; overflow: visible; text-overflow: clip; padding-left: var(--s-2); padding-right: var(--s-2); }
 .qam-col-check input { cursor: pointer; }
 .qam-table tbody tr:hover { background: var(--paper-2); }
+.qam-table tbody tr.qam-row-click { cursor: pointer; }
 .qam-table tbody tr.qam-selected { background: var(--accent-soft); }
 .qam-mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
 /* 一覧内コメント: 最新を直接表示し、その場編集。右にスレッドボタン(件数)。 */

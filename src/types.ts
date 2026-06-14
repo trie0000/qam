@@ -35,7 +35,7 @@ export interface QamEvent {
   new?: string;
   added?: string[];
   removed?: string[];
-  // 削除イベント時、削除直前の資産プロパティ（フィールドキー→値）。表示用スナップショット。
+  // 追加/削除イベント時、その時点の資産プロパティ（フィールドキー→値）。表示用スナップショット。
   props?: { k: string; v: string }[];
 }
 

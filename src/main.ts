@@ -8,7 +8,7 @@ import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns, settenId, type CommentApi, type AnnotApi } from './ui/columns';
+import { assetColumns, historyColumns, settenId, openEventProps, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
@@ -547,7 +547,7 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   host.append(renderTable({
     viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
-    bulkActions: histBulk,
+    bulkActions: histBulk, onRowClick: (e: QamEvent) => openEventProps(e), // 行クリックで追加/削除/変更したアセットの情報を表示
   }));
   addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '変更履歴', exportRef, columnRef);
