@@ -212,7 +212,7 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
   const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));
   const cols: Column[] = [
     { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
-    { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => e.change },
+    { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => CHANGE_LABEL[e.change] ?? e.change },
     { id: 'id', label: HIST_ID_LABEL[entity], mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
     { id: 'name', label: HIST_NAME_LABEL[entity], render: (e: QamEvent) => esc(e.name) },
     { id: 'field', label: '変更項目', render: (e: QamEvent) => esc(e.field ?? ''), sortVal: (e: QamEvent) => e.field ?? '' },
