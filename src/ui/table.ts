@@ -188,8 +188,16 @@ export function renderTable(opts: TableOpts): HTMLElement {
       if (allCb.checked) shown.forEach((v) => ex.delete(v)); else shown.forEach((v) => ex.add(v));
       apply(); renderList(search.value);
     });
-    search.addEventListener('input', () => renderList(search.value));
-    // Enter で絞り込みポップオーバーを閉じる（値はチェック時に即適用済み）。IME 変換確定の Enter は無視。
+    // 検索ボックス入力: 入力文字を含む値だけを「選択(チェック)」状態にし、それ以外を除外して即適用。
+    // 空入力なら全選択に戻す。表示リストは一致値（＝チェック済み）のみ。Enter/外側クリックで保ったまま閉じる。
+    search.addEventListener('input', () => {
+      const ql = search.value.trim().toLowerCase();
+      ex.clear();
+      if (ql) for (const v of values) if (!(v || '(空白)').toLowerCase().includes(ql)) ex.add(v);
+      apply();
+      renderList(search.value);
+    });
+    // Enter で絞り込みポップオーバーを閉じる（検索フィルタは適用済みのまま保持）。IME 変換確定の Enter は無視。
     search.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); colPop.classList.remove('on'); } });
     renderList('');
     openAt(anchor);
