@@ -138,9 +138,10 @@ body {
 .qam-bulk-info { display: flex; align-items: center; gap: var(--s-4); }
 .qam-bulk .qam-bulk-actions { display: flex; gap: var(--s-2); }
 /* 列表示メニュー（チェックで表示/非表示） */
-.qam-colmenu { position: fixed; display: none; width: 250px; max-height: 380px; overflow-y: auto; padding: var(--s-3); z-index: 1000;
+/* 外側はスクロールさせない（中身に合わせて伸び、上限超過時は内側の値リストだけがスクロール＝二重スクロール防止）。 */
+.qam-colmenu { position: fixed; display: none; flex-direction: column; width: 250px; max-height: min(78vh, 560px); overflow: hidden; padding: var(--s-3); z-index: 1000;
   background: var(--paper); border: 1px solid var(--paper-3); border-radius: var(--r-3); box-shadow: var(--shadow-flyout); font-family: var(--font-sans); }
-.qam-colmenu.on { display: block; }
+.qam-colmenu.on { display: flex; }
 .qam-colmenu-head { font-size: var(--fs-xs); color: var(--ink-4); padding: 0 var(--s-3) var(--s-2); }
 .qam-colmenu-item { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-2); cursor: pointer; font-size: var(--fs-md); color: var(--ink); }
 .qam-colmenu-item:hover { background: var(--paper-2-strong); }
@@ -151,7 +152,7 @@ body {
 .qam-colmenu-search { width: 100%; box-sizing: border-box; height: 28px; margin-bottom: var(--s-2); padding: 2px var(--s-3);
   border: 1px solid var(--paper-3); border-radius: var(--r-2); background: var(--paper); color: var(--ink); font: inherit; font-size: var(--fs-sm); outline: none; }
 .qam-colmenu-search:focus { border-color: var(--accent); }
-.qam-colmenu-vlist { max-height: 220px; overflow-y: auto; }
+.qam-colmenu-vlist { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .qam-colmenu-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qam-colmenu-all { border-bottom: 1px solid var(--line); margin-bottom: var(--s-1); }
 .qam-colmenu-note { font-size: var(--fs-xs); color: var(--ink-4); padding: var(--s-2) var(--s-3) 0; }

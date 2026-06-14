@@ -118,6 +118,8 @@ export function renderTable(opts: TableOpts): HTMLElement {
     if (colPop.classList.contains('on')) { colPop.classList.remove('on'); return; }
     clear(colPop);
     colPop.append(el('div', { class: 'qam-colmenu-head' }, ['表示する列']));
+    // リストは内側だけスクロール（外側ポップオーバーは中身に合わせて伸びる＝二重スクロール防止）。
+    const listWrap = el('div', { class: 'qam-colmenu-vlist' });
     cols.forEach((c) => {
       const lab = el('label', { class: 'qam-colmenu-item' });
       const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -128,8 +130,9 @@ export function renderTable(opts: TableOpts): HTMLElement {
         saveState(opts.viewId, st); render();
       });
       lab.append(cb, el('span', {}, [c.label || c.id]));
-      colPop.append(lab);
+      listWrap.append(lab);
     });
+    colPop.append(listWrap);
     openAt(anchor);
   }
   if (opts.columnRef) opts.columnRef.open = openColumnList;
