@@ -8,7 +8,7 @@ import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns, settenId, openEventProps, type CommentApi, type AnnotApi } from './ui/columns';
+import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
@@ -562,7 +562,7 @@ async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLE
     .filter((o) => matchQ([o.author, o.action, o.entity, o.detail, o.ts]));
   count.textContent = `${rows.length} 件`;
   const cols: Column[] = [
-    { id: 'ts', label: '操作日時', mono: true, render: (o: QamOp) => esc(o.ts.slice(0, 19).replace('T', ' ')), sortVal: (o: QamOp) => o.ts },
+    { id: 'ts', label: '操作日時', mono: true, render: (o: QamOp) => esc(fmtJst(o.ts)), sortVal: (o: QamOp) => o.ts },
     { id: 'author', label: '作業者', render: (o: QamOp) => esc(o.author || '(未設定)') },
     { id: 'action', label: '操作', render: (o: QamOp) => esc(o.action) },
     { id: 'entity', label: '対象', render: (o: QamOp) => esc(entLabel(o.entity)) },
