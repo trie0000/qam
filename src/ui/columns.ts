@@ -11,6 +11,18 @@ export const changeTag = (c: string): string => `<span class="qam-tag qam-tag--$
 
 const joined = (a?: string[]): string => esc((a ?? []).join(', '));
 
+// ISO UTC（例 2024-06-13T08:30:00Z）→ JST 表示 'YYYY-MM-DD HH:MM:SS JST'。
+// 日本は夏時間なしなので UTC+9 固定。端末のタイムゾーンに依存しないよう getUTC* で組み立てる。
+// パースできない/空はそのまま返す。
+export function fmtJst(iso: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const j = new Date(d.getTime() + 9 * 3600 * 1000);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${j.getUTCFullYear()}-${p(j.getUTCMonth() + 1)}-${p(j.getUTCDate())} ${p(j.getUTCHours())}:${p(j.getUTCMinutes())}:${p(j.getUTCSeconds())} JST`;
+}
+
 // 接続点ID: AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出す（形式ルールは設けない）。
 export const settenId = (title: string): string => (title || '').split(' ')[0];
 
@@ -134,14 +146,14 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
     c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
     editCol('DIVISION', '事業場名(Division)', 'DIVISION'), editCol('FUNCTION', '接続名称(Function)', 'FUNCTION'),
     editCol('LOCATION', '拠点名称(Location)', 'LOCATION'), editCol('COMMENTS', 'コメント(Comments)', 'COMMENTS'),
-    c('LAST_UPDATE', '最終更新', (r) => esc(r.info.LAST_UPDATE ?? ''), true), comment,
+    c('LAST_UPDATE', '最終更新', (r) => esc(fmtJst(r.info.LAST_UPDATE ?? '')), true), comment,
   ];
   if (entity === 'host') return [
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'FQDN', (r) => esc(r.name)),
     c('AG_SETTEN', '接続点ID', (r) => esc(agSetten[r.key] ?? ''), true),
     c('IP', 'IP', sc('IP'), true), c('OS', 'OS', sc('OS')),
     c('TRACKING_METHOD', 'Tracking', sc('TRACKING_METHOD')), c('NETBIOS', 'NetBIOS', sc('NETBIOS')),
-    c('LAST_VULN_SCAN_DATETIME', '最終スキャン', (r) => esc(r.info.LAST_VULN_SCAN_DATETIME ?? ''), true), comment,
+    c('LAST_VULN_SCAN_DATETIME', '最終スキャン', (r) => esc(fmtJst(r.info.LAST_VULN_SCAN_DATETIME ?? '')), true), comment,
   ];
   if (entity === 'user') return [
     c('key', 'ユーザID', (r) => esc(r.key), true), c('USER_LOGIN', 'ログイン', sc('USER_LOGIN'), true),
