@@ -82,6 +82,9 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].change).toBe('added');
     expect(ev[0].new).toContain('接続点ID:AB123');
     expect(ev[0].new).toContain('IP:10.1.1.1');
+    // IP/FQDN を props と変更項目に入れる（追加/削除IP・FQDN 列に出すため）
+    expect(ev[0].field).toBe('IPアドレス・FQDN');
+    expect(ev[0].props).toEqual(expect.arrayContaining([{ k: 'FQDN', v: 'host1.example' }, { k: 'IP', v: '10.1.1.1' }]));
   });
 
   it('user: アカウント名=id / 氏名=name / 権限などを併記', () => {

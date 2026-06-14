@@ -166,10 +166,12 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     for (const g of groups.values()) {
       const ranges = consolidateRanges(g.pairs);
       const extras = [g.sid ? `接続点ID:${g.sid}` : '', ranges ? `IP:${ranges}` : ''].filter(Boolean);
+      // props に NETBLOCK(=IP範囲) を入れて、追加/削除IP 列・行クリックに反映させる。変更項目も付ける。
+      const props = [ranges ? { k: 'NETBLOCK', v: ranges } : null, g.sid ? { k: '接続点ID', v: g.sid } : null].filter(Boolean) as { k: string; v: string }[];
       events.push({
         eid: `domain:${g.id}:${g.date}:import:${i++}`, ts: `${g.date}T00-00-00`,
-        entity: 'domain', id: g.id, name: g.name, change: g.change, field: '', old: '',
-        new: [marker, ...extras].join(' / '),
+        entity: 'domain', id: g.id, name: g.name, change: g.change, field: 'IPアドレス範囲', old: '',
+        new: [marker, ...extras].join(' / '), props,
       });
     }
     if (!events.length) throw new Error('取り込める行がありません（更新日・ドメイン名列を確認してください）');
@@ -189,18 +191,27 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     let name = nameIdx.map(get).find((v) => v) || rawKey;
     if (entity === 'host') name = stripProtocol(name);
     const content = get(contentI);
-    const extras = extraDefs.map(([label, j]) => [label, get(j)] as [string, string])
-      .filter(([, v]) => v).map(([k, v]) => `${k}:${v}`);
+    const extraVals: Record<string, string> = {};
+    extraDefs.forEach(([label, j]) => { const v = get(j); if (v) extraVals[label] = v; });
+    const extras = Object.entries(extraVals).map(([k, v]) => `${k}:${v}`);
+    // host は IP/FQDN を props に入れて、追加/削除IP・FQDN 列・行クリックに反映させる。変更項目も付ける。
+    let props: { k: string; v: string }[] | undefined;
+    let field = '';
+    if (entity === 'host') {
+      props = [{ k: 'FQDN', v: name }, { k: 'IP', v: extraVals.IP ?? '' }].filter((p) => p.v);
+      field = 'IPアドレス・FQDN';
+    }
     events.push({
       eid: `${entity}:${id}:${date}:import:${i}`,
       ts: `${date}T00-00-00`,
       entity, id, name,
       change: mapChange(get(typeI)) ?? inferChange(content || extras.join(' ')), // 変更種別列を優先、無ければ推定
-      // CSV取込は項目単位の差分ではないため「変更項目」は空（内容は変更後列にまとめて入れる）。
-      field: '',
+      // CSV取込は項目単位の差分ではない。host/domain は IP/FQDN を props・変更項目に出す。group/user は空。
+      field,
       old: '',
       // 全種別統一: 変更後/追加 列の先頭に「CSVインポートで登録」を入れ、取込履歴と分かるようにする。
       new: [marker, content, ...extras].filter(Boolean).join(' / '),
+      ...(props && props.length ? { props } : {}),
     });
   });
   if (!events.length) throw new Error('取り込める行がありません（更新日・識別名列を確認してください）');

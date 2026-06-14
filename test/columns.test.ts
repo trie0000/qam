@@ -72,4 +72,27 @@ describe('historyColumns 追加/削除 値列', () => {
     const e = ev({ entity: 'domain', field: 'NETBLOCK', added: ['10.0.1.0-10.0.1.255'], removed: [] });
     expect(cellOf(cols, 'add_ip', e)).toBe('10.0.1.0-10.0.1.255');
   });
+
+  it('CSV取込(props+変更項目)でも追加/削除IP・FQDN列に出る', () => {
+    const cols = historyColumns('host', noComments as any);
+    // 追加: props の IP/FQDN が「追加」側に出る（field は列キーと一致しないので props 経路）
+    const added = ev({ entity: 'host', change: 'added', field: 'IPアドレス・FQDN', props: [{ k: 'IP', v: '10.1.1.1' }, { k: 'FQDN', v: 'h1.example' }] });
+    expect(cellOf(cols, 'add_ip', added)).toBe('10.1.1.1');
+    expect(cellOf(cols, 'add_fqdn', added)).toBe('h1.example');
+    expect(cellOf(cols, 'rem_ip', added)).toBe('');
+    // 削除: 同じ props が「削除」側に出る
+    const deleted = ev({ entity: 'host', change: 'deleted', field: 'IPアドレス・FQDN', props: [{ k: 'IP', v: '10.1.1.1' }, { k: 'FQDN', v: 'h1.example' }] });
+    expect(cellOf(cols, 'rem_ip', deleted)).toBe('10.1.1.1');
+    expect(cellOf(cols, 'rem_fqdn', deleted)).toBe('h1.example');
+    expect(cellOf(cols, 'add_ip', deleted)).toBe('');
+  });
+
+  it('domain/host は名前列を出さない（host は IP列も無し）', () => {
+    expect(historyColumns('domain', noComments as any).some((c) => c.id === 'name')).toBe(false);
+    const host = historyColumns('host', noComments as any);
+    expect(host.some((c) => c.id === 'name')).toBe(false);
+    expect(host.some((c) => c.id === 'ip')).toBe(false);
+    // group/user は名前列あり
+    expect(historyColumns('group', noComments as any).some((c) => c.id === 'name')).toBe(true);
+  });
 });

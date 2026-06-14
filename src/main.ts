@@ -557,19 +557,12 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
   const agSetten = await buildAgSetten(state.entity, ''); // host履歴の接続点ID（最新AG基準）
-  // host履歴の IP 列（最新スナップショットの host ID→IP。削除等は props から補完）。
-  const hostIp: Record<string, string> = {};
-  if (state.entity === 'host') {
-    const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
-    const hSnap = hStamp ? await readSnapshot(backend, 'host', hStamp) : null;
-    for (const r of Object.values(hSnap?.records ?? {}) as QamRecord[]) hostIp[r.key] = r.scalar.IP || '';
-  }
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
   host.append(renderTable({
-    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten, hostIp),
+    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
     bulkActions: histBulk, onRowClick: (e: QamEvent) => openEventProps(e), // 行クリックで追加/削除/変更したアセットの情報を表示
   }));

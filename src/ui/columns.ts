@@ -226,52 +226,40 @@ export function openEventProps(e: QamEvent): void {
 }
 
 // agSetten: host ID → 所属AGの接続点ID（host履歴用、main から渡す）。group はタイトルから算出。
-// hostIp: host ID → IP（host履歴のIP列用。最新スナップショット由来。無ければ props から補完）。
-export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}, hostIp: Record<string, string> = {}): Column[] {
+export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}): Column[] {
   // 資産情報は行クリックで開く（openEventProps）。ここは変更前/削除値の表示のみ。
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   // 接続点ID: group はタイトル(e.name)から算出、host は所属AGの接続点ID(agSetten[e.id])。
   const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));
-  // IP: 最新スナップショット(hostIp) を優先、無ければイベントのprops(追加/削除時の記録)から。
-  const ipOf = (e: QamEvent): string => hostIp[e.id] || (e.props?.find((p) => p.k === 'IP')?.v ?? '');
-  // 変更履歴の「追加された/削除された 値」列。modified は set=added/removed・scalar=new/old、
-  // 追加/削除(資産まるごと)は props の全値（追加側 or 削除側）から取り出す。
+  // 「追加された/削除された 値」列。優先: modified の項目別差分(set=added/removed・scalar=new/old)。
+  // 無ければ props から（追加/変更→追加側、削除→削除側）。CSV取込も props を入れるので各列に出る。
   const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
   const addedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {
-    if (e.change === 'added') return propVal(e, (setF ?? scalarF)!);
-    if (e.change === 'deleted') return '';
-    if (setF && e.field === setF) return (e.added ?? []).join(', ');
-    if (scalarF && e.field === scalarF) return e.new ?? '';
+    if (setF && e.field === setF && e.added?.length) return e.added.join(', ');
+    if (scalarF && e.field === scalarF && e.new) return e.new;
+    if (e.change === 'added' || e.change === 'modified') return propVal(e, (setF ?? scalarF)!);
     return '';
   };
   const removedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {
+    if (setF && e.field === setF && e.removed?.length) return e.removed.join(', ');
+    if (scalarF && e.field === scalarF && e.old) return e.old;
     if (e.change === 'deleted') return propVal(e, (setF ?? scalarF)!);
-    if (e.change === 'added') return '';
-    if (setF && e.field === setF) return (e.removed ?? []).join(', ');
-    if (scalarF && e.field === scalarF) return e.old ?? '';
     return '';
   };
   const mkChg = (id: string, label: string, fn: (e: QamEvent) => string, mono = false): Column =>
     ({ id, label, mono, render: (e: QamEvent) => esc(fn(e)), sortVal: fn });
-  const cols: Column[] = [
-    { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
-    { id: 'change', label: '変更種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => CHANGE_LABEL[e.change] ?? e.change },
-    { id: 'id', label: HIST_ID_LABEL[entity], mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
-    { id: 'name', label: HIST_NAME_LABEL[entity], render: (e: QamEvent) => esc(e.name) },
-    { id: 'field', label: '変更項目', render: (e: QamEvent) => esc(e.field ? fieldLabel(entity, e.field) : ''), sortVal: (e: QamEvent) => (e.field ? fieldLabel(entity, e.field) : '') },
-    { id: 'old', label: '変更前/削除', render: oldCell, sortable: false },
-    { id: 'new', label: '変更後/追加', render: newCell, sortable: false },
-    { id: '_c', label: 'メモ', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) },
-  ];
-  // AssetGroup / Host は接続点ID列を「名前」の直後に挿入。Host はさらに IP 列をその直後に。
-  if (entity === 'group' || entity === 'host') {
-    cols.splice(4, 0, { id: 'setten', label: '接続点ID', mono: true, render: (e: QamEvent) => esc(settenOf(e)), sortVal: settenOf });
-  }
-  if (entity === 'host') {
-    cols.splice(5, 0, { id: 'ip', label: 'IP', mono: true, render: (e: QamEvent) => esc(ipOf(e)), sortVal: ipOf });
-  }
-  // 追加/削除された値の専用列（種別ごと）。メモ列の直前に差し込む。
+  const tsCol: Column = { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts };
+  const changeCol: Column = { id: 'change', label: '変更種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => CHANGE_LABEL[e.change] ?? e.change };
+  const idCol: Column = { id: 'id', label: HIST_ID_LABEL[entity], mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id };
+  const nameCol: Column = { id: 'name', label: HIST_NAME_LABEL[entity], render: (e: QamEvent) => esc(e.name) };
+  const settenCol: Column = { id: 'setten', label: '接続点ID', mono: true, render: (e: QamEvent) => esc(settenOf(e)), sortVal: settenOf };
+  const fieldCol: Column = { id: 'field', label: '変更項目', render: (e: QamEvent) => esc(e.field ? fieldLabel(entity, e.field) : ''), sortVal: (e: QamEvent) => (e.field ? fieldLabel(entity, e.field) : '') };
+  const oldCol: Column = { id: 'old', label: '変更前/削除', render: oldCell, sortable: false };
+  const newCol: Column = { id: 'new', label: '変更後/追加', render: newCell, sortable: false };
+  const memoCol: Column = { id: '_c', label: 'メモ', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) };
+
+  // 追加/削除された値の専用列（種別ごと）。
   const extra: Column[] = entity === 'group'
     ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'IPS'), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'IPS'), true),
        mkChg('add_dns', '追加DNS', (e) => addedOf(e, null, 'DNS_LIST')), mkChg('rem_dns', '削除DNS', (e) => removedOf(e, null, 'DNS_LIST'))]
@@ -281,6 +269,13 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
       : entity === 'domain'
         ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'NETBLOCK'), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'NETBLOCK'), true)]
         : [];
-  if (extra.length) { const mi = cols.findIndex((c) => c.id === '_c'); cols.splice(mi < 0 ? cols.length : mi, 0, ...extra); }
+
+  // 列構成（entityごと）:
+  //  - domain は「名前」列を出さない（ドメイン名=ID列と重複するため）。
+  //  - host は「名前(FQDN)」「IP」列を出さない（追加/削除FQDN・IP列で代替）。
+  const cols: Column[] = [tsCol, changeCol, idCol];
+  if (entity === 'group' || entity === 'host') cols.push(settenCol);
+  if (entity === 'group' || entity === 'user') cols.push(nameCol);
+  cols.push(fieldCol, ...extra, oldCol, newCol, memoCol);
   return cols;
 }
