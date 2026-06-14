@@ -84,17 +84,19 @@ FQDN は `DNS_DATA/FQDN`、無ければ `DNS`。
 </DOMAIN_LIST>
 ```
 
-## User — `/api/2.0/fo/user/?action=list`（v2 FO・GET・session/Basic）
+## User — `POST /qps/rest/2.0/search/am/user/`（QPS RBAC・Basic 認証）
 
-VMDR では MSP `/msp/user_list.php` が access denied になりがちなので v2 FO を使う。応答は
-`USER_LIST_OUTPUT`。重要: **`ASSIGNED_ASSET_GROUPS`（このユーザがアクセスできる AssetGroup タイトル）** を含む
-（Manager/Auditor は割当が無く全体アクセス＝空になる）。`User-Agent` 必須（無いと WAF が 403/空応答）。
-以前 v2 が 403 だったのは UA 欠落の WAF 拒否が原因。`X-Requested-With` 必須。キーは `USER_ID || USER_LOGIN`。
+公式: docs.qualys.com の Administration/RBAC API。**`/api/2.0/fo/user/` は存在しない**（403/404 になる）。
+旧 `/msp/user_list.php`（USER_LIST_OUTPUT、ASSIGNED_ASSET_GROUPS 付き）は VMDR では access denied で使えない。
 
-（参考: QPS REST `/qps/rest/2.0/search/am/user` はタグスコープ寄りで割当 AG を持たないため未使用。パーサは
-`ServiceResponse/<User>` も解釈可能なので、必要時に切替できる。）
+- メソッド POST・**末尾スラッシュ必須**・Basic 認証・Content-Type `application/xml`・本文 `<ServiceRequest></ServiceRequest>`（空＝全件）。
+- 応答 `ServiceResponse`（XML）。`User` フィールド: `id`/`username`/`firstName`/`lastName`/`emailAddress`/`title`/
+  `roleList/list/RoleData/name`（ロール）/`scopeTags/list/TagData/name`（**スコープ=タグ**）。
+- 重要: **Active ユーザのみ**返る。スコープは**タグベース**で、**AssetGroup 割当は返らない**（VMDR の RBAC はタグ制御）。
+  「どの AssetGroup にアクセス可能か」は新 API では取得不可（旧 MSP の ASSIGNED_ASSET_GROUPS のみが保持していた）。
+- キーは `id || username`。
 
-### 旧: QPS ServiceResponse 形式（参考）
+### 参考: 旧 FO/MSP 形式 `USER_LIST_OUTPUT`
 
 ```xml
 <ServiceResponse>

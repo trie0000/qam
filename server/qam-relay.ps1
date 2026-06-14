@@ -105,10 +105,11 @@ function Get-QamText1 { param([string]$Xml, [string]$Pattern)
 
 # Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
 function Invoke-QualysFetch { param($Body)
-    # user 一覧(v2)は POST(action=list)で叩く。GET だと Qualys が 403(HTML)を返す（User API は POST 必須）。
+    # user 一覧は QPS RBAC API(POST /qps/rest/2.0/search/am/user/) を Basic 認証で叩く。
+    # （/api/2.0/fo/user/ は存在せず、/msp/user_list.php は VMDR で無効のため。公式: docs.qualys.com admin/api）
     $isUserList = (-not $Body.url) -and ($Body.kind -eq 'user')
-    # noSession 指定時は Basic 認証で叩く（401/403 再試行用）。それ以外は session 優先。
-    $useSession = $script:QSession -and -not $Body.noSession
+    # noSession 指定時は Basic 認証で叩く（401/403 再試行用）。user(QPS) も Basic 固定。
+    $useSession = $script:QSession -and -not $Body.noSession -and -not $isUserList
     # プロキシは本文指定を優先（session 経路でも確実にプロキシを通す。proxy=なしで直結する不具合対策）。
     $proxy = if ($Body.proxy) { $Body.proxy } elseif ($script:QProxy) { $script:QProxy } else { $null }
     $base = if ($Body.base) { ([string]$Body.base).TrimEnd('/') } elseif ($script:QBase) { $script:QBase } else { '' }
@@ -118,9 +119,9 @@ function Invoke-QualysFetch { param($Body)
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
             'host'   { $url = "$base/api/2.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
-            # user 一覧は v2 FO /api/2.0/fo/user/（USER_LIST_OUTPUT、ASSIGNED_ASSET_GROUPS＝割当AG含む）。
-            # action=list はクエリに付け、メソッドは POST（GET だと 403 / クエリ無し POST だと 404 になるため）。
-            'user'   { $url = "$base/api/2.0/fo/user/?action=list" }
+            # user 一覧は QPS RBAC: POST /qps/rest/2.0/search/am/user/（末尾スラッシュ必須）。
+            # 応答 ServiceResponse(XML)。role/scopeTags を含む。Active ユーザのみ返る。
+            'user'   { $url = "$base/qps/rest/2.0/search/am/user/" }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }
@@ -142,9 +143,9 @@ function Invoke-QualysFetch { param($Body)
         Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
         Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
         if ($isUserList) {
-            # User API は POST(action=list)。USER_LIST_OUTPUT を返す。
-            $form = New-Object System.Net.Http.StringContent('action=list', [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
-            $resp = $client.PostAsync($url, $form).Result
+            # QPS REST: POST + ServiceRequest(空=全件)。応答は ServiceResponse(XML)。
+            $reqXml = New-Object System.Net.Http.StringContent('<ServiceRequest></ServiceRequest>', [Text.Encoding]::UTF8, 'application/xml')
+            $resp = $client.PostAsync($url, $reqXml).Result
         } else {
             $resp = $client.GetAsync($url).Result
         }

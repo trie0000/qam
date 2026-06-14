@@ -155,10 +155,14 @@ function readUserQps(u: Element): QamRecord {
   r.scalar.TITLE = pick('title');
   r.scalar.COMPANY = pick('company');
   const active = pick('active');
-  r.scalar.USER_STATUS = active ? (active.toLowerCase() === 'true' ? 'Active' : 'Inactive') : pick('userStatus', 'status');
-  // ロール: roleName/role か、roleList 配下の name を連結。
+  // QPS の user 検索は Active ユーザのみ返す仕様。active が無ければ Active 扱い。
+  r.scalar.USER_STATUS = active ? (active.toLowerCase() === 'true' ? 'Active' : 'Inactive') : (pick('userStatus', 'status') || 'Active');
+  // ロール: roleList/list/RoleData/name を連結。
   const roleList = u.getElementsByTagName('roleList')[0] ?? null;
   r.scalar.USER_ROLE = pick('roleName', 'role') || uniq(tagValues(roleList, 'name')).join(', ');
+  // スコープ: VMDR はタグベース。scopeTags/list/TagData/name を集める（AssetGroup 割当は QPS では返らない）。
+  const scopeTags = u.getElementsByTagName('scopeTags')[0] ?? null;
+  r.set.SCOPE_TAGS = uniq(tagValues(scopeTags, 'name'));
   r.info.LAST_LOGIN_DATE = pick('lastLoginDate', 'lastLogin', 'lastLoginDatetime');
   r.name = login || r.scalar.NAME;
   return r;

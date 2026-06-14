@@ -121,20 +121,22 @@ describe('user', () => {
     expect(countByChange(ev, 'added')).toBe(1);     // 64
     expect(ev.find((e) => e.field === 'USER_ROLE')!.new).toBe('Reader');
   });
-  it('parse: QPS ServiceResponse の User を読む（id/username/role など）', () => {
+  it('parse: QPS ServiceResponse の User を読む（id/username/role/scopeTags）', () => {
     const qps = `<?xml version="1.0"?><ServiceResponse><responseCode>SUCCESS</responseCode><count>1</count><data>
       <User><id>12345</id><username>acme_ab1</username>
        <firstName>Alex</firstName><lastName>Kim</lastName><title>Eng</title>
-       <emailAddress>a@e.x</emailAddress><active>true</active>
-       <roleList><UserRole><name>Manager</name></UserRole></roleList>
+       <emailAddress>a@e.x</emailAddress>
+       <roleList><list><RoleData><id>1</id><name>Manager</name></RoleData></list></roleList>
+       <scopeTags><list><TagData><id>10</id><name>東京</name></TagData><TagData><id>11</id><name>本番</name></TagData></list></scopeTags>
        <lastLoginDate>2026-06-01T00:00:00Z</lastLoginDate></User>
     </data></ServiceResponse>`;
     const s = parseQualysXml(qps, 'user');
     expect(s.entity).toBe('user');
     expect(s.records['12345'].scalar.USER_LOGIN).toBe('acme_ab1');
     expect(s.records['12345'].scalar.NAME).toBe('Kim Alex');
-    expect(s.records['12345'].scalar.USER_STATUS).toBe('Active');
+    expect(s.records['12345'].scalar.USER_STATUS).toBe('Active'); // active 無し→Active扱い
     expect(s.records['12345'].scalar.USER_ROLE).toBe('Manager');
+    expect(s.records['12345'].set.SCOPE_TAGS).toEqual(['本番', '東京']);
   });
   it('parse: v2 USER_LIST_OUTPUT の ASSIGNED_ASSET_GROUPS（割当AG）を読む', () => {
     const x = `<USER_LIST_OUTPUT><USER_LIST><USER>
