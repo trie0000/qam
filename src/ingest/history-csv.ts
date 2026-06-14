@@ -105,7 +105,8 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
       change: inferChange(content || extras.join(' ')),
       field: spec.field,
       old: '',
-      new: [content, ...extras].filter(Boolean).join(' / '),
+      // 全種別統一: 変更後/追加 列の先頭に「CSVインポートで登録」を入れ、取込履歴と分かるようにする。
+      new: ['CSVインポートで登録', content, ...extras].filter(Boolean).join(' / '),
     });
   });
   if (!events.length) throw new Error('取り込める行がありません（更新日・識別名列を確認してください）');

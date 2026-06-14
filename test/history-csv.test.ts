@@ -18,6 +18,7 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].ts).toBe('2026-06-01T00-00-00');
     expect(ev[0].id).toBe('634851');         // 解決された Qualys AssetGroup ID
     expect(ev[0].name).toBe('AB123 東京拠点');
+    expect((ev[0].new ?? '').startsWith('CSVインポートで登録')).toBe(true); // 取込マーカー
     expect(ev[0].new).toContain('接続点ID:AB123'); // 接続点IDはID列でなく併記
     expect(ev[1].id).toBe('CD4567 大阪');     // 未解決はタイトルにフォールバック（接続点IDではない）
     expect(ev[0].change).toBe('added'); // 新規登録
