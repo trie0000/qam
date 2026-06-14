@@ -37,9 +37,10 @@ export interface TableOpts {
   columnRef?: { open?: (anchor: HTMLElement) => void };          // 列表示メニューを開く窓口（ボタンは外側に置く）
 }
 
-// 描画上限。通常（数千件まで）は全件描画してスクロール表示。極端（数万件）の
-// フリーズだけ保護する高い上限。超えた分のみ注記を出す。
-const MAX_ROWS = 5000;
+// 描画上限。通常は全件描画してスクロール表示。極端な件数でのフリーズだけ保護する高い上限。
+// 超えた分は注記を出す（期間/種別/フィルタで絞り込めば全件追える）。変更履歴は CSV 取込＋
+// 差分で件数が増えやすいので 5000→20000 に引き上げ。
+const MAX_ROWS = 20000;
 
 interface FilterCond { field: string; value: string }
 interface TState { order: string[]; widths: Record<string, number>; sort: { col: string; dir: 1 | -1 } | null; filters: FilterCond[]; hidden: string[] }
