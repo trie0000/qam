@@ -25,6 +25,8 @@ function computeBuildId() {
 }
 
 const BUILD_ID = computeBuildId();
+// ビルド日時(JST)。版識別子(BUILD_ID/version.txt)は内容ハッシュのままで、これは表示専用。
+const BUILD_TIME = new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 16).replace('T', ' ') + ' JST';
 fs.mkdirSync('dist', { recursive: true });
 
 esbuild.buildSync({
@@ -33,9 +35,9 @@ esbuild.buildSync({
   format: 'iife',
   target: 'es2020',
   loader: { '.css': 'text' },
-  define: { __QAM_BUILD__: JSON.stringify(BUILD_ID) },
+  define: { __QAM_BUILD__: JSON.stringify(BUILD_ID), __QAM_BUILDTIME__: JSON.stringify(BUILD_TIME) },
   outfile: 'dist/qam.bundle.js',
   minify: true,
 });
 fs.writeFileSync('dist/version.txt', BUILD_ID);
-console.log('[qam] built dist/qam.bundle.js  version=' + BUILD_ID);
+console.log('[qam] built dist/qam.bundle.js  version=' + BUILD_ID + '  built=' + BUILD_TIME);

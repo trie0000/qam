@@ -134,7 +134,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
     c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
     c('DIVISION', '部門(Division)', sc('DIVISION')), editCol('FUNCTION', '接続名称(Function)', 'FUNCTION'),
-    editCol('LOCATION', '拠点名称(Location)', 'LOCATION'), c('COMMENTS', 'Comments(Qualys)', sc('COMMENTS')),
+    editCol('LOCATION', '拠点名称(Location)', 'LOCATION'), c('COMMENTS', 'コメント(Comments)', sc('COMMENTS')),
     c('LAST_UPDATE', '最終更新', (r) => esc(r.info.LAST_UPDATE ?? ''), true), comment,
   ];
   if (entity === 'host') return [

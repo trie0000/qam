@@ -94,6 +94,19 @@ export async function deleteSnapshot(b: FileBackend, e: QamEntity, stamp: string
   await b.remove(`raw/${dateOfStamp(stamp)}/${e}-${stamp}.xml`); // 無ければ no-op
 }
 
+// --- データのリセット（開発者向け）: 種類を選んで全削除。何を消すかは呼び出し側で選択。 ---
+//   snapshots: スナップショット(資産データ)＋raw＋取込メタ / history: 変更履歴 / comments: メモ(コメント)
+export interface ResetOptions { snapshots?: boolean; history?: boolean; comments?: boolean }
+export async function resetData(b: FileBackend, opts: ResetOptions): Promise<void> {
+  if (opts.snapshots) {
+    for (const e of ENTITIES) for (const s of await getSnapshotStamps(b, e)) await b.remove(snapPath(e, s));
+    await b.remove(RUNS);
+    for (const d of await b.list('raw')) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) await b.remove(`raw/${d}`);
+  }
+  if (opts.history) for (const e of ENTITIES) await b.remove(histPath(e));
+  if (opts.comments) await b.remove(COMMENTS);
+}
+
 // --- 操作履歴（監査ログ）: 登録/削除/変更などの操作を 作業者・日時つきで記録 ---
 export interface QamOp { ts: string; author: string; action: string; entity?: QamEntity; detail: string }
 const OPS = 'ops.jsonl';

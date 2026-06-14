@@ -3,6 +3,8 @@ import type { QamEntity } from './types';
 
 declare const __QAM_BUILD__: string;
 export const BUILD = typeof __QAM_BUILD__ !== 'undefined' ? __QAM_BUILD__ : 'dev';
+declare const __QAM_BUILDTIME__: string;
+export const BUILDTIME = typeof __QAM_BUILDTIME__ !== 'undefined' ? __QAM_BUILDTIME__ : '';
 
 export const RELAY = location.origin; // relay が配信しているので同一オリジン
 

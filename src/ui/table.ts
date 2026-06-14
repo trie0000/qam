@@ -104,8 +104,18 @@ export function renderTable(opts: TableOpts): HTMLElement {
   document.getElementById('qam-colmenu')?.remove();
   const colPop = el('div', { class: 'qam-colmenu', id: 'qam-colmenu' });
   document.body.append(colPop);
-  function renderColMenu(): void {
+  const setSort = (id: string, dir: 1 | -1): void => { st.sort = { col: id, dir }; saveState(opts.viewId, st); colPop.classList.remove('on'); render(); };
+  // Excel 風のヘッダドロップダウン: 並べ替え（列指定時）＋表示する列のチェックリスト。
+  function renderColMenu(sortCol: Column | null): void {
     clear(colPop);
+    if (sortCol && sortCol.sortable !== false) {
+      colPop.append(el('div', { class: 'qam-colmenu-head' }, [`「${sortCol.label || sortCol.id}」で並べ替え`]));
+      const asc = el('button', { class: 'qam-colmenu-item qam-colmenu-act', html: `${icon('chevronUp', 13)}<span>昇順</span>` });
+      const desc = el('button', { class: 'qam-colmenu-item qam-colmenu-act', html: `${icon('chevronDown', 13)}<span>降順</span>` });
+      asc.addEventListener('click', () => setSort(sortCol.id, 1));
+      desc.addEventListener('click', () => setSort(sortCol.id, -1));
+      colPop.append(asc, desc, el('div', { class: 'qam-colmenu-sep' }));
+    }
     colPop.append(el('div', { class: 'qam-colmenu-head' }, ['表示する列']));
     cols.forEach((c) => {
       const lab = el('label', { class: 'qam-colmenu-item' });
@@ -120,15 +130,16 @@ export function renderTable(opts: TableOpts): HTMLElement {
       colPop.append(lab);
     });
   }
-  // ボタンは main 側（エクスポート群の隣）に置く。ここでは開閉処理だけ公開する。
-  if (opts.columnRef) opts.columnRef.open = (anchor: HTMLElement) => {
+  function openColMenu(anchor: HTMLElement, sortCol: Column | null): void {
     if (colPop.classList.contains('on')) { colPop.classList.remove('on'); return; }
-    renderColMenu();
+    renderColMenu(sortCol);
     const r = anchor.getBoundingClientRect();
-    colPop.style.left = `${Math.max(8, Math.min(r.right - 220, window.innerWidth - 228))}px`;
+    colPop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 228))}px`;
     colPop.style.top = `${r.bottom + 6}px`;
     colPop.classList.add('on');
-  };
+  }
+  // 「列表示」ボタン（main のエクスポート群の隣）からは並べ替えなしのチェックリストを開く。
+  if (opts.columnRef) opts.columnRef.open = (anchor: HTMLElement) => openColMenu(anchor, null);
   colPop.addEventListener('click', (e) => e.stopPropagation());
   if (!colMenuBound) { document.addEventListener('click', () => document.getElementById('qam-colmenu')?.classList.remove('on')); colMenuBound = true; }
 
@@ -224,12 +235,10 @@ export function renderTable(opts: TableOpts): HTMLElement {
 
   function buildTh(c: Column): HTMLElement {
     const th = el('th', { dataset: { col: c.id } });
-    const sortIcon = st.sort?.col === c.id ? icon(st.sort.dir === 1 ? 'chevronUp' : 'chevronDown', 13) : '';
-    const inner = el('div', { class: 'qam-th', html: `<span>${c.label}</span>${sortIcon}` });
-    if (c.sortable !== false) inner.addEventListener('click', () => {
-      const dir: 1 | -1 = st.sort && st.sort.col === c.id && st.sort.dir === 1 ? -1 : 1;
-      st.sort = { col: c.id, dir }; saveState(opts.viewId, st); render();
-    });
+    // 現在の並べ替え表示＋ドロップダウン（caret）。列名クリックで Excel 風メニューを開く。
+    const sortIcon = st.sort?.col === c.id ? icon(st.sort.dir === 1 ? 'chevronUp' : 'chevronDown', 12) : '';
+    const inner = el('div', { class: 'qam-th', html: `<span>${c.label}</span>${sortIcon}<span class="qam-th-caret">${icon('chevronDown', 12)}</span>` });
+    inner.addEventListener('click', () => openColMenu(th, c)); // 並べ替え＋表示/非表示メニュー
     th.append(inner);
     attachReorder(th, c);
     th.append(buildResize(c));

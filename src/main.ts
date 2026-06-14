@@ -1,6 +1,6 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
-import { BUILD, ENTITIES, LS, fmtStamp, datetimeToStamp, stampNow } from './config';
+import { BUILD, BUILDTIME, ENTITIES, LS, fmtStamp, datetimeToStamp, stampNow } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -14,7 +14,7 @@ import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, removeHistoryEvents, logOp, readOps, resetData, type QamOp,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
 
@@ -94,7 +94,7 @@ topbar.append(
     el('span', { class: 'qam-brand' }, ['QAM']),
     el('span', { class: 'qam-subtitle' }, ['Qualys Asset Management']),
   ]),
-  el('span', { class: 'qam-build' }, [`build ${BUILD}`]),
+  el('span', { class: 'qam-build', title: BUILDTIME ? `ビルド日時: ${BUILDTIME}` : '' }, [`build ${BUILD}${BUILDTIME ? ` (${BUILDTIME})` : ''}`]),
   ingestBtn,
   exportAllBtn,
   iconBtn('refresh', '更新', refresh),
@@ -575,6 +575,30 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   recordOp('取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
 }
 
+// Qualys アカウント/パスワード未登録時の登録モーダル。保存して {user,pass} を返す。取消は null。
+function promptQualysCreds(curUser: string, curPass: string): Promise<{ user: string; pass: string } | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    const u = el('input', { class: 'in', value: curUser, placeholder: 'Qualys アカウント' }) as HTMLInputElement;
+    const p = el('input', { class: 'in', type: 'password', value: curPass, placeholder: 'Qualys パスワード' }) as HTMLInputElement;
+    const body = el('div', {}, [
+      el('div', { class: 'qam-count', style: 'margin-bottom:var(--s-4)' }, ['Qualys のアカウントとパスワードが未登録です。入力してください（個人設定としてこのブラウザに保存されます）。']),
+      el('div', { class: 'qam-field' }, [el('label', {}, ['Qualys アカウント']), u]),
+      el('div', { class: 'qam-field' }, [el('label', {}, ['Qualys パスワード']), p]),
+    ]);
+    openModal({
+      title: 'Qualys 認証情報の登録', body, primaryLabel: '保存して続行',
+      onPrimary: () => {
+        const user = u.value.trim(); const pass = p.value;
+        if (!user || !pass) { toast('アカウントとパスワードを入力してください', 'error'); return false; }
+        localStorage.setItem(LS.qualysUser, user); localStorage.setItem(LS.qualysPass, pass);
+        done = true; resolve({ user, pass }); return true;
+      },
+      onClose: () => { if (!done) resolve(null); },
+    });
+  });
+}
+
 function confirmModal(title: string, message: string, primaryLabel = '取り込む'): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
@@ -615,7 +639,13 @@ function openIngest(): void {
         const cfg = await getConfig();
         // アカウント・パスワードは個人設定(ブラウザ保持)。旧 env 設定があれば後方互換でフォールバック。
         const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
-        if (!creds.base || !creds.user) { setProg('設定で Qualys 接続先とアカウントを入力してください', false); toast('設定が未入力です', 'error'); return; }
+        if (!creds.base) { setProg('設定で Qualys 接続先(POD)を入力してください', false); toast('接続先が未設定です', 'error'); return; }
+        // アカウント/パスワードが未設定なら、その場で登録を促す（保存して続行）。
+        if (!creds.user || !creds.pass) {
+          const got = await promptQualysCreds(creds.user, creds.pass);
+          if (!got) { setProg('Qualys アカウント/パスワードが未登録のため中止しました', false); return; }
+          creds.user = got.user; creds.pass = got.pass;
+        }
         const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
         // ダウンロード前の重複チェック: 対象種別に本日分の取込が既にあれば、ダウンロード前に1回だけ確認する。
         const today = dateOfStamp(stampNow());
@@ -729,6 +759,29 @@ async function openSettings(): Promise<void> {
   ([['', 'システム既定'], ['light', 'ライト'], ['dark', 'ダーク']] as [string, string][])
     .forEach(([v, t]) => theme.append(el('option', { value: v, selected: (localStorage.getItem(LS.theme) || '') === v }, [t])));
 
+  // 開発者: データのリセット（資産データ/履歴/メモを選んで全削除）。
+  const ckSnap = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const ckHist = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const ckCmt = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const ckRow = (cb: HTMLInputElement, label: string) => el('label', { class: 'qam-chip', style: 'display:inline-flex;gap:6px;align-items:center;font-size:var(--fs-sm);margin-right:var(--s-4)' }, [cb, label]);
+  const dataResetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['選択したデータをリセット']);
+  dataResetBtn.addEventListener('click', async () => {
+    const opts = { snapshots: ckSnap.checked, history: ckHist.checked, comments: ckCmt.checked };
+    if (!opts.snapshots && !opts.history && !opts.comments) { toast('リセット対象を選択してください', 'error'); return; }
+    const names = [opts.snapshots && '資産データ', opts.history && '変更履歴', opts.comments && 'メモ'].filter(Boolean).join('・');
+    if (!(await confirmModal('データのリセット', `${names} を全件削除します。元に戻せません。よろしいですか？`, '削除'))) return;
+    try {
+      await resetData(backend, opts);
+      recordOp('データリセット', names);
+      ckSnap.checked = false; ckHist.checked = false; ckCmt.checked = false;
+      toast(`${names} を削除しました`, 'ok'); refresh();
+    } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
+  });
+  const dataResetBox = el('div', {}, [
+    el('div', { style: 'margin-bottom:var(--s-3)' }, [ckRow(ckSnap, '資産データ(スナップショット)'), ckRow(ckHist, '変更履歴'), ckRow(ckCmt, 'メモ(コメント)')]),
+    dataResetBtn,
+  ]);
+
   // 開発者: 登録情報のリセット（接続設定・認証・記入者名を初期化。資産データ/履歴は消さない）。
   const resetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['登録情報をリセット']);
   resetBtn.addEventListener('click', async () => {
@@ -744,7 +797,11 @@ async function openSettings(): Promise<void> {
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存')] },
     { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret)] },
-    { id: 'dev', label: '開発者', pane: () => [field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'), field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [String(BUILD)]))] },
+    { id: 'dev', label: '開発者', pane: () => [
+      field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
+      field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
+      field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [`${BUILD}${BUILDTIME ? '  (' + BUILDTIME + ')' : ''}`])),
+    ] },
   ];
   const nav = el('div', { class: 'qam-settings-nav' });
   const paneEl = el('div', { class: 'qam-settings-pane' });
