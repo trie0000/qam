@@ -58,7 +58,7 @@ export interface SessionResult { ok: boolean; status?: number; error?: string }
 export const qualysLogin = (creds: { base: string; user: string; pass: string; proxy: string }): Promise<SessionResult> => postJson('/qam/qualys/login', creds);
 export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/logout', {});
 
-export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number }
+export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number }
 export const getConfig = (): Promise<RelayConfig> => fetch(`${RELAY}/qam/config`).then((r) => r.json());
 export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfig> => {
   const r = await fetch(`${RELAY}/qam/config`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });

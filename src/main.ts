@@ -571,9 +571,10 @@ async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLE
 // ライセンス数推移ビュー: 年度（4月〜翌3月）ごとの折れ線を 12 ヶ月 x 軸に重ね描き。凡例で年度の表示/非表示を切替。
 async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
-  const samples = await buildLicenseSamples();
+  const [samples, cfg] = await Promise.all([buildLicenseSamples(), getConfig()]);
+  const limit = cfg.licenseLimit || 0;
   const series = prepareLicenseSeries(samples);
-  count.textContent = `${samples.length.toLocaleString()} サンプル / ${series.length} 年度`;
+  count.textContent = `${samples.length.toLocaleString()} サンプル / ${series.length} 年度${limit ? ` / 上限 ${limit.toLocaleString()}` : ''}`;
   clear(host);
   if (!series.length) {
     host.append(emptyState('ライセンス数のデータがありません', 'Host を取り込むと、その時点の登録IP数を使用ライセンス数として日時で記録します。'));
@@ -588,7 +589,7 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
   const redraw = (): void => {
     clear(chartBox);
     const visible = new Set(series.filter((s) => !state.licenseHidden.has(s.fy)).map((s) => s.fy));
-    chartBox.append(licenseChartSvg(series, visible));
+    chartBox.append(licenseChartSvg(series, visible, limit));
   };
   for (const s of series) {
     const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -882,6 +883,7 @@ async function openSettings(): Promise<void> {
   const user = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '' }) as HTMLInputElement;
   const proxy = el('input', { class: 'in', value: cfg.proxy || '', placeholder: 'http://proxy:8080' }) as HTMLInputElement;
   const ret = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.retentionDays || 90) }) as HTMLInputElement;
+  const licLimit = el('input', { class: 'in', type: 'number', min: '0', value: String(cfg.licenseLimit || 0) }) as HTMLInputElement;
   const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
   const author = el('input', { class: 'in', value: localStorage.getItem(LS.author) || '', placeholder: '例: 山田' }) as HTMLInputElement;
   const theme = el('select', { class: 'in' }) as HTMLSelectElement;
@@ -930,7 +932,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret)] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス数上限', licLimit, '使用ライセンス数（Host の登録IP数）の契約上限。推移グラフに上限線を引きます。0 で無効。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
@@ -951,7 +953,7 @@ async function openSettings(): Promise<void> {
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
-        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90 });
+        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0) });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
         if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);

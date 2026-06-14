@@ -11,10 +11,8 @@ export const changeTag = (c: string): string => `<span class="qam-tag qam-tag--$
 
 const joined = (a?: string[]): string => esc((a ?? []).join(', '));
 
-// 接続点ID: AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出す。
-// 有効なのは「先頭2文字が英字 + 数字3〜4桁 + 末尾は D または数字」の形のみ（不一致は空）。
-const SETTEN_RE = /^[A-Za-z]{2}\d{3,4}D?$/;
-export const settenId = (title: string): string => { const t = (title || '').split(' ')[0]; return SETTEN_RE.test(t) ? t : ''; };
+// 接続点ID: AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出す（形式ルールは設けない）。
+export const settenId = (title: string): string => (title || '').split(' ')[0];
 
 // その資産の最新コメント本文（無ければ空）。フィルタ・並べ替え・エクスポートの照合に使う。
 const latestText = (api: CommentApi, id: string): string => {

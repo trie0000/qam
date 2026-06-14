@@ -344,6 +344,7 @@ function Invoke-Route { param($Ctx)
             if ($req.HttpMethod -eq 'POST') {
                 $b = Get-Body $req | ConvertFrom-Json
                 if ($b.PSObject.Properties.Name -contains 'retentionDays') { Set-QamEnvValue $EnvFile 'QAM_RAW_RETENTION_DAYS' ([int]$b.retentionDays) }
+                if ($b.PSObject.Properties.Name -contains 'licenseLimit') { Set-QamEnvValue $EnvFile 'QAM_LICENSE_LIMIT' ([int]$b.licenseLimit) }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -357,6 +358,7 @@ function Invoke-Route { param($Ctx)
             Send-Json $Ctx @{
                 qualysBase = $baseV; qualysUser = $userV; proxy = $proxyV; port = $Port
                 retentionDays = if ($env:QAM_RAW_RETENTION_DAYS) { [int]$env:QAM_RAW_RETENTION_DAYS } else { 90 }
+                licenseLimit = if ($env:QAM_LICENSE_LIMIT) { [int]$env:QAM_LICENSE_LIMIT } else { 0 }
             }; return
         }
         '^/qam/shutdown$' { Send-Json $Ctx @{ ok = $true }; $script:QamStop = $true; return }

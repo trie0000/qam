@@ -264,6 +264,8 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-lic-svg { width: 100%; height: auto; display: block; }
 .qam-lic-grid { stroke: var(--line); stroke-width: 1; }
 .qam-lic-axislbl { fill: var(--ink-4); font-size: 11px; font-family: var(--font-mono); }
+.qam-lic-limit { stroke: var(--danger); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.qam-lic-limitlbl { fill: var(--danger); font-size: 11px; font-weight: 600; font-family: var(--font-mono); }
 .qam-lic-legend { display: flex; flex-wrap: wrap; gap: var(--s-3) var(--s-6); max-width: 920px; }
 .qam-lic-legitem { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); cursor: pointer; color: var(--ink); }
 .qam-lic-swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; }

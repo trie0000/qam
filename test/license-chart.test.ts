@@ -52,4 +52,15 @@ describe('license-chart', () => {
     const labels = [...svg.querySelectorAll('text')].map((t) => t.textContent);
     for (const m of FY_MONTHS) expect(labels).toContain(`${m}月`);
   });
+
+  it('licenseChartSvg: limit>0 で上限の破線とラベルを描く', () => {
+    const series = prepareLicenseSeries([{ ts: '2026-04-10T09-00-00', count: 100 }]);
+    const withLimit = licenseChartSvg(series, new Set([2026]), 500);
+    expect(withLimit.querySelector('.qam-lic-limit')).toBeTruthy();
+    const lbl = [...withLimit.querySelectorAll('text')].map((t) => t.textContent);
+    expect(lbl).toContain('上限 500');
+    // limit=0 なら上限線なし
+    const noLimit = licenseChartSvg(series, new Set([2026]), 0);
+    expect(noLimit.querySelector('.qam-lic-limit')).toBeNull();
+  });
 });

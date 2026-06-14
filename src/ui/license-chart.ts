@@ -52,11 +52,12 @@ function niceMax(v: number): number {
 }
 
 // 表示する系列（visible）から SVG を生成。x=12ヶ月固定、y=0〜きりのよい上限。点はデータのある月のみ。
-export function licenseChartSvg(series: FySeries[], visibleFy: Set<number>): SVGElement {
+// limit>0 ならライセンス数上限の横線を引く（y 上限にも反映して線が必ず見えるようにする）。
+export function licenseChartSvg(series: FySeries[], visibleFy: Set<number>, limit = 0): SVGElement {
   const W = 760; const H = 360; const padL = 52; const padR = 16; const padT = 16; const padB = 40;
   const plotW = W - padL - padR; const plotH = H - padT - padB;
   const visible = series.filter((s) => visibleFy.has(s.fy));
-  const maxVal = Math.max(1, ...visible.flatMap((s) => s.months.filter((v): v is number => v != null)));
+  const maxVal = Math.max(1, limit > 0 ? limit : 0, ...visible.flatMap((s) => s.months.filter((v): v is number => v != null)));
   const yMax = niceMax(maxVal);
   const x = (i: number): number => padL + (plotW * i) / (FY_MONTHS.length - 1);
   const y = (v: number): number => padT + plotH * (1 - v / yMax);
@@ -82,6 +83,13 @@ export function licenseChartSvg(series: FySeries[], visibleFy: Set<number>): SVG
   }
   // x 軸ラベル（月）
   FY_MONTHS.forEach((m, i) => add('text', { x: x(i), y: H - padB + 20, class: 'qam-lic-axislbl', 'text-anchor': 'middle' }, `${m}月`));
+
+  // ライセンス数上限の横線（破線）＋ラベル
+  if (limit > 0) {
+    const yy = y(limit);
+    add('line', { x1: padL, y1: yy, x2: W - padR, y2: yy, class: 'qam-lic-limit' });
+    add('text', { x: W - padR, y: yy - 5, class: 'qam-lic-limitlbl', 'text-anchor': 'end' }, `上限 ${limit.toLocaleString()}`);
+  }
 
   // 系列（データの無い月で線を分断。点はデータのある月のみ）
   for (const s of visible) {
