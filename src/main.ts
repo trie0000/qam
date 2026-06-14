@@ -1,6 +1,6 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
-import { BUILD, ENTITIES, LS, fmtStamp, timeOfStamp, datetimeToStamp, stampNow } from './config';
+import { BUILD, ENTITIES, LS, fmtStamp, datetimeToStamp, stampNow } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -330,7 +330,6 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
 
 async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
   const all = await readHistory(backend, state.entity);
-  const stamps = await getSnapshotStamps(backend, state.entity);
 
   // 左ペイン: 変更があった日に印を付けたカレンダー（クリックで from→to 範囲選択）
   const markedDays = new Set(all.map((e) => dateOfStamp(e.ts)));
@@ -341,36 +340,26 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     onRange: (f, t) => { state.histFrom = f; state.histTo = t; state.histStamp = ''; refresh(); },
   }));
 
-  // 期間 from–to を直接入力（カレンダーの2点クリックと同じ state を共有）。
+  // 期間 from–to を「日付＋時刻」で直接入力（カレンダーの2点クリックと同じ state を共有）。
+  // state.histFrom/histTo は 'YYYY-MM-DD'(カレンダー由来) か 'YYYY-MM-DDTHH:mm'(入力由来) を保持。
   const normalizeRange = (): void => { if (state.histFrom && state.histTo && state.histFrom > state.histTo) { const t = state.histFrom; state.histFrom = state.histTo; state.histTo = t; } };
-  const mkDate = (val: string, set: (v: string) => void): HTMLInputElement => {
-    const i = el('input', { type: 'date', class: 'in', style: 'width:auto' }) as HTMLInputElement;
-    i.value = val; // type=date は value 属性でなく value プロパティで設定
+  const toLocal = (s: string, end: boolean): string => (!s ? '' : s.length === 10 ? s + (end ? 'T23:59' : 'T00:00') : s.slice(0, 16));
+  const mkDate = (val: string, end: boolean, set: (v: string) => void): HTMLInputElement => {
+    const i = el('input', { type: 'datetime-local', class: 'in', style: 'width:auto' }) as HTMLInputElement;
+    i.value = toLocal(val, end); // datetime-local は value プロパティで設定
     i.addEventListener('change', () => { set(i.value); normalizeRange(); state.histStamp = ''; refresh(); });
     return i;
   };
   toolbar.append(
     el('span', { class: 'qam-count' }, ['期間']),
-    mkDate(state.histFrom, (v) => (state.histFrom = v)),
+    mkDate(state.histFrom, false, (v) => (state.histFrom = v)),
     el('span', { class: 'qam-count' }, ['〜']),
-    mkDate(state.histTo, (v) => (state.histTo = v)),
+    mkDate(state.histTo, true, (v) => (state.histTo = v)),
   );
   if (state.histFrom || state.histTo) {
     const clr = el('button', { class: 'btn btn--sm btn--ghost', title: '期間をクリア' }, ['クリア']);
     clr.addEventListener('click', () => { state.histFrom = ''; state.histTo = ''; state.histStamp = ''; refresh(); });
     toolbar.append(clr);
-  }
-
-  // 単日（開始=終了）選択時のみ: toolbar に取込時刻ドロップダウン（その日の取込時刻だけ）
-  const singleDay = !!state.histFrom && state.histFrom === state.histTo;
-  if (singleDay) {
-    const tsel = el('select', { class: 'in' }) as HTMLSelectElement;
-    tsel.append(el('option', { value: '' }, ['終日（全取込）']));
-    for (const s of stamps.filter((s) => dateOfStamp(s) === state.histFrom)) {
-      tsel.append(el('option', { value: s, selected: state.histStamp === s }, [timeOfStamp(s)]));
-    }
-    tsel.addEventListener('change', () => { state.histStamp = tsel.value; refresh(); });
-    toolbar.append(el('span', { class: 'qam-count' }, [`${state.histFrom} の時刻`]), tsel);
   }
   for (const ch of ['added', 'modified', 'deleted']) {
     const cb = el('input', { type: 'checkbox' }) as HTMLInputElement; cb.checked = state.change.has(ch);
@@ -379,17 +368,19 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     toolbar.append(lab);
   }
 
-  // 期間: 開始のみ→その日以降、終了のみ→その日以前、両方→範囲、未指定→全件。
-  const inRange = (d: string): boolean => (!state.histFrom || d >= state.histFrom) && (!state.histTo || d <= state.histTo);
+  // 期間: 開始のみ→以降 / 終了のみ→以前 / 両方→範囲 / 未指定→全件。日付のみ指定はその日全体(00:00〜23:59)。
+  // 履歴の ts は秒精度 stamp 'YYYY-MM-DDTHH-mm-ss'。下限/上限を秒精度へ正規化して比較。
+  const eventDT = (stamp: string): string => stamp.slice(0, 10) + 'T' + stamp.slice(11).replace(/-/g, ':');
+  const bound = (s: string, end: boolean): string => (!s ? '' : s.length === 10 ? s + (end ? 'T23:59:59' : 'T00:00:00') : s.length === 16 ? s + (end ? ':59' : ':00') : s);
+  const lo = bound(state.histFrom, false); const hi = bound(state.histTo, true);
+  const inRange = (stamp: string): boolean => { const d = eventDT(stamp); return (!lo || d >= lo) && (!hi || d <= hi); };
   let events = all.filter((e) =>
     state.change.has(e.change)
-    && inRange(dateOfStamp(e.ts))
-    && (!state.histStamp || e.ts === state.histStamp)
+    && inRange(e.ts)
     && matchQ([e.id, e.name, e.field, e.old, e.new, ...(e.added ?? []), ...(e.removed ?? [])]));
   events.reverse(); // 新しい順を既定に
-  const span = (state.histFrom || state.histTo)
-    ? ` / ${state.histFrom || '最古'}〜${state.histTo || '最新'}${singleDay && state.histStamp ? ' ' + timeOfStamp(state.histStamp) : ''}`
-    : '';
+  const fmt = (s: string): string => s.replace('T', ' ');
+  const span = (state.histFrom || state.histTo) ? ` / ${state.histFrom ? fmt(state.histFrom) : '最古'}〜${state.histTo ? fmt(state.histTo) : '最新'}` : '';
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
   const exportRef: { fn?: () => ExportMatrix } = {};

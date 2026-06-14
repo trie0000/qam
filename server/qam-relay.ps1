@@ -138,12 +138,14 @@ function Invoke-QualysFetch { param($Body)
         Add-QamLog "FETCH start $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
         $resp = $client.GetAsync($url).Result
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
-        $bytes = $resp.Content.ReadAsByteArrayAsync().Result
-        $xml = [System.Text.Encoding]::UTF8.GetString($bytes)
+        # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
+        $content = $resp.Content
+        $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
+        $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
         $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
         $ok = $resp.IsSuccessStatusCode
         $reason = [string]$resp.ReasonPhrase
-        $ctype = if ($resp.Content.Headers.ContentType) { [string]$resp.Content.Headers.ContentType } else { '' }
+        $ctype = if ($content -and $content.Headers.ContentType) { [string]$content.Headers.ContentType } else { '' }
         # 応答本文のスニペット（空白畳み込み）。成功は短め、失敗は理由が分かるよう長めに残す。
         $snippet = ($xml -replace '\s+', ' ').Trim()
         $cap = if ($ok) { 300 } else { 1500 }
