@@ -49,35 +49,39 @@ function mapChange(v: string): QamChange | null {
 // entity ごとの列仕様。
 // keyCols: その値を resolveId() で現スナップショットの Qualys ID に解決し、ID 列にする
 //   （AssetGroup=タイトル / Host=FQDN / Domain=ドメイン名 / User=アカウント名）。
-//   解決できなければ名前そのものを ID にする。接続点ID/外接番号は ID にせず extras に併記。
+// keyIsIdentity: keyCols の値が Qualys キーそのものか。
+//   domain(ドメイン名)・user(アカウント名)は true＝キー自体なので未解決でもそのまま ID にする。
+//   group(タイトル)・host(FQDN)は false＝Qualys ID(数値)とは別の表示名。CSV に ID 列は無いので、
+//   未解決のときに表示名を ID に流用しない（ID は空のまま。表示名は「名前」列に残る）。
 interface HistSpec {
   date: RegExp;
   type: RegExp;                    // 変更種別の列（その値で 種別 を決める。無ければ content から推定）。
   content: RegExp | null;          // 本文に使う列（更新内容 / host はメモ）。
   field: string;                   // 「項目」列の表示ラベル。
   keyCols: RegExp[];               // Qualys ID へ解決する識別名（タイトル/FQDN/ドメイン名/アカウント名）。
+  keyIsIdentity: boolean;          // keyCols の値が Qualys キー自体か（true なら未解決でも ID に採用）。
   name: RegExp[];                  // 表示名。
   extras: [string, RegExp][];      // [併記ラベル, ヘッダ正規表現]
 }
 const SPECS: Record<QamEntity, HistSpec> = {
   group: {
     date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
-    keyCols: [/タイトル/], name: [/タイトル/],
+    keyCols: [/タイトル/], keyIsIdentity: false, name: [/タイトル/],
     extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['Function', /Function|機能|接続.*名称/i], ['Location', /Location|拠点/i], ['コメント', /comment|コメント/i]],
   },
   domain: {
     date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
-    keyCols: [/ドメイン名/], name: [/ドメイン名/],
+    keyCols: [/ドメイン名/], keyIsIdentity: true, name: [/ドメイン名/],
     extras: [['接続点ID', /接続点ID/i], ['事業場', /事業/], ['IP範囲from', /from/i], ['IP範囲to', /to/i], ['外接番号', /外接/]],
   },
   host: {
     date: /更新日/, type: /種別/, content: /メモ/, field: 'メモ',
-    keyCols: [/FQDN/i], name: [/FQDN/i, /接続[店点]名/],
+    keyCols: [/FQDN/i], keyIsIdentity: false, name: [/FQDN/i, /接続[店点]名/],
     extras: [['接続点名', /接続[店点]名/], ['IP', /IP|アドレス/i], ['外接番号', /外接/]],
   },
   user: {
     date: /更新日/, type: /種別/, content: /更新内容/, field: '更新内容',
-    keyCols: [/アカウント名/], name: [/氏名/, /アカウント名/],
+    keyCols: [/アカウント名/], keyIsIdentity: true, name: [/氏名/, /アカウント名/],
     extras: [['接続点ID', /接続点ID/i], ['姓', /姓/], ['名', /名前/], ['事業場', /事業/], ['TEL', /TEL|電話/i],
       ['Email', /mail|メール/i], ['Language', /Language|言語/i], ['権限', /権限|role/i],
       ['ログイン方法', /ログイン方法|SAML/i], ['スキャン結果通知', /スキャン|通知/]],
@@ -105,7 +109,9 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     const date = normDate(get(dateI));
     const rawKey = keyIdx.map(get).find((v) => v) || '';
     if (!date || !rawKey) return; // 更新日・識別名が無い行はスキップ
-    const id = resolveId(rawKey) || rawKey; // Qualys ID へ解決（無ければ名前）。接続点IDは ID にしない。
+    // Qualys ID へ解決。group/host は表示名(タイトル/FQDN)を ID に流用しない（未解決は空）。
+    // domain/user は keyCols 自体が Qualys キーなので未解決でもそのまま採用。接続点IDは ID にしない。
+    const id = resolveId(rawKey) || (spec.keyIsIdentity ? rawKey : '');
     const name = nameIdx.map(get).find((v) => v) || rawKey;
     const content = get(contentI);
     const extras = extraDefs.map(([label, j]) => [label, get(j)] as [string, string])

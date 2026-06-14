@@ -4,7 +4,7 @@ import { parseGroupHistoryCsv, parseHistoryCsv } from '../src/ingest/history-csv
 describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
   const header = '更新日,更新内容,接続点ID,事業場名,タイトル,接続点名称(Function),拠点名称(Location),コメント(comments)';
 
-  it('ヘッダ名で対応付け・更新日正規化・種別推定。ID=Qualys ID解決(無ければタイトル)・接続点IDは併記', () => {
+  it('ヘッダ名で対応付け・更新日正規化・種別推定。ID=Qualys ID解決(未解決は空＝タイトルを流用しない)・接続点IDは併記', () => {
     const csv = [
       header,
       '2026/6/1,新規登録,AB123,東京事業場,AB123 東京拠点,ルータ,本社,初期登録',
@@ -20,7 +20,8 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].name).toBe('AB123 東京拠点');
     expect((ev[0].new ?? '').startsWith('CSVインポートで登録')).toBe(true); // 取込マーカー
     expect(ev[0].new).toContain('接続点ID:AB123'); // 接続点IDはID列でなく併記
-    expect(ev[1].id).toBe('CD4567 大阪');     // 未解決はタイトルにフォールバック（接続点IDではない）
+    expect(ev[1].id).toBe('');                // 未解決は空（タイトルを ID に流用しない）
+    expect(ev[1].name).toBe('CD4567 大阪');   // タイトルは「名前」列に残る
     expect(ev[0].change).toBe('added'); // 新規登録
     expect(ev[0].new).toContain('新規登録');
     expect(ev[0].new).toContain('事業場:東京事業場');
@@ -60,12 +61,12 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].new).toContain('外接番号:EXT9');
   });
 
-  it('host: 更新内容が無く メモ を本文に / FQDN=id(未解決時) / 外接番号は併記', () => {
+  it('host: 更新内容が無く メモ を本文に / 未解決時 id は空(FQDNを流用しない) / 外接番号は併記', () => {
     const csv = '更新日,接続点名,IPアドレス,FQDN,メモ,外接番号\n'
       + '2026-06-02,東京拠点,10.1.1.1,host1.example,初期構築,EXT1';
     const ev = parseHistoryCsv('host', csv);
-    expect(ev[0].id).toBe('host1.example'); // FQDN（未解決時のフォールバック）。外接番号ではない
-    expect(ev[0].name).toBe('host1.example');
+    expect(ev[0].id).toBe('');               // 未解決は空（FQDN を Host ID に流用しない）
+    expect(ev[0].name).toBe('host1.example'); // FQDN は「名前」列に残る
     expect(ev[0].field).toBe('メモ');
     expect(ev[0].new).toContain('初期構築');
     expect(ev[0].new).toContain('接続点名:東京拠点');
