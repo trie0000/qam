@@ -59,6 +59,12 @@ describe('parse', () => {
     expect(s.entity).toBe('host');
     expect(s.records['1'].name).toBe('web01.example');
   });
+  it('host: ASSET_GROUP_IDS をカンマ分割して取り込む（接続点ID補完用）', () => {
+    const xml = `<HOST_LIST_OUTPUT><RESPONSE><HOST_LIST>
+      <HOST><ID>9</ID><IP>10.9.9.9</IP><DNS_DATA><FQDN>h9.example</FQDN></DNS_DATA><ASSET_GROUP_IDS>100,300</ASSET_GROUP_IDS></HOST>
+    </HOST_LIST></RESPONSE></HOST_LIST_OUTPUT>`;
+    expect(parseQualysXml(xml).records['9'].set.ASSET_GROUP_IDS).toEqual(['100', '300']);
+  });
   it('domain: entity 自動判定 / NETBLOCK', () => {
     const s = parseQualysXml(DOMAIN1);
     expect(s.entity).toBe('domain');

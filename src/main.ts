@@ -371,7 +371,8 @@ async function importAssetValues(text: string, onProgress?: (done: number, total
   return { updated, unmatched, fields: fieldCols.map(([f]) => f) };
 }
 
-// host/domain が所属する AssetGroup の接続点IDを逆引き（group の HOST_IDS / DOMAIN_LIST から）。
+// host/domain が所属する AssetGroup の接続点IDを逆引き。
+// (1) group 側の HOST_IDS / DOMAIN_LIST から、(2) host 側の ASSET_GROUP_IDS からも補完（AG側が空でも辿れる）。
 // 戻り値: メンバーキー(host ID / domain名) → 接続点ID（複数AGはカンマ区切り全件）。
 async function buildAgSetten(entity: QamEntity, asof: string): Promise<Record<string, string>> {
   if (entity !== 'host' && entity !== 'domain') return {};
@@ -379,11 +380,24 @@ async function buildAgSetten(entity: QamEntity, asof: string): Promise<Record<st
   if (!gStamp) return {};
   const gSnap = await readSnapshot(backend, 'group', gStamp);
   const acc: Record<string, Set<string>> = {};
+  const agIdToSetten: Record<string, string> = {}; // AssetGroup ID → 接続点ID
   for (const g of Object.values(gSnap?.records ?? {}) as QamRecord[]) {
     const sid = settenId(g.name);
     if (!sid) continue; // 接続点IDとして妥当なタイトルのAGのみ
+    agIdToSetten[g.key] = sid;
     const members = (entity === 'host' ? g.set.HOST_IDS : g.set.DOMAIN_LIST) ?? [];
     for (const m of members) (acc[m] ??= new Set()).add(sid);
+  }
+  // host は自身の ASSET_GROUP_IDS からも補完（AGの HOST_IDS が空でも host→AG→接続点ID で埋める）。
+  if (entity === 'host') {
+    const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'), asof || undefined);
+    const hSnap = hStamp ? await readSnapshot(backend, 'host', hStamp) : null;
+    for (const h of Object.values(hSnap?.records ?? {}) as QamRecord[]) {
+      for (const agId of h.set.ASSET_GROUP_IDS ?? []) {
+        const sid = agIdToSetten[agId];
+        if (sid) (acc[h.key] ??= new Set()).add(sid);
+      }
+    }
   }
   return Object.fromEntries(Object.entries(acc).map(([k, v]) => [k, [...v].sort().join(', ')]));
 }
@@ -540,12 +554,19 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
   const agSetten = await buildAgSetten(state.entity, ''); // host履歴の接続点ID（最新AG基準）
+  // host履歴の IP 列（最新スナップショットの host ID→IP。削除等は props から補完）。
+  const hostIp: Record<string, string> = {};
+  if (state.entity === 'host') {
+    const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
+    const hSnap = hStamp ? await readSnapshot(backend, 'host', hStamp) : null;
+    for (const r of Object.values(hSnap?.records ?? {}) as QamRecord[]) hostIp[r.key] = r.scalar.IP || '';
+  }
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
   host.append(renderTable({
-    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten),
+    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten, hostIp),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
     bulkActions: histBulk, onRowClick: (e: QamEvent) => openEventProps(e), // 行クリックで追加/削除/変更したアセットの情報を表示
   }));

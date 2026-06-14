@@ -226,12 +226,15 @@ export function openEventProps(e: QamEvent): void {
 }
 
 // agSetten: host ID → 所属AGの接続点ID（host履歴用、main から渡す）。group はタイトルから算出。
-export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}): Column[] {
+// hostIp: host ID → IP（host履歴のIP列用。最新スナップショット由来。無ければ props から補完）。
+export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}, hostIp: Record<string, string> = {}): Column[] {
   // 資産情報は行クリックで開く（openEventProps）。ここは変更前/削除値の表示のみ。
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
   // 接続点ID: group はタイトル(e.name)から算出、host は所属AGの接続点ID(agSetten[e.id])。
   const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));
+  // IP: 最新スナップショット(hostIp) を優先、無ければイベントのprops(追加/削除時の記録)から。
+  const ipOf = (e: QamEvent): string => hostIp[e.id] || (e.props?.find((p) => p.k === 'IP')?.v ?? '');
   const cols: Column[] = [
     { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
     { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => CHANGE_LABEL[e.change] ?? e.change },
@@ -242,9 +245,12 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
     { id: 'new', label: '変更後/追加', render: newCell, sortable: false },
     { id: '_c', label: 'メモ', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) },
   ];
-  // AssetGroup / Host は接続点ID列を「名前」の直後に挿入。
+  // AssetGroup / Host は接続点ID列を「名前」の直後に挿入。Host はさらに IP 列をその直後に。
   if (entity === 'group' || entity === 'host') {
     cols.splice(4, 0, { id: 'setten', label: '接続点ID', mono: true, render: (e: QamEvent) => esc(settenOf(e)), sortVal: settenOf });
+  }
+  if (entity === 'host') {
+    cols.splice(5, 0, { id: 'ip', label: 'IP', mono: true, render: (e: QamEvent) => esc(ipOf(e)), sortVal: ipOf });
   }
   return cols;
 }

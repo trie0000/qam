@@ -96,6 +96,8 @@ function readHost(h: Element): QamRecord {
   r.scalar.NETBIOS = text(h, 'NETBIOS');
   r.scalar.OS = text(h, 'OS');
   r.scalar.TRACKING_METHOD = text(h, 'TRACKING_METHOD');
+  // 所属 AssetGroup ID（カンマ区切り）。接続点ID列の補完に使う（AG側 HOST_IDS が空でも host 側から辿れる）。
+  r.set.ASSET_GROUP_IDS = uniq(csvValues(h, 'ASSET_GROUP_IDS'));
   r.info.LAST_VULN_SCAN_DATETIME = text(h, 'LAST_VULN_SCAN_DATETIME');
   r.info.FIRST_FOUND_DATE = text(h, 'FIRST_FOUND_DATE');
   r.name = fqdn || dns || ip;
