@@ -142,6 +142,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
   if (entity === 'group') return [
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'タイトル', (r) => esc(r.name)),
     c('SETTEN', '接続点ID', (r) => esc(settenId(r.name)), true),
+    editCol('EXT_CONN_NO', '外接番号', 'EXT_CONN_NO'),
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
     c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
     editCol('DIVISION', '事業場名(Division)', 'DIVISION'), editCol('FUNCTION', '接続名称(Function)', 'FUNCTION'),
@@ -179,6 +180,7 @@ const HIST_NAME_LABEL: Record<QamEntity, string> = { group: 'タイトル', host
 // 削除プロパティ表示のフィールド名→ラベル（資産一覧の列ラベルと揃える）。
 const FIELD_LABELS: Record<string, string> = {
   OWNER_ID: 'オーナーID', IPS: 'IP', DNS_LIST: 'DNS', DOMAIN_LIST: 'ドメイン',
+  EXT_CONN_NO: '外接番号',
   DIVISION: '事業場名(Division)', FUNCTION: '接続名称(Function)', LOCATION: '拠点名称(Location)', COMMENTS: 'コメント(Comments)',
   LAST_UPDATE: '最終更新',
   IP: 'IP', OS: 'OS', TRACKING_METHOD: '追跡', NETBIOS: 'NetBIOS', LAST_VULN_SCAN_DATETIME: '最終スキャン',

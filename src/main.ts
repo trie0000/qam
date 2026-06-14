@@ -328,7 +328,8 @@ async function buildAnnot(entity: QamEntity): Promise<AnnotApi | undefined> {
 // AssetGroup の手動値CSV取込: 接続点IDをキーに、一覧の列名で値列をマッチして注釈を上書き。
 // 取込対象は API で取れない手動項目（部門/接続名称/拠点名称/コメント）。
 const ASSET_VALUE_FIELDS: [string, RegExp][] = [
-  ['DIVISION', /部門|division/i],
+  ['EXT_CONN_NO', /外接番号|外接|ext.*conn/i],
+  ['DIVISION', /事業場名|部門|division/i],
   ['FUNCTION', /function|接続名称|機能/i],
   ['LOCATION', /location|拠点/i],
   ['COMMENTS', /comments/i],
@@ -878,7 +879,7 @@ function openIngest(): void {
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
       finally { setRelayBusy(false); go.removeAttribute('disabled'); }
     });
-    const hint = callout('CSVヘッダは一覧の列名と同じに。接続点ID をキーに、部門(Division)/接続名称(Function)/拠点名称(Location)/コメント(Comments) を上書き取込します（空欄はクリア）。先に AssetGroup を取込済みであること（接続点ID→AssetGroupの突き合わせに使用）。');
+    const hint = callout('CSVヘッダは一覧の列名と同じに。接続点ID をキーに、外接番号/事業場名(Division)/接続名称(Function)/拠点名称(Location)/コメント(Comments) を上書き取込します（空欄はクリア）。先に AssetGroup を取込済みであること（接続点ID→AssetGroupの突き合わせに使用）。');
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['AssetGroup 値 CSV']), file]), hint, go);
   }
   apiBtn.addEventListener('click', showApi); xmlBtn.addEventListener('click', showXml); histBtn.addEventListener('click', showHist); valBtn.addEventListener('click', showAssetValues);
