@@ -186,6 +186,11 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-comment-thread svg { width: 13px; height: 13px; }
 .qam-comment-edit { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-sm); resize: vertical; min-height: 46px;
   color: var(--ink); background: var(--paper); border: 1px solid var(--accent); border-radius: var(--r-1); padding: var(--s-2); }
+/* 手入力セル（Function/Location 等のその場編集） */
+.qam-edit-view { cursor: text; min-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.qam-edit-view.is-empty { color: var(--ink-4); cursor: pointer; }
+.qam-edit-in { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-sm); color: var(--ink);
+  background: var(--paper); border: 1px solid var(--accent); border-radius: var(--r-1); padding: 2px var(--s-2); }
 
 /* ---------- status tags ---------- */
 .qam-tag { display: inline-block; padding: 1px var(--s-3); border-radius: var(--r-1); font-family: var(--font-mono);

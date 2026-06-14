@@ -84,6 +84,22 @@ export async function deleteSnapshot(b: FileBackend, e: QamEntity, stamp: string
   await b.remove(`raw/${dateOfStamp(stamp)}/${e}-${stamp}.xml`); // 無ければ no-op
 }
 
+// --- 手動メタ情報（注釈）: API で取れない項目を一覧から手入力する（Function/Location 等） ---
+// entity ごとに 1 ファイル。{ [id]: { [field]: value } }。Qualys スナップショット/差分とは独立。
+const annotPath = (e: QamEntity) => `annotations/${e}.json`;
+export async function readAnnotations(b: FileBackend, e: QamEntity): Promise<Record<string, Record<string, string>>> {
+  const raw = await b.read(annotPath(e));
+  if (!raw) return {};
+  try { return JSON.parse(raw) as Record<string, Record<string, string>>; } catch { return {}; }
+}
+export async function setAnnotation(b: FileBackend, e: QamEntity, id: string, field: string, value: string): Promise<void> {
+  const all = await readAnnotations(b, e);
+  const rec = all[id] ?? {};
+  if (value) rec[field] = value; else delete rec[field];
+  if (Object.keys(rec).length) all[id] = rec; else delete all[id];
+  await b.write(annotPath(e), JSON.stringify(all));
+}
+
 // --- comments（資産単位） ---
 export const addComment = (b: FileBackend, c: QamComment) => b.write(COMMENTS, JSON.stringify(c) + '\n', true);
 

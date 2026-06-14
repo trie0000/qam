@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
-  prune, addComment, editComment, readComments, readHistory,
+  prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation,
 } from '../src/store';
 
 class MemBackend implements FileBackend {
@@ -117,6 +117,18 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     const c = await readComments(b, 'host', '1');
     expect(c.length).toBe(1);
     expect(c[0].text).toBe('対応済み');
+  });
+
+  it('手入力メタ(annotations)を保存・取得・削除（空で消える）', async () => {
+    await setAnnotation(b, 'group', '634851', 'FUNCTION', 'ルータ');
+    await setAnnotation(b, 'group', '634851', 'LOCATION', '本社');
+    let map = await readAnnotations(b, 'group');
+    expect(map['634851'].FUNCTION).toBe('ルータ');
+    expect(map['634851'].LOCATION).toBe('本社');
+    await setAnnotation(b, 'group', '634851', 'FUNCTION', ''); // 空＝削除
+    map = await readAnnotations(b, 'group');
+    expect(map['634851'].FUNCTION).toBeUndefined();
+    expect(map['634851'].LOCATION).toBe('本社');
   });
 
   it('editComment は ts で同定して本文だけ差し替える', async () => {

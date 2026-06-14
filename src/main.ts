@@ -8,13 +8,13 @@ import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns, settenId, type CommentApi } from './ui/columns';
+import { assetColumns, historyColumns, settenId, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, qualysLogin, qualysLogout, checkRelay } from './relay';
 import { downloadEntity } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseGroupHistoryCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation,
 } from './store';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from './types';
 
@@ -236,6 +236,19 @@ function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef
 }
 let filterOutsideBound = false;
 
+// 手入力メタ情報（Function/Location 等）の窓口。現状は group のみ。
+async function buildAnnot(entity: QamEntity): Promise<AnnotApi | undefined> {
+  if (entity !== 'group') return undefined;
+  const map = await readAnnotations(backend, entity);
+  return {
+    get: (id, field) => map[id]?.[field] ?? '',
+    save: async (id, field, v) => {
+      await setAnnotation(backend, entity, id, field, v);
+      const rec = (map[id] ??= {}); if (v) rec[field] = v; else delete rec[field];
+    },
+  };
+}
+
 // host/domain が所属する AssetGroup の接続点IDを逆引き（group の HOST_IDS / DOMAIN_LIST から）。
 // 戻り値: メンバーキー(host ID / domain名) → 接続点ID（複数AGはカンマ区切り全件）。
 async function buildAgSetten(entity: QamEntity, asof: string): Promise<Record<string, string>> {
@@ -260,7 +273,7 @@ async function exportAllAssets(): Promise<void> {
     const stamps = await getSnapshotStamps(backend, e.key);
     const stamp = resolveAsof(stamps); // 最新
     const comments = await commentApi(e.key);
-    const cols = assetColumns(e.key, comments, await buildAgSetten(e.key, ''));
+    const cols = assetColumns(e.key, comments, await buildAgSetten(e.key, ''), await buildAnnot(e.key));
     let rows: QamRecord[] = [];
     if (stamp) rows = Object.values((await readSnapshot(backend, e.key, stamp))?.records ?? {}) as QamRecord[];
     sheets.push({ name: e.label, headers: cols.map((c) => c.label || c.id), rows: rows.map((r) => cols.map((c) => cellText(c, r))) });
@@ -335,11 +348,12 @@ async function renderAssets(subbar: HTMLElement, count: HTMLElement, toolbar: HT
   count.textContent = `${rows.length} 件 / ${fmtStamp(stamp)} 時点`;
   const comments = await commentApi(state.entity);
   const agSetten = await buildAgSetten(state.entity, state.asof);
+  const annot = await buildAnnot(state.entity);
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   clear(host);
   host.append(renderTable({
-    viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments, agSetten),
+    viewId: `assets.${state.entity}`, columns: assetColumns(state.entity, comments, agSetten, annot),
     rows, getKey: (r) => r.key, selected: state.selected, bulkActions: bulkComment, exportRef, filterRef,
   }));
   addFilterUI(toolbar, filterBar, filterRef);

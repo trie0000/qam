@@ -29,6 +29,45 @@ export interface CommentApi {
   save: (e: QamEntity, id: string, ts: string | null, text: string) => Promise<QamComment[]>;
 }
 
+// 手動メタ情報（API で取れない Function/Location 等を一覧から手入力）。
+export interface AnnotApi {
+  get: (id: string, field: string) => string;
+  save: (id: string, field: string, value: string) => Promise<void>;
+}
+
+// その場編集セル（1行テキスト）。フォーカスを外すと保存・Escで取消・Enterで確定。
+function editableCell(initial: string, placeholder: string, onSave: (v: string) => Promise<void>): HTMLElement {
+  const cell = el('div', { class: 'qam-edit-cell' });
+  let current = initial;
+  function view(): void {
+    clear(cell);
+    const v = el('div', { class: 'qam-edit-view' + (current ? '' : ' is-empty'), title: current || placeholder }, [current || placeholder]);
+    v.addEventListener('click', (e) => { e.stopPropagation(); edit(); });
+    cell.append(v);
+  }
+  function edit(): void {
+    clear(cell);
+    const inp = el('input', { type: 'text', class: 'qam-edit-in', placeholder }) as HTMLInputElement;
+    inp.value = current;
+    inp.addEventListener('click', (e) => e.stopPropagation());
+    let closed = false;
+    const finish = async (commit: boolean): Promise<void> => {
+      if (closed) return; closed = true;
+      const v = inp.value.trim();
+      if (commit && v !== current) { try { await onSave(v); current = v; } catch { /* 失敗時は表示に戻す */ } }
+      view();
+    };
+    inp.addEventListener('blur', () => { void finish(true); });
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); void finish(false); }
+      else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); inp.blur(); }
+    });
+    cell.append(inp); inp.focus();
+  }
+  view();
+  return cell;
+}
+
 // コメントセル: 最新コメントを一覧内に直接表示し、クリックでその場編集（最新を編集／無ければ新規）。
 // 右側のスレッドボタン（件数）で全作業履歴モーダルを開く（追記もそこから）。
 function commentCell(entity: QamEntity, id: string, api: CommentApi): HTMLElement {
@@ -75,18 +114,27 @@ function commentCell(entity: QamEntity, id: string, api: CommentApi): HTMLElemen
 }
 
 // agSetten: host ID / domain名 → 所属AssetGroupの接続点ID（カンマ区切り全件）。host/domain 用。
-export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}): Column[] {
+// annot: API で取れない項目の手入力（Function/Location）。group 用。
+export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}, annot?: AnnotApi): Column[] {
   const c = (id: string, label: string, render: (r: QamRecord) => string | Node, mono?: boolean): Column => ({ id, label, mono, render, sortVal: (r) => String((render(r) as any)).toString() });
   const sc = (f: string) => (r: QamRecord) => esc(r.scalar[f] ?? '');
   const stc = (f: string) => (r: QamRecord) => joined(r.set[f]);
+  // 手入力列（その場編集）。値が無ければスナップショットの値、なければ空。並べ替え/出力は文字値で。
+  const editCol = (id: string, label: string, field: string): Column => ({
+    id, label,
+    render: (r: QamRecord) => (annot
+      ? editableCell(annot.get(r.key, field) || (r.scalar[field] ?? ''), '（クリックで入力）', (v) => annot.save(r.key, field, v))
+      : esc(r.scalar[field] ?? '')),
+    sortVal: (r: QamRecord) => (annot ? (annot.get(r.key, field) || (r.scalar[field] ?? '')) : (r.scalar[field] ?? '')),
+  });
   const comment: Column = { id: '_c', label: 'コメント', sortable: false, render: (r: QamRecord) => commentCell(entity, r.key, comments), sortVal: (r: QamRecord) => latestText(comments, r.key) };
   if (entity === 'group') return [
     c('key', 'ID', (r) => esc(r.key), true), c('name', 'タイトル', (r) => esc(r.name)),
     c('SETTEN', '接続点ID', (r) => esc(settenId(r.name)), true),
     c('OWNER_ID', 'オーナーID', sc('OWNER_ID'), true), c('IPS', 'IP', stc('IPS')),
     c('DNS_LIST', 'DNS', stc('DNS_LIST')), c('DOMAIN_LIST', 'ドメイン', stc('DOMAIN_LIST')),
-    c('DIVISION', '部門(Division)', sc('DIVISION')), c('FUNCTION', '機能(Function)', sc('FUNCTION')),
-    c('LOCATION', 'ロケーション(Location)', sc('LOCATION')), c('COMMENTS', 'コメント', sc('COMMENTS')),
+    c('DIVISION', '部門(Division)', sc('DIVISION')), editCol('FUNCTION', '機能(Function)', 'FUNCTION'),
+    editCol('LOCATION', 'ロケーション(Location)', 'LOCATION'), c('COMMENTS', 'コメント', sc('COMMENTS')),
     c('LAST_UPDATE', '最終更新', (r) => esc(r.info.LAST_UPDATE ?? ''), true), comment,
   ];
   if (entity === 'host') return [
