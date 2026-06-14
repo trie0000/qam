@@ -162,7 +162,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
     c('TITLE', '役職', sc('TITLE')),
     c('SCOPE_TAGS', 'スコープ(タグ)', stc('SCOPE_TAGS')),
     c('ASSIGNED_GROUPS', 'アクセス可能AG', stc('ASSIGNED_GROUPS')),
-    c('LAST_LOGIN_DATE', '最終ログイン', (r) => esc(r.info.LAST_LOGIN_DATE ?? ''), true), comment,
+    c('LAST_LOGIN_DATE', '最終ログイン', (r) => esc(fmtJst(r.info.LAST_LOGIN_DATE ?? '')), true), comment,
   ];
   return [
     c('key', 'ドメイン名', (r) => esc(r.key)),
