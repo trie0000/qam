@@ -508,6 +508,18 @@ function openIngest(): void {
         const creds = { base: cfg.qualysBase, user: cfg.qualysUser, pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
         if (!creds.base || !creds.user) { setProg('設定で Qualys 接続先とアカウントを入力してください', false); toast('設定が未入力です', 'error'); return; }
         const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
+        // ダウンロード前の重複チェック: 対象種別に本日分の取込が既にあれば、ダウンロード前に1回だけ確認する。
+        const today = dateOfStamp(stampNow());
+        const dupKinds: QamEntity[] = [];
+        for (const k of kinds) {
+          if ((await getSnapshotStamps(backend, k)).some((s) => dateOfStamp(s) === today)) dupKinds.push(k);
+        }
+        const dup: DupPolicy = { decided: false, proceed: false };
+        if (dupKinds.length) {
+          const ok = await confirmModal('本日分は取込済み', `${dupKinds.map(labelOf).join(' / ')} は本日(${today})分が既に取り込まれています。ダウンロードして取り込みますか？（同じ取込日時なら上書き、別時刻なら別取込として追加）`);
+          if (!ok) { setProg('取込を中止しました', false); toast('取込を中止しました', 'info'); return; }
+          dup.decided = true; dup.proceed = true; // 確認済み → 各 commit では再確認しない
+        }
         // session login は「できれば」。失敗しても止めず、従来どおり Basic 認証で続行する
         // （login 必須化で動かなくなった反省）。relay は session があれば Cookie、無ければ Basic を使う。
         setProg('Qualys にログイン中…', true);
@@ -518,7 +530,6 @@ function openIngest(): void {
           if (!useSession) toast('セッションログイン不可のため Basic 認証で続行します' + (lg.error ? `（${lg.error}）` : ''), 'info');
         } catch { useSession = false; }
         try {
-          const dup: DupPolicy = { decided: false, proceed: false }; // 重複確認はラン内で最初の1回だけ
           for (const k of kinds) {
             setProg(`${labelOf(k)}: ダウンロード中…`, true);
             const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
