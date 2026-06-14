@@ -161,7 +161,7 @@ function Invoke-QualysFetch { param($Body)
                 $more = ($pageXml -match '<hasMoreRecords>\s*true\s*</hasMoreRecords>')
                 $lm = [regex]::Match($pageXml, '<lastId>\s*(\d+)\s*</lastId>')
                 $lastId = if ($lm.Success) { $lm.Groups[1].Value } else { '' }
-                Add-QamLog "FETCH user page $page: more=$more lastId=$lastId"
+                Add-QamLog "FETCH user page ${page}: more=$more lastId=$lastId"
             } while ($ok -and $more -and $lastId -and $page -lt 200)
             $xml = if ($ok) { "<?xml version=`"1.0`" encoding=`"UTF-8`"?><ServiceResponse><responseCode>SUCCESS</responseCode><data>$($sb.ToString())</data></ServiceResponse>" } else { $sb.ToString() }
             $next = $null
