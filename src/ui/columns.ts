@@ -235,6 +235,25 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
   const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));
   // IP: 最新スナップショット(hostIp) を優先、無ければイベントのprops(追加/削除時の記録)から。
   const ipOf = (e: QamEvent): string => hostIp[e.id] || (e.props?.find((p) => p.k === 'IP')?.v ?? '');
+  // 変更履歴の「追加された/削除された 値」列。modified は set=added/removed・scalar=new/old、
+  // 追加/削除(資産まるごと)は props の全値（追加側 or 削除側）から取り出す。
+  const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
+  const addedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {
+    if (e.change === 'added') return propVal(e, (setF ?? scalarF)!);
+    if (e.change === 'deleted') return '';
+    if (setF && e.field === setF) return (e.added ?? []).join(', ');
+    if (scalarF && e.field === scalarF) return e.new ?? '';
+    return '';
+  };
+  const removedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {
+    if (e.change === 'deleted') return propVal(e, (setF ?? scalarF)!);
+    if (e.change === 'added') return '';
+    if (setF && e.field === setF) return (e.removed ?? []).join(', ');
+    if (scalarF && e.field === scalarF) return e.old ?? '';
+    return '';
+  };
+  const mkChg = (id: string, label: string, fn: (e: QamEvent) => string, mono = false): Column =>
+    ({ id, label, mono, render: (e: QamEvent) => esc(fn(e)), sortVal: fn });
   const cols: Column[] = [
     { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
     { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => CHANGE_LABEL[e.change] ?? e.change },
@@ -252,5 +271,16 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
   if (entity === 'host') {
     cols.splice(5, 0, { id: 'ip', label: 'IP', mono: true, render: (e: QamEvent) => esc(ipOf(e)), sortVal: ipOf });
   }
+  // 追加/削除された値の専用列（種別ごと）。メモ列の直前に差し込む。
+  const extra: Column[] = entity === 'group'
+    ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'IPS'), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'IPS'), true),
+       mkChg('add_dns', '追加DNS', (e) => addedOf(e, null, 'DNS_LIST')), mkChg('rem_dns', '削除DNS', (e) => removedOf(e, null, 'DNS_LIST'))]
+    : entity === 'host'
+      ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, 'IP', null), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, 'IP', null), true),
+         mkChg('add_fqdn', '追加FQDN', (e) => addedOf(e, 'FQDN', null)), mkChg('rem_fqdn', '削除FQDN', (e) => removedOf(e, 'FQDN', null))]
+      : entity === 'domain'
+        ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'NETBLOCK'), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'NETBLOCK'), true)]
+        : [];
+  if (extra.length) { const mi = cols.findIndex((c) => c.id === '_c'); cols.splice(mi < 0 ? cols.length : mi, 0, ...extra); }
   return cols;
 }
