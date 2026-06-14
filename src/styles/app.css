@@ -234,14 +234,14 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-modal-body { padding: var(--s-7); overflow: auto; }
 .qam-modal-foot { display: flex; justify-content: flex-end; gap: var(--s-3); padding: var(--s-5) var(--s-7); border-top: 1px solid var(--line); }
 /* 設定モーダル: 左ペインに分類、右ペインに項目（Spira風） */
-/* 共通: 項目を切り替えてもモーダルのサイズは変えない（幅は固定、高さは min-height で安定） */
-.qam-settings { display: grid; grid-template-columns: 150px 1fr; gap: var(--s-6); min-width: 540px; min-height: 280px; }
+/* 共通: 項目を切り替えてもモーダルのサイズは変えない（幅固定＋ペイン固定高さ＝中身で伸縮しない） */
+.qam-settings { display: grid; grid-template-columns: 150px 1fr; gap: var(--s-6); width: 560px; max-width: 100%; height: 340px; }
 .qam-settings-nav { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); padding-right: var(--s-4); }
 /* 左ライン（accent）でアクティブ分類を視覚区別。app の qam-nav と同じ Spira 流の規約。 */
 .qam-settings-nav button { text-align: left; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--ink); font: inherit; padding: var(--s-3) var(--s-4); border-radius: var(--r-2); cursor: pointer; }
 .qam-settings-nav button:hover { background: var(--paper-2); }
 .qam-settings-nav button[aria-current="true"] { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
-.qam-settings-pane { display: flex; flex-direction: column; gap: var(--s-5); min-width: 0; align-content: start; }
+.qam-settings-pane { display: flex; flex-direction: column; gap: var(--s-5); min-width: 0; height: 100%; overflow-y: auto; }
 .qam-field { display: flex; flex-direction: column; gap: var(--s-2); margin-bottom: var(--s-5); }
 .qam-field label { font-size: var(--fs-sm); color: var(--ink-3); }
 .qam-field .in { width: 100%; }
