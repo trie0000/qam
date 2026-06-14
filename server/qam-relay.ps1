@@ -128,6 +128,9 @@ function Invoke-QualysFetch { param($Body)
         }
     }
     $handler = New-Object System.Net.Http.HttpClientHandler
+    # UseCookies=true(既定)だとハンドラが Cookie を自前管理し、手で付けた Cookie ヘッダが送られない
+    # （login 200 でCookieを取れても fetch で QualysSession が送信されず 401 になる原因）。false にする。
+    $handler.UseCookies = $false
     if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
     $client = New-Object System.Net.Http.HttpClient($handler)
     $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
