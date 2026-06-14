@@ -165,10 +165,13 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
 const HIST_ID_LABEL: Record<QamEntity, string> = { group: 'AssetGroup ID', host: 'Host ID', domain: 'ドメイン名', user: 'ユーザID' };
 const HIST_NAME_LABEL: Record<QamEntity, string> = { group: 'タイトル', host: 'FQDN', domain: '名前', user: '氏名' };
 
-export function historyColumns(entity: QamEntity, comments: CommentApi): Column[] {
+// agSetten: host ID → 所属AGの接続点ID（host履歴用、main から渡す）。group はタイトルから算出。
+export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}): Column[] {
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
-  return [
+  // 接続点ID: group はタイトル(e.name)から算出、host は所属AGの接続点ID(agSetten[e.id])。
+  const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));
+  const cols: Column[] = [
     { id: 'ts', label: '更新日', mono: true, render: (e: QamEvent) => esc(fmtStamp(e.ts)), sortVal: (e: QamEvent) => e.ts },
     { id: 'change', label: '種別', render: (e: QamEvent) => changeTag(e.change), sortVal: (e: QamEvent) => e.change },
     { id: 'id', label: HIST_ID_LABEL[entity], mono: true, render: (e: QamEvent) => esc(e.id), sortVal: (e: QamEvent) => e.id },
@@ -178,4 +181,9 @@ export function historyColumns(entity: QamEntity, comments: CommentApi): Column[
     { id: 'new', label: '変更後/追加', render: newCell, sortable: false },
     { id: '_c', label: 'メモ', sortable: false, render: (e: QamEvent) => commentCell(e.entity, e.id, comments), sortVal: (e: QamEvent) => latestText(comments, e.id) },
   ];
+  // AssetGroup / Host は接続点ID列を「名前」の直後に挿入。
+  if (entity === 'group' || entity === 'host') {
+    cols.splice(4, 0, { id: 'setten', label: '接続点ID', mono: true, render: (e: QamEvent) => esc(settenOf(e)), sortVal: settenOf });
+  }
+  return cols;
 }

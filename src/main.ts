@@ -487,12 +487,13 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   const span = (state.histFrom || state.histTo) ? ` / ${state.histFrom ? fmt(state.histFrom) : '最古'}〜${state.histTo ? fmt(state.histTo) : '最新'}` : '';
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
+  const agSetten = await buildAgSetten(state.entity, ''); // host履歴の接続点ID（最新AG基準）
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
   host.append(renderTable({
-    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments),
+    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
     bulkActions: histBulk,
   }));
