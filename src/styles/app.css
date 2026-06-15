@@ -272,6 +272,7 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-lic-axislbl { fill: var(--ink-4); font-size: 11px; font-family: var(--font-mono); }
 .qam-lic-limit { stroke: var(--danger); stroke-width: 1.5; stroke-dasharray: 6 4; }
 .qam-lic-limitlbl { fill: var(--danger); font-size: 11px; font-weight: 600; font-family: var(--font-mono); }
+.qam-lic-metrics { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 .qam-lic-summary { display: flex; flex-wrap: wrap; gap: var(--s-4); max-width: 920px; }
 .qam-lic-stat { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-2);
   padding: var(--s-3) var(--s-5); min-width: 180px; background: var(--paper-2); }
