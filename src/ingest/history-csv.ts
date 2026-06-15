@@ -198,7 +198,7 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     let props: { k: string; v: string }[] | undefined;
     let field = '';
     if (entity === 'host') {
-      props = [{ k: 'FQDN', v: name }, { k: 'IP', v: extraVals.IP ?? '' }].filter((p) => p.v);
+      props = [{ k: 'FQDN', v: name }, { k: 'IP', v: extraVals.IP ?? '' }, { k: '接続点ID', v: extraVals['接続点ID'] ?? '' }].filter((p) => p.v);
       field = 'IPアドレス・FQDN';
     }
     events.push({

@@ -278,7 +278,16 @@ export function renderTable(opts: TableOpts): HTMLElement {
     for (const row of rows.slice(0, MAX_ROWS)) {
       const key = opts.getKey(row);
       const tr = el('tr', { class: (opts.selected.has(key) ? 'qam-selected' : '') + (opts.onRowClick ? ' qam-row-click' : '') });
-      if (opts.onRowClick) tr.addEventListener('click', () => opts.onRowClick!(row)); // チェック/編集セルは stopPropagation 済み
+      if (opts.onRowClick) {
+        // ドラッグでの範囲選択（コピー目的）はクリック扱いにしない。mousedown位置から動いた/選択テキストありなら無視。
+        let downX = 0; let downY = 0;
+        tr.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
+        tr.addEventListener('click', (e) => {
+          if (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) return;
+          if ((window.getSelection()?.toString() ?? '').length > 0) return;
+          opts.onRowClick!(row);
+        });
+      }
       const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
       cb.checked = opts.selected.has(key);
       cb.addEventListener('click', (e) => e.stopPropagation());

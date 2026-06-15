@@ -237,16 +237,25 @@ export function openEventProps(e: QamEvent): void {
   openModal({ title: `${label}アセットの情報 — ${e.name || e.id}`, body });
 }
 
-// agSetten: host ID → 所属AGの接続点ID（host履歴用、main から渡す）。group はタイトルから算出。
-export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}): Column[] {
+// agSetten: host ID → 所属AGの接続点ID（host履歴用・現スナップショット由来）。group はタイトルから算出。
+// agIdSetten: AssetGroup ID → 接続点ID。削除済みhostは props の ASSET_GROUP_IDS をこれで接続点IDに変換する。
+export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}, agIdSetten: Record<string, string> = {}): Column[] {
   // 資産情報は行クリックで開く（openEventProps）。ここは変更前/削除値の表示のみ。
   const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
   const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
-  // 接続点ID: group はタイトル(e.name)から算出、host は所属AGの接続点ID(agSetten[e.id])。
-  const settenOf = (e: QamEvent): string => (entity === 'group' ? settenId(e.name) : (agSetten[e.id] ?? ''));
+  const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
+  // props の ASSET_GROUP_IDS（"100, 300"）→ 接続点ID（重複除き昇順）。削除済みhostの所属AG復元用。
+  const settenFromProps = (e: QamEvent): string => {
+    const ids = propVal(e, 'ASSET_GROUP_IDS').split(',').map((s) => s.trim()).filter(Boolean);
+    const sids = [...new Set(ids.map((id) => agIdSetten[id]).filter(Boolean))].sort();
+    return sids.join(', ');
+  };
+  // 接続点ID: group はタイトルから算出。host は (1)現所属 (2)削除等は props の所属AG (3)CSV取込の接続点ID。
+  const settenOf = (e: QamEvent): string =>
+    entity === 'group' ? settenId(e.name)
+      : (agSetten[e.id] || settenFromProps(e) || propVal(e, '接続点ID'));
   // 「追加された/削除された 値」列。優先: modified の項目別差分(set=added/removed・scalar=new/old)。
   // 無ければ props から（追加/変更→追加側、削除→削除側）。CSV取込も props を入れるので各列に出る。
-  const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
   const addedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {
     if (setF && e.field === setF && e.added?.length) return e.added.join(', ');
     if (scalarF && e.field === scalarF && e.new) return e.new;

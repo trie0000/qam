@@ -403,6 +403,17 @@ async function buildAgSetten(entity: QamEntity, asof: string): Promise<Record<st
   return Object.fromEntries(Object.entries(acc).map(([k, v]) => [k, [...v].sort().join(', ')]));
 }
 
+// AssetGroup ID → 接続点ID（現グループスナップショットのタイトルから算出）。
+// 削除済みhostの履歴で、props の ASSET_GROUP_IDS を接続点IDへ変換するのに使う。
+async function buildAgIdSetten(asof = ''): Promise<Record<string, string>> {
+  const gStamp = resolveAsof(await getSnapshotStamps(backend, 'group'), asof || undefined);
+  if (!gStamp) return {};
+  const gSnap = await readSnapshot(backend, 'group', gStamp);
+  const m: Record<string, string> = {};
+  for (const g of Object.values(gSnap?.records ?? {}) as QamRecord[]) { const sid = settenId(g.name); if (sid) m[g.key] = sid; }
+  return m;
+}
+
 // 全資産一括 Excel: 全種別の最新スナップショットを種別ごとのシートに。フィルタ非適用（全件・全列）。
 async function exportAllAssets(): Promise<void> {
   const sheets: Sheet[] = [];
@@ -558,12 +569,13 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
   const agSetten = await buildAgSetten(state.entity, ''); // host履歴の接続点ID（最新AG基準）
+  const agIdSetten = state.entity === 'host' ? await buildAgIdSetten() : {}; // 削除済みhostの所属AG→接続点ID変換用
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
   host.append(renderTable({
-    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten),
+    viewId: `history.${state.entity}`, columns: historyColumns(state.entity, comments, agSetten, agIdSetten),
     rows: events, getKey: (e: QamEvent) => e.eid, selected: state.selected, exportRef, filterRef, columnRef,
     bulkActions: histBulk, onRowClick: (e: QamEvent) => openEventProps(e), // 行クリックで追加/削除/変更したアセットの情報を表示
     defaultHidden: HISTORY_DEFAULT_HIDDEN[state.entity],
