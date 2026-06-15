@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { fiscalYear, prepareLicenseSeries, licenseChartSvg, FY_MONTHS, type LicenseSample } from '../src/ui/license-chart';
 
-// テスト用サンプル生成（scanned = Unique Hosts Scanned）。
-const s = (ts: string, scanned: number): LicenseSample => ({ ts, scanned });
+// テスト用サンプル生成（折れ線は scanned = Unique Hosts Scanned を描く。ips は別途）。
+const s = (ts: string, scanned: number, ips = 0): LicenseSample => ({ ts, ips, scanned });
 
 describe('license-chart', () => {
   it('fiscalYear: 4月以降は当年度、1〜3月は前年度', () => {

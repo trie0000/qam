@@ -10,7 +10,7 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay } from './relay';
-import { downloadEntity } from './qualys';
+import { downloadEntity, downloadIpCount } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
@@ -48,13 +48,14 @@ function uniqueHostsScanned(records: QamRecords): number {
   for (const r of Object.values(records)) if ((r.info.LAST_VULN_SCAN_DATETIME || '').trim()) n++;
   return n;
 }
-// 推移サンプル: licenses.jsonl（長期保持）＋現存 host スナップショットから算出した Unique Hosts Scanned を stamp で統合。
+// 推移サンプル: licenses.jsonl（ips/scanned を長期保持）＋現存 host スナップショットから scanned を再算出して統合。
+// ips（IPs in Subscription）は host 一覧から算出できないので licenses.jsonl の記録値を使う。
 async function buildLicenseSamples(): Promise<LicenseSample[]> {
   const map = new Map<string, LicenseSample>();
   for (const s of await readLicenses(backend)) map.set(s.ts, s);
   for (const stamp of await getSnapshotStamps(backend, 'host')) {
     const snap = await readSnapshot(backend, 'host', stamp);
-    if (snap) map.set(stamp, { ts: stamp, scanned: uniqueHostsScanned(snap.records) });
+    if (snap) map.set(stamp, { ts: stamp, ips: map.get(stamp)?.ips ?? 0, scanned: uniqueHostsScanned(snap.records) });
   }
   return [...map.values()].sort((a, b) => a.ts.localeCompare(b.ts));
 }
@@ -119,11 +120,13 @@ const licenseBadge = el('button', { class: 'qam-license', title: 'Unique Hosts S
 licenseBadge.addEventListener('click', () => { state.mode = 'licenses'; state.selected.clear(); refresh(); });
 async function updateLicenseBadge(): Promise<void> {
   clear(licenseBadge);
-  const [stamps, cfg] = await Promise.all([getSnapshotStamps(backend, 'host'), getConfig()]);
+  const [stamps, cfg, lic] = await Promise.all([getSnapshotStamps(backend, 'host'), getConfig(), readLicenses(backend)]);
   const stamp = resolveAsof(stamps);
   const snap = stamp ? await readSnapshot(backend, 'host', stamp) : null;
   const scanned = snap ? uniqueHostsScanned(snap.records) : null;
-  const sub = cfg.licenseLimit || 0; // IPs in Subscription（手入力）
+  // IPs in Subscription: 直近に取得できた登録IP数（>0）を優先、無ければ設定の手入力値。
+  const fetched = [...lic].reverse().find((s) => s.ips > 0)?.ips ?? 0;
+  const sub = fetched || cfg.licenseLimit || 0;
   licenseBadge.append(
     el('span', { class: 'qam-license-cap' }, ['Scanned / IPs in Subscription']),
     el('span', { class: 'qam-license-num' }, [`${scanned == null ? '—' : scanned.toLocaleString()} / ${sub ? sub.toLocaleString() : '—'}`]),
@@ -627,8 +630,10 @@ async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLE
 async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
   const [samples, cfg] = await Promise.all([buildLicenseSamples(), getConfig()]);
-  const sub = cfg.licenseLimit || 0; // IPs in Subscription（契約の登録IP数・手入力。基準線/残数に使用）
   const latest = samples.length ? samples[samples.length - 1].scanned : null;
+  // IPs in Subscription: 直近に取得できた登録IP数(>0)を優先、無ければ設定の手入力値。
+  const fetchedIps = [...samples].reverse().find((s) => s.ips > 0)?.ips ?? 0;
+  const sub = fetchedIps || cfg.licenseLimit || 0;
   const series = prepareLicenseSeries(samples);
   count.textContent = `${samples.length.toLocaleString()} サンプル / ${series.length} 年度`;
   clear(host);
@@ -658,11 +663,11 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
   const stat = (k: string, v: string): HTMLElement => el('div', { class: 'qam-lic-stat' }, [el('span', { class: 'qam-lic-stat-k' }, [k]), el('span', { class: 'qam-lic-stat-v' }, [v])]);
   const summary = el('div', { class: 'qam-lic-summary' }, [
     stat('Unique Hosts Scanned（スキャン済・最新）', latest == null ? '—' : latest.toLocaleString()),
-    stat('IPs in Subscription（契約・設定値）', sub ? sub.toLocaleString() : '—'),
+    stat(`IPs in Subscription（${fetchedIps ? '自動取得' : '設定値'}）`, sub ? sub.toLocaleString() : '—'),
     ...(sub ? [stat('残り（Subscription − Scanned）', latest != null ? (sub - latest).toLocaleString() : '—')] : []),
   ]);
   const note = '折れ線 = Unique Hosts Scanned（実際にスキャン済みの一意ホスト数。host 一覧から算出）。'
-    + '破線 = IPs in Subscription（サブスクリプションの登録IP数。host 一覧からは算出できないため設定で手入力）。'
+    + '破線 = IPs in Subscription（サブスクリプションの登録IP総数。API取込時に Qualys から自動取得。取得できない場合は設定の手入力値）。'
     + 'x 軸は年度（4月〜翌3月）の月。データの無い月は未記載。';
   wrap.append(el('div', { class: 'qam-lic-note' }, [note]), summary, chartBox, legend);
   host.append(wrap);
@@ -728,7 +733,7 @@ async function openThread(entity: QamEntity, id: string): Promise<void> {
 // ---- ingest ----
 // 重複確認の方針を取込ラン内で共有（「すべて」取込で一件ごとに聞かず最初の1回だけ確認）。
 interface DupPolicy { decided: boolean; proceed: boolean }
-async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string, dup?: DupPolicy): Promise<void> {
+async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string, dup?: DupPolicy, ipCount?: number | null): Promise<void> {
   const cfg = await getConfig();
   // 取込日時 = XML の DATETIME 由来。重複チェック: 同 stamp=上書き / 同日=別取込として追加。
   const stamp = datetimeToStamp(snap.datetime);
@@ -758,7 +763,8 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
   recordOp('取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
   // Host 取込ごとに、その時点の使用ライセンス数(登録IP数)を日時(stamp)つきで記録（推移グラフ用）。
-  if (res.committed && snap.entity === 'host') await recordLicense(backend, res.stamp, uniqueHostsScanned(snap.records as QamRecords)).catch(() => undefined);
+  // host 取込ごとに Unique Hosts Scanned を記録。IPs in Subscription(ipCount)は API取得時のみ（XMLは null→0）。
+  if (res.committed && snap.entity === 'host') await recordLicense(backend, res.stamp, ipCount ?? 0, uniqueHostsScanned(snap.records as QamRecords)).catch(() => undefined);
 }
 
 // Qualys アカウント/パスワード未登録時の登録モーダル。保存して {user,pass} を返す。取消は null。
@@ -849,11 +855,14 @@ function openIngest(): void {
         }
         // 取得は Basic 認証のみ（セッションCookieは環境により 401 で拒否されるため使わない）。
         setRelayBusy(true); // 取得中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
+        // host を取り込むなら IPs in Subscription（登録IP総数）も取得（best-effort）。
+        let ipCount: number | null = null;
+        if (kinds.includes('host')) { setProg('IPs in Subscription を取得中…', true); ipCount = await downloadIpCount(creds); }
         for (const k of kinds) {
           setProg(`${labelOf(k)}: ダウンロード中…`, true);
           const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
           setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
-          await commitOne(dl.snapshot, dl.raw, dup);
+          await commitOne(dl.snapshot, dl.raw, dup, ipCount);
         }
         setProg('完了しました', false);
         refresh();
@@ -1007,7 +1016,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('IPs in Subscription（契約の登録IP数）', licLimit, 'Qualys の Account → Subscription Information に表示される登録IP数を入力。host 一覧からは算出できないため手入力です。推移グラフの基準線・残数算出に使用。0 で非表示。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('IPs in Subscription（手入力・自動取得のfallback）', licLimit, 'API取込時に Qualys から自動取得します。取得できない環境用の手入力欄です（Account → Subscription Information の登録IP数）。自動取得値があればそちらを優先。0 で未設定。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),

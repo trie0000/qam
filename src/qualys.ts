@@ -17,6 +17,34 @@ function failReason(res: { error?: string; xml?: string }): string {
   return res.error || txt.slice(0, 200);
 }
 
+// IPv4 → 整数（IP_RANGE 展開用）。不正は null。
+function ipToInt(s: string): number | null {
+  const m = s.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const p = m.slice(1).map(Number);
+  if (p.some((n) => n > 255)) return null;
+  return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
+}
+
+// IPs in Subscription を Qualys から取得（/api/2.0/fo/asset/ip/?action=list）。
+// 応答中の <IP> は1、<IP_RANGE>a-b</IP_RANGE> は (b-a+1) を加算して登録IP総数を数える。
+// 取得不可（権限/エラー）なら null（呼び出し側で手入力値にフォールバック）。
+export async function downloadIpCount(creds: QualysCreds): Promise<number | null> {
+  try {
+    const res = await fetchQualys({ kind: 'ips', base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
+    if (!res.ok || !res.xml) return null;
+    const xml = res.xml;
+    let n = 0;
+    for (const m of xml.matchAll(/<IP(?:\s[^>]*)?>([^<]+)<\/IP>/gi)) { if (ipToInt(m[1]) !== null) n += 1; }
+    for (const m of xml.matchAll(/<IP_RANGE(?:\s[^>]*)?>([^<]+)<\/IP_RANGE>/gi)) {
+      const [a, b] = m[1].split('-').map((x) => x.trim());
+      const ai = ipToInt(a); const bi = ipToInt(b);
+      if (ai !== null && bi !== null && bi >= ai) n += bi - ai + 1;
+    }
+    return n;
+  } catch { return null; }
+}
+
 export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProgress?: DownloadProgress): Promise<DownloadResult> {
   // 取得は Basic 認証固定。セッションCookieは環境により 401(Bad Login)で拒否され、ページ追従でも
   // 毎回 401 を出すため使わない（Basic は安定して通る）。

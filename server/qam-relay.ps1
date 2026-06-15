@@ -121,6 +121,8 @@ function Invoke-QualysFetch { param($Body)
             # WARNING/URL ページング。次ページURLは応答が返すものに従うので自動で 5.0 になる）。
             'host'   { $url = "$base/api/5.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
+            # IPs in Subscription（サブスクリプションに登録された IP / IP_RANGE）。件数算出用。
+            'ips'    { $url = "$base/api/2.0/fo/asset/ip/?action=list" }
             # user 一覧は QPS RBAC: POST /qps/rest/2.0/search/am/user/（末尾スラッシュ必須）。
             # 応答 ServiceResponse(XML)。role/scopeTags を含む。Active ユーザのみ返る。
             'user'   { $url = "$base/qps/rest/2.0/search/am/user/" }

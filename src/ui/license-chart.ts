@@ -2,7 +2,7 @@
 // データの無い月は未記載（点を打たず線を分断）。色は年度の並び順で固定。
 import { el } from './dom';
 
-export interface LicenseSample { ts: string; scanned: number }
+export interface LicenseSample { ts: string; ips: number; scanned: number }
 
 // 年度の x 軸（4月始まり〜翌3月）。
 export const FY_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
