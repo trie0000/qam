@@ -52,7 +52,9 @@ if (-not $DataDir) { Write-Host '[qam] QAM_DATA_DIR が未設定です。qam.env
 if (-not $Port) { $Port = if ($env:QAM_RELAY_PORT) { [int]$env:QAM_RELAY_PORT } else { 18090 } }
 if (-not $BundleDir) { $BundleDir = if ($env:QAM_BUNDLE_DIR) { $env:QAM_BUNDLE_DIR } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'dist' } }
 if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
-$DataFull = (Resolve-Path -LiteralPath $DataDir).Path
+# Resolve-Path の .Path は UNC でプロバイダ接頭辞付き(Microsoft.PowerShell.Core\FileSystem::\\…)を返し、
+# 後段の [IO.Path]::GetFullPath が「パス形式非対応」で落ちる。GetFullPath で素のパスに正規化する。
+$DataFull = [IO.Path]::GetFullPath($DataDir)
 $script:LogFile = Join-Path $DataFull 'relay.log'
 $script:QamStop = $false
 # Qualys セッション（login で取得し fetch で使い回し、logout で破棄）。
@@ -91,7 +93,9 @@ function Get-Body { param($Req)
 # path を DataDir 配下に閉じ込めて解決（.. 等での脱出を拒否）。
 function Resolve-SafePath { param([string]$Rel)
     if (-not $Rel) { throw 'path 未指定' }
-    $full = [IO.Path]::GetFullPath((Join-Path $DataFull $Rel))
+    # 相対パスは TS 側がスラッシュ区切りで渡す。Windows/UNC 向けに区切りを揃えてから結合・正規化。
+    $rel2 = $Rel -replace '/', '\'
+    $full = [IO.Path]::GetFullPath((Join-Path $DataFull $rel2))
     if (-not $full.StartsWith($DataFull, [StringComparison]::Ordinal)) { throw "範囲外 path: $Rel" }
     return $full
 }
