@@ -38,10 +38,13 @@ if (Test-Up $health) {
     $relay = Join-Path $PSScriptRoot 'server\qam-relay.ps1'
     if (-not (Test-Path -LiteralPath $relay)) { throw "relay が見つかりません: $relay" }
     Write-Host "[qam-start] relay を起動 (port $Port)..." -ForegroundColor Cyan
+    # プロセスの作業ディレクトリに UNC パスは指定できない（Win32 制約）。共有(\\…)から起動された場合は
+    # ローカルパスにフォールバックする。relay は $PSScriptRoot と絶対パスで動くので作業Dirに依存しない。
+    $relayCwd = if ($PSScriptRoot -like '\\*') { $env:SystemRoot } else { $PSScriptRoot }
     # 別ウィンドウ + -NoExit。起動失敗(ポート競合/設定不足)が見えるように隠さない。
     Start-Process -FilePath 'powershell.exe' -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', "`"$relay`""
-    ) -WorkingDirectory $PSScriptRoot | Out-Null
+    ) -WorkingDirectory $relayCwd | Out-Null
     $w = 0
     while ($w -lt 10000 -and -not (Test-Up $health)) { Start-Sleep -Milliseconds 500; $w += 500 }
     if (Test-Up $health) { Write-Host "[qam-start] relay OK" -ForegroundColor Green }
