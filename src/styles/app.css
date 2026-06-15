@@ -131,6 +131,10 @@ body {
 .qam-search svg { width: 14px; height: 14px; color: var(--ink-4); }
 .qam-search input { border: 0; background: transparent; font: inherit; font-size: var(--fs-md); color: var(--ink); min-width: 180px; }
 .qam-search input:focus { outline: none; }
+.qam-search-clear { display: none; align-items: center; justify-content: center; border: 0; background: transparent;
+  color: var(--ink-4); cursor: pointer; padding: 2px; border-radius: var(--r-1); flex: 0 0 auto; }
+.qam-search-clear:hover { color: var(--ink); background: var(--paper-2-strong); }
+.qam-search-clear svg { width: 13px; height: 13px; }
 
 /* ---------- table (§25 共通テーブル) ---------- */
 .qam-tablewrap { overflow: auto; padding: 0 var(--gutter) var(--gutter); min-height: 0; }

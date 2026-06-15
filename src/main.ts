@@ -185,7 +185,13 @@ async function refresh(): Promise<void> {
     const sIn = el('input', { type: 'text', placeholder: '検索（ID / 名前 / IP / FQDN）', value: state.q }) as HTMLInputElement;
     onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
     sIn.addEventListener('change', () => { state.q = sIn.value.trim(); refresh(); });
-    search.append(sIn); toolbar.append(search);
+    // クリアボタン（入力があるときだけ表示）。
+    const clearBtn = el('button', { class: 'qam-search-clear', 'aria-label': '検索をクリア', title: '検索をクリア', html: icon('x', 13) });
+    const syncClear = (): void => { clearBtn.style.display = sIn.value ? 'inline-flex' : 'none'; };
+    clearBtn.addEventListener('click', () => { sIn.value = ''; state.q = ''; refresh(); });
+    sIn.addEventListener('input', syncClear);
+    search.append(sIn, clearBtn); toolbar.append(search);
+    syncClear();
     // 全文表示トグル（列幅で折り返して全文表示）
     const wrapBtn = el('button', { class: state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm', title: '列幅で折り返して全文表示' }, ['全文表示']);
     wrapBtn.addEventListener('click', () => {
