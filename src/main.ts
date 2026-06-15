@@ -185,10 +185,12 @@ async function refresh(): Promise<void> {
     const sIn = el('input', { type: 'text', placeholder: '検索（ID / 名前 / IP / FQDN）', value: state.q }) as HTMLInputElement;
     onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
     sIn.addEventListener('change', () => { state.q = sIn.value.trim(); refresh(); });
-    // クリアボタン（入力があるときだけ表示）。
+    // クリアボタン。表示/非表示は visibility で切替（display を変えると入力時にボックス幅が変わるため）。
     const clearBtn = el('button', { class: 'qam-search-clear', 'aria-label': '検索をクリア', title: '検索をクリア', html: icon('x', 13) });
-    const syncClear = (): void => { clearBtn.style.display = sIn.value ? 'inline-flex' : 'none'; };
-    clearBtn.addEventListener('click', () => { sIn.value = ''; state.q = ''; refresh(); });
+    const syncClear = (): void => { clearBtn.style.visibility = sIn.value ? 'visible' : 'hidden'; };
+    // mousedown で処理＋preventDefault：input の blur→change→refresh が先に走ってボタンが消え、
+    // 「1度押しただけでは効かない（2度押し必要）」になるのを防ぐ。
+    clearBtn.addEventListener('mousedown', (e) => { e.preventDefault(); sIn.value = ''; state.q = ''; refresh(); });
     sIn.addEventListener('input', syncClear);
     search.append(sIn, clearBtn); toolbar.append(search);
     syncClear();
