@@ -273,6 +273,17 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-lic-axislbl { fill: var(--ink-4); font-size: 11px; font-family: var(--font-mono); }
 .qam-lic-limit { stroke: var(--danger); stroke-width: 1.5; stroke-dasharray: 6 4; }
 .qam-lic-limitlbl { fill: var(--danger); font-size: 11px; font-weight: 600; font-family: var(--font-mono); }
+/* ヘルプ（使い方マニュアル） */
+.qam-help { max-width: 720px; max-height: 64vh; overflow-y: auto; line-height: 1.65; font-size: var(--fs-md); color: var(--ink); }
+.qam-help h3 { font-size: var(--fs-base); margin: var(--s-6) 0 var(--s-2); color: var(--accent-strong);
+  border-bottom: 1px solid var(--line); padding-bottom: var(--s-1); }
+.qam-help h3:first-child { margin-top: 0; }
+.qam-help p { margin: 0 0 var(--s-3); }
+.qam-help ul { margin: 0 0 var(--s-3); padding-left: var(--s-7); }
+.qam-help li { margin: 2px 0; }
+.qam-help b { font-weight: 600; }
+.qam-help .qam-help-foot { margin-top: var(--s-6); color: var(--ink-4); font-size: var(--fs-xs); font-family: var(--font-mono); }
+
 .qam-lic-metrics { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 .qam-lic-summary { display: flex; flex-wrap: wrap; gap: var(--s-4); max-width: 920px; }
 .qam-lic-stat { display: flex; flex-direction: column; gap: 2px; border: 1px solid var(--line); border-radius: var(--r-2);

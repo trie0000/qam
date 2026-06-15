@@ -142,6 +142,7 @@ topbar.append(
   ingestBtn,
   exportAllBtn,
   iconBtn('refresh', '更新', refresh),
+  iconBtn('help', 'ヘルプ', openHelp),
   iconBtn('settings', '設定', openSettings),
   iconBtn('logout', '終了', doShutdown),
 );
@@ -1048,6 +1049,74 @@ async function openSettings(): Promise<void> {
       } catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
     },
   });
+}
+
+// ヘルプ（使い方マニュアル）モーダル。
+function openHelp(): void {
+  const body = el('div', { class: 'qam-help', html: `
+    <h3>QAM とは</h3>
+    <p>Qualys の AssetGroup / Host / Domain / User の改廃（追加・変更・削除）履歴を記録し、任意時点の資産一覧・変更履歴・ライセンス推移を確認するツールです。各自のPCでローカル中継(relay)が動き、ブラウザで操作します。</p>
+
+    <h3>起動</h3>
+    <ul>
+      <li><b>qam-start.bat</b> をダブルクリック → relay が起動し、既定ブラウザで自動的に開きます。</li>
+      <li>「中継サーバに接続できません」が出たら、relay（別ウィンドウ）が起動しているか確認し「再接続」を押します。</li>
+    </ul>
+
+    <h3>最初の設定（右上の ⚙ 設定）</h3>
+    <ul>
+      <li><b>個人設定</b>：記入者名（操作履歴・メモの作業者）、Qualys アカウント／パスワード、テーマ、文字サイズ。</li>
+      <li><b>共通設定</b>：Qualys 接続先 POD、プロキシ URL、保存期間（日）、ライセンス上限。</li>
+      <li><b>開発者</b>：データのリセット（資産/履歴/メモを種類選択）、登録情報のリセット、ビルド情報。</li>
+    </ul>
+    <p>※ Qualys 認証情報・記入者名は各自のブラウザに保存され共有されません。更新作業の直前に記入者名が未設定なら入力を促します。</p>
+
+    <h3>データの取込（右上の 取込）</h3>
+    <ul>
+      <li><b>API ダウンロード</b>：種別（すべて／個別）を選んで Qualys から取得。Host 取込時は IPs in Subscription も自動取得。</li>
+      <li><b>XML アップロード</b>：Qualys の一覧 XML を読み込み（種別は自動判定）。</li>
+      <li><b>変更履歴CSV</b>：手運用の改廃履歴CSVを取り込み（種別ごと）。ヘッダ名で列を対応付けます。</li>
+      <li><b>値CSV(AssetGroup)</b>：接続点IDをキーに 事業場名／接続名称／拠点名称／コメント／外接番号 を上書き。</li>
+    </ul>
+    <p>取込は「取込日時」ごとに保存します。同じ日時＝上書き、別時刻＝別取込として追加。件数が急減した場合は確定前に確認します。</p>
+
+    <h3>資産一覧</h3>
+    <ul>
+      <li>上部タブで種別、「基準（取込日時）」で時点を選択。</li>
+      <li>検索（ID／名前／IP／FQDN、IP はレンジ内判定も）。× でクリア。</li>
+      <li>列名クリックで Excel 風オートフィルタ（並べ替え＋値で絞り込み）。じょうごアイコンが絞り込み中の目印。Esc で閉じる。</li>
+      <li>「列表示」で列の表示／非表示。列はドラッグで並べ替え、境界ドラッグで幅変更。</li>
+      <li>事業場名／接続名称／拠点名称／コメント／外接番号 はセルをクリックして手入力（自動保存）。</li>
+      <li>CSV／Excel／全資産Excel で出力できます。</li>
+    </ul>
+
+    <h3>変更履歴</h3>
+    <ul>
+      <li>左のカレンダーで変更日を確認（クリックで当日、ドラッグ／Shift＋クリックで範囲）。期間・種別でも絞り込み。</li>
+      <li>更新日は Qualys 上の更新時刻（AssetGroup は LAST_UPDATE）。表示は JST。</li>
+      <li><b>行をクリック</b>すると、追加／削除／変更した資産の情報（プロパティ）を表示します。</li>
+      <li>追加IP／削除IP・追加DNS／削除DNS・追加FQDN／削除FQDN 列で増減を確認できます。</li>
+      <li>不要な履歴は選択して削除できます。</li>
+    </ul>
+
+    <h3>ライセンス数推移</h3>
+    <ul>
+      <li>折れ線＝<b>Unique Hosts Scanned</b>（スキャン済み一意ホスト数。host 一覧から算出）。</li>
+      <li><b>IPs in Subscription</b>（登録IP総数）＝ API 取込時に Qualys から自動取得。</li>
+      <li>破線＝<b>ライセンス上限</b>（設定値）。年度（4月〜翌3月）ごとに重ね表示し、凡例で年度の表示を切替。</li>
+    </ul>
+
+    <h3>操作履歴</h3>
+    <p>取込・編集・削除などの操作を、作業者と日時（JST）つきで記録します。</p>
+
+    <h3>注意</h3>
+    <ul>
+      <li>ファイルサーバ配置で複数人が使う場合、<b>同時の更新は不可</b>（取込・編集は1人ずつ）。閲覧の同時利用は可能です。</li>
+      <li>保存期間を過ぎると資産スナップショットは剪定されますが、<b>変更履歴・メモ・操作履歴・ライセンス推移は恒久保持</b>です。</li>
+    </ul>
+    <div class="qam-help-foot">build ${BUILD}${BUILDTIME ? `（${BUILDTIME}）` : ''}</div>
+  ` });
+  openModal({ title: 'ヘルプ（使い方）', body });
 }
 
 async function doShutdown(): Promise<void> {

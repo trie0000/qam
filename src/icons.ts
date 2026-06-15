@@ -24,6 +24,8 @@ const INNER: Record<string, string> = {
   filter: '<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>',
   // 折れ線グラフ（ライセンス数推移）。
   trend: '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>',
+  // ヘルプ（？）。使い方マニュアル。
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.82 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
 };
 
 export function icon(name: keyof typeof INNER | string, size = 16): string {
