@@ -88,7 +88,7 @@ export function licenseChartSvg(series: FySeries[], visibleFy: Set<number>, limi
   if (limit > 0) {
     const yy = y(limit);
     add('line', { x1: padL, y1: yy, x2: W - padR, y2: yy, class: 'qam-lic-limit' });
-    add('text', { x: W - padR, y: yy - 5, class: 'qam-lic-limitlbl', 'text-anchor': 'end' }, `IPs in Subscription ${limit.toLocaleString()}`);
+    add('text', { x: W - padR, y: yy - 5, class: 'qam-lic-limitlbl', 'text-anchor': 'end' }, `ライセンス上限 ${limit.toLocaleString()}`);
   }
 
   // 系列（データの無い月で線を分断。点はデータのある月のみ）

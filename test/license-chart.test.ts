@@ -40,12 +40,12 @@ describe('license-chart', () => {
     for (const m of FY_MONTHS) expect(labels).toContain(`${m}月`);
   });
 
-  it('licenseChartSvg: limit>0 で IPs in Subscription の破線とラベルを描く', () => {
+  it('licenseChartSvg: limit>0 で ライセンス上限 の破線とラベルを描く', () => {
     const series = prepareLicenseSeries([s('2026-04-10T09-00-00', 100)]);
     const withLimit = licenseChartSvg(series, new Set([2026]), 500);
     expect(withLimit.querySelector('.qam-lic-limit')).toBeTruthy();
     const lbl = [...withLimit.querySelectorAll('text')].map((t) => t.textContent);
-    expect(lbl).toContain('IPs in Subscription 500');
+    expect(lbl).toContain('ライセンス上限 500');
     const noLimit = licenseChartSvg(series, new Set([2026]), 0);
     expect(noLimit.querySelector('.qam-lic-limit')).toBeNull();
   });

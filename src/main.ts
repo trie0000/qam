@@ -120,16 +120,15 @@ const licenseBadge = el('button', { class: 'qam-license', title: 'Unique Hosts S
 licenseBadge.addEventListener('click', () => { state.mode = 'licenses'; state.selected.clear(); refresh(); });
 async function updateLicenseBadge(): Promise<void> {
   clear(licenseBadge);
-  const [stamps, cfg, lic] = await Promise.all([getSnapshotStamps(backend, 'host'), getConfig(), readLicenses(backend)]);
+  const [stamps, lic] = await Promise.all([getSnapshotStamps(backend, 'host'), readLicenses(backend)]);
   const stamp = resolveAsof(stamps);
   const snap = stamp ? await readSnapshot(backend, 'host', stamp) : null;
   const scanned = snap ? uniqueHostsScanned(snap.records) : null;
-  // IPs in Subscription: 直近に取得できた登録IP数（>0）を優先、無ければ設定の手入力値。
-  const fetched = [...lic].reverse().find((s) => s.ips > 0)?.ips ?? 0;
-  const sub = fetched || cfg.licenseLimit || 0;
+  // IPs in Subscription: 直近に取得できた登録IP数（自動取得のみ。ライセンス上限とは別）。
+  const ips = [...lic].reverse().find((s) => s.ips > 0)?.ips ?? 0;
   licenseBadge.append(
     el('span', { class: 'qam-license-cap' }, ['Scanned / IPs in Subscription']),
-    el('span', { class: 'qam-license-num' }, [`${scanned == null ? '—' : scanned.toLocaleString()} / ${sub ? sub.toLocaleString() : '—'}`]),
+    el('span', { class: 'qam-license-num' }, [`${scanned == null ? '—' : scanned.toLocaleString()} / ${ips ? ips.toLocaleString() : '—'}`]),
   );
 }
 topbar.append(
@@ -631,9 +630,8 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
   clear(leftCalHost);
   const [samples, cfg] = await Promise.all([buildLicenseSamples(), getConfig()]);
   const latest = samples.length ? samples[samples.length - 1].scanned : null;
-  // IPs in Subscription: 直近に取得できた登録IP数(>0)を優先、無ければ設定の手入力値。
-  const fetchedIps = [...samples].reverse().find((s) => s.ips > 0)?.ips ?? 0;
-  const sub = fetchedIps || cfg.licenseLimit || 0;
+  const ips = [...samples].reverse().find((s) => s.ips > 0)?.ips ?? 0; // IPs in Subscription（登録IP数・自動取得）。線には使わない。
+  const cap = cfg.licenseLimit || 0; // ライセンス上限（env QAM_LICENSE_LIMIT）。破線はこちらを使う。
   const series = prepareLicenseSeries(samples);
   count.textContent = `${samples.length.toLocaleString()} サンプル / ${series.length} 年度`;
   clear(host);
@@ -650,7 +648,7 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
   const redraw = (): void => {
     clear(chartBox);
     const visible = new Set(series.filter((s) => !state.licenseHidden.has(s.fy)).map((s) => s.fy));
-    chartBox.append(licenseChartSvg(series, visible, sub)); // 破線 = IPs in Subscription（手入力）
+    chartBox.append(licenseChartSvg(series, visible, cap)); // 破線 = ライセンス上限（env）
   };
   for (const s of series) {
     const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -663,11 +661,13 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
   const stat = (k: string, v: string): HTMLElement => el('div', { class: 'qam-lic-stat' }, [el('span', { class: 'qam-lic-stat-k' }, [k]), el('span', { class: 'qam-lic-stat-v' }, [v])]);
   const summary = el('div', { class: 'qam-lic-summary' }, [
     stat('Unique Hosts Scanned（スキャン済・最新）', latest == null ? '—' : latest.toLocaleString()),
-    stat(`IPs in Subscription（${fetchedIps ? '自動取得' : '設定値'}）`, sub ? sub.toLocaleString() : '—'),
-    ...(sub ? [stat('残り（Subscription − Scanned）', latest != null ? (sub - latest).toLocaleString() : '—')] : []),
+    stat('IPs in Subscription（登録IP数・自動取得）', ips ? ips.toLocaleString() : '—'),
+    stat('ライセンス上限（設定）', cap ? cap.toLocaleString() : '—'),
+    ...(cap ? [stat('残り（上限 − IPs in Subscription）', ips ? (cap - ips).toLocaleString() : '—')] : []),
   ]);
   const note = '折れ線 = Unique Hosts Scanned（実際にスキャン済みの一意ホスト数。host 一覧から算出）。'
-    + '破線 = IPs in Subscription（サブスクリプションの登録IP総数。API取込時に Qualys から自動取得。取得できない場合は設定の手入力値）。'
+    + '破線 = ライセンス上限（設定の QAM_LICENSE_LIMIT）。'
+    + 'IPs in Subscription（登録IP総数）は API取込時に Qualys から自動取得し、上限とは別の値として表示。'
     + 'x 軸は年度（4月〜翌3月）の月。データの無い月は未記載。';
   wrap.append(el('div', { class: 'qam-lic-note' }, [note]), summary, chartBox, legend);
   host.append(wrap);
@@ -1016,7 +1016,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('IPs in Subscription（手入力・自動取得のfallback）', licLimit, 'API取込時に Qualys から自動取得します。取得できない環境用の手入力欄です（Account → Subscription Information の登録IP数）。自動取得値があればそちらを優先。0 で未設定。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
