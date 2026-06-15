@@ -116,18 +116,17 @@ export async function resetData(b: FileBackend, opts: ResetOptions): Promise<voi
   if (opts.comments) await b.remove(COMMENTS);
 }
 
-// --- ライセンス推移: 取込stampごとに IPs in Subscription と Unique Hosts Scanned を記録（剪定対象外で長期保持） ---
-//   ips     = IPs in Subscription（サブスクリプションに登録された一意IP数。Qualysの課金基準）
-//   scanned = Unique Hosts Scanned（実際にスキャン済みの一意ホスト数）
-// snapshot は保存期間で消えるが、推移グラフは年度をまたいで見たいのでサンプルは別ログに残す。
-export interface QamLicenseSample { ts: string; ips: number; scanned: number }
+// --- ライセンス推移: 取込stampごとに Unique Hosts Scanned（実際にスキャン済みの一意ホスト数）を記録 ---
+// IPs in Subscription は host 一覧から算出できない（サブスクリプションの登録IPプール＝Qualysの契約値）ため
+// 設定で手入力する。ここに残すのは host 由来で算出できる Unique Hosts Scanned のみ（剪定対象外で長期保持）。
+export interface QamLicenseSample { ts: string; scanned: number }
 const LICENSES = 'licenses.jsonl';
-export const recordLicense = (b: FileBackend, ts: string, ips: number, scanned: number): Promise<void> =>
-  b.write(LICENSES, JSON.stringify({ ts, ips, scanned }) + '\n', true);
+export const recordLicense = (b: FileBackend, ts: string, scanned: number): Promise<void> =>
+  b.write(LICENSES, JSON.stringify({ ts, scanned }) + '\n', true);
 export async function readLicenses(b: FileBackend): Promise<QamLicenseSample[]> {
-  // 旧形式 {ts,count}（=一意IP数）は ips にマップ。scanned は不明なので ips と同値で近似。
+  // 旧形式 {ts,count} / {ts,ips,scanned} とも scanned に正規化（無ければ scanned→count→ips の順で採用）。
   const rows = await readJsonl<{ ts: string; count?: number; ips?: number; scanned?: number }>(b, LICENSES);
-  return rows.map((r) => ({ ts: r.ts, ips: r.ips ?? r.count ?? 0, scanned: r.scanned ?? r.count ?? 0 }));
+  return rows.map((r) => ({ ts: r.ts, scanned: r.scanned ?? r.count ?? r.ips ?? 0 }));
 }
 
 // --- 操作履歴（監査ログ）: 登録/削除/変更などの操作を 作業者・日時つきで記録 ---

@@ -2,8 +2,7 @@
 // データの無い月は未記載（点を打たず線を分断）。色は年度の並び順で固定。
 import { el } from './dom';
 
-export interface LicenseSample { ts: string; ips: number; scanned: number }
-export type LicenseMetric = 'ips' | 'scanned';
+export interface LicenseSample { ts: string; scanned: number }
 
 // 年度の x 軸（4月始まり〜翌3月）。
 export const FY_MONTHS = [4, 5, 6, 7, 8, 9, 10, 11, 12, 1, 2, 3];
@@ -22,7 +21,7 @@ export interface FySeries { fy: number; label: string; color: string; months: (n
 
 // サンプル群 → 年度ごとの系列（新しい年度順）。同じ年度・同じ月に複数サンプルがあれば ts 最大（最新）を採用。
 // months は FY_MONTHS と同じ並び（4月→翌3月）の 12 要素。データ無しは null。
-export function prepareLicenseSeries(samples: LicenseSample[], metric: LicenseMetric = 'ips'): FySeries[] {
+export function prepareLicenseSeries(samples: LicenseSample[]): FySeries[] {
   // (fy, month) ごとの最新サンプル
   const latest = new Map<string, LicenseSample>();
   for (const s of samples) {
@@ -39,7 +38,7 @@ export function prepareLicenseSeries(samples: LicenseSample[], metric: LicenseMe
     fy,
     label: `${fy}年度`,
     color: FY_COLORS[i % FY_COLORS.length],
-    months: FY_MONTHS.map((m) => { const s = latest.get(`${fy}:${m}`); return s ? s[metric] : null; }),
+    months: FY_MONTHS.map((m) => { const s = latest.get(`${fy}:${m}`); return s ? s.scanned : null; }),
   }));
 }
 
@@ -89,7 +88,7 @@ export function licenseChartSvg(series: FySeries[], visibleFy: Set<number>, limi
   if (limit > 0) {
     const yy = y(limit);
     add('line', { x1: padL, y1: yy, x2: W - padR, y2: yy, class: 'qam-lic-limit' });
-    add('text', { x: W - padR, y: yy - 5, class: 'qam-lic-limitlbl', 'text-anchor': 'end' }, `Purchased IPs ${limit.toLocaleString()}`);
+    add('text', { x: W - padR, y: yy - 5, class: 'qam-lic-limitlbl', 'text-anchor': 'end' }, `IPs in Subscription ${limit.toLocaleString()}`);
   }
 
   // 系列（データの無い月で線を分断。点はデータのある月のみ）
