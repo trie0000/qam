@@ -84,11 +84,11 @@ export function licenseChartSvg(series: FySeries[], visibleFy: Set<number>, limi
   // x 軸ラベル（月）
   FY_MONTHS.forEach((m, i) => add('text', { x: x(i), y: H - padB + 20, class: 'qam-lic-axislbl', 'text-anchor': 'middle' }, `${m}月`));
 
-  // ライセンス数上限の横線（破線）＋ラベル
+  // IPs in Subscription（契約IP数）の横線（破線）＋ラベル
   if (limit > 0) {
     const yy = y(limit);
     add('line', { x1: padL, y1: yy, x2: W - padR, y2: yy, class: 'qam-lic-limit' });
-    add('text', { x: W - padR, y: yy - 5, class: 'qam-lic-limitlbl', 'text-anchor': 'end' }, `上限 ${limit.toLocaleString()}`);
+    add('text', { x: W - padR, y: yy - 5, class: 'qam-lic-limitlbl', 'text-anchor': 'end' }, `IPs in Subscription ${limit.toLocaleString()}`);
   }
 
   // 系列（データの無い月で線を分断。点はデータのある月のみ）

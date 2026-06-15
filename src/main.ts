@@ -41,11 +41,12 @@ const state = {
   licenseHidden: new Set<number>(), // ライセンス推移グラフで非表示にした年度
 };
 
-// ライセンス数 = Host に登録されている IP アドレス数（重複は除いた一意件数）。
-function licenseCountOf(records: QamRecords): number {
-  const ips = new Set<string>();
-  for (const r of Object.values(records)) { const ip = (r.scalar.IP || '').trim(); if (ip) ips.add(ip); }
-  return ips.size;
+// Unique Hosts Scanned（Qualys の考え方に合わせる）= スキャン済み（最終スキャン日時あり）の一意ホスト数。
+// host レコードは Qualys 側で名寄せ済みの一意ホスト＝1件。最終スキャン日時が取れないデータでは総ホスト数にフォールバック。
+function uniqueHostsScanned(records: QamRecords): number {
+  let scanned = 0; let total = 0;
+  for (const r of Object.values(records)) { total++; if ((r.info.LAST_VULN_SCAN_DATETIME || '').trim()) scanned++; }
+  return scanned || total;
 }
 // 推移サンプル: licenses.jsonl（長期保持）＋現存 host スナップショットから算出した値を stamp で統合。
 async function buildLicenseSamples(): Promise<LicenseSample[]> {
@@ -53,7 +54,7 @@ async function buildLicenseSamples(): Promise<LicenseSample[]> {
   for (const s of await readLicenses(backend)) map.set(s.ts, s.count);
   for (const stamp of await getSnapshotStamps(backend, 'host')) {
     const snap = await readSnapshot(backend, 'host', stamp);
-    if (snap) map.set(stamp, licenseCountOf(snap.records));
+    if (snap) map.set(stamp, uniqueHostsScanned(snap.records));
   }
   return [...map.entries()].map(([ts, count]) => ({ ts, count })).sort((a, b) => a.ts.localeCompare(b.ts));
 }
@@ -113,17 +114,19 @@ const ingestBtn = el('button', { class: 'btn btn--sm', html: `${icon('inbox', 16
 ingestBtn.addEventListener('click', () => { try { openIngest(); } catch (e) { toast(`取込でエラー: ${(e as Error).message}`, 'error'); } });
 const exportAllBtn = el('button', { class: 'btn btn--sm', title: '全種別の最新スナップショットを1つのExcelに出力（種別ごとにシート分け）', html: `${icon('download', 16)}<span>全資産Excel</span>` });
 exportAllBtn.addEventListener('click', () => { Promise.resolve().then(exportAllAssets).catch((e) => toast(`全資産Excel出力でエラー: ${(e as Error).message}`, 'error')); });
-// 使用ライセンス数（最新 host スナップショットの登録IP数）。クリックで推移ビューへ。
-const licenseBadge = el('button', { class: 'qam-license', title: '使用ライセンス数（Host の登録IP数）。クリックで推移を表示' });
+// ライセンス表示: Unique Hosts Scanned（最新 host スナップショット）/ IPs in Subscription（契約IP数＝設定値）。
+const licenseBadge = el('button', { class: 'qam-license', title: 'Unique Hosts Scanned（スキャン済み一意ホスト数）/ IPs in Subscription（契約IP数）。クリックで推移を表示' });
 licenseBadge.addEventListener('click', () => { state.mode = 'licenses'; state.selected.clear(); refresh(); });
 async function updateLicenseBadge(): Promise<void> {
   clear(licenseBadge);
-  const stamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
+  const [stamps, cfg] = await Promise.all([getSnapshotStamps(backend, 'host'), getConfig()]);
+  const stamp = resolveAsof(stamps);
   const snap = stamp ? await readSnapshot(backend, 'host', stamp) : null;
-  const n = snap ? licenseCountOf(snap.records) : null;
+  const n = snap ? uniqueHostsScanned(snap.records) : null;
+  const sub = cfg.licenseLimit || 0;
   licenseBadge.append(
-    el('span', { class: 'qam-license-cap' }, ['使用ライセンス']),
-    el('span', { class: 'qam-license-num' }, [n == null ? '—' : n.toLocaleString()]),
+    el('span', { class: 'qam-license-cap' }, ['Hosts Scanned / Subscription']),
+    el('span', { class: 'qam-license-num' }, [`${n == null ? '—' : n.toLocaleString()} / ${sub ? sub.toLocaleString() : '—'}`]),
   );
 }
 topbar.append(
@@ -616,12 +619,13 @@ async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLE
 async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
   const [samples, cfg] = await Promise.all([buildLicenseSamples(), getConfig()]);
-  const limit = cfg.licenseLimit || 0;
+  const limit = cfg.licenseLimit || 0; // IPs in Subscription（契約IP数）
   const series = prepareLicenseSeries(samples);
-  count.textContent = `${samples.length.toLocaleString()} サンプル / ${series.length} 年度${limit ? ` / 上限 ${limit.toLocaleString()}` : ''}`;
+  const latest = samples.length ? samples[samples.length - 1].count : null;
+  count.textContent = `${samples.length.toLocaleString()} サンプル / ${series.length} 年度`;
   clear(host);
   if (!series.length) {
-    host.append(emptyState('ライセンス数のデータがありません', 'Host を取り込むと、その時点の登録IP数を使用ライセンス数として日時で記録します。'));
+    host.append(emptyState('データがありません', 'Host を取り込むと、その時点の Unique Hosts Scanned を日時で記録します。'));
     return;
   }
   // 初期表示: 直近 2 年度のみ表示（古い年度は凡例で表示に切替）。既定適用はセッション内で一度だけ。
@@ -642,7 +646,13 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
     const sw = el('span', { class: 'qam-lic-swatch', style: `background:${s.color}` });
     legend.append(el('label', { class: 'qam-lic-legitem' }, [cb, sw, el('span', {}, [s.label])]));
   }
-  wrap.append(el('div', { class: 'qam-lic-note' }, ['使用ライセンス数 = Host に登録されている IP アドレス数（一意件数）。x 軸は年度（4月〜翌3月）の月。データの無い月は未記載。']), chartBox, legend);
+  // 数値サマリ（表）: Unique Hosts Scanned（最新）/ IPs in Subscription / 残り。
+  const summary = el('div', { class: 'qam-lic-summary' }, [
+    el('div', { class: 'qam-lic-stat' }, [el('span', { class: 'qam-lic-stat-k' }, ['Unique Hosts Scanned（最新）']), el('span', { class: 'qam-lic-stat-v' }, [latest == null ? '—' : latest.toLocaleString()])]),
+    el('div', { class: 'qam-lic-stat' }, [el('span', { class: 'qam-lic-stat-k' }, ['IPs in Subscription（契約IP数）']), el('span', { class: 'qam-lic-stat-v' }, [limit ? limit.toLocaleString() : '—'])]),
+    el('div', { class: 'qam-lic-stat' }, [el('span', { class: 'qam-lic-stat-k' }, ['残り（Subscription − Scanned）']), el('span', { class: 'qam-lic-stat-v' }, [limit && latest != null ? (limit - latest).toLocaleString() : '—'])]),
+  ]);
+  wrap.append(el('div', { class: 'qam-lic-note' }, ['折れ線 = Unique Hosts Scanned（スキャン済み一意ホスト数）。破線 = IPs in Subscription（契約IP数・設定の「IPs in Subscription」）。x 軸は年度（4月〜翌3月）の月。データの無い月は未記載。']), summary, chartBox, legend);
   host.append(wrap);
   redraw();
 }
@@ -736,7 +746,7 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
   recordOp('取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
   // Host 取込ごとに、その時点の使用ライセンス数(登録IP数)を日時(stamp)つきで記録（推移グラフ用）。
-  if (res.committed && snap.entity === 'host') await recordLicense(backend, res.stamp, licenseCountOf(snap.records as QamRecords)).catch(() => undefined);
+  if (res.committed && snap.entity === 'host') await recordLicense(backend, res.stamp, uniqueHostsScanned(snap.records as QamRecords)).catch(() => undefined);
 }
 
 // Qualys アカウント/パスワード未登録時の登録モーダル。保存して {user,pass} を返す。取消は null。
@@ -985,7 +995,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス数上限', licLimit, '使用ライセンス数（Host の登録IP数）の契約上限。推移グラフに上限線を引きます。0 で無効。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('IPs in Subscription（契約IP数）', licLimit, 'Qualys サブスクリプションの契約IP数。推移グラフに基準線として表示し、残数の算出に使います。0 で非表示。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),

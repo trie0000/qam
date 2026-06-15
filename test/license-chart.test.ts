@@ -58,7 +58,7 @@ describe('license-chart', () => {
     const withLimit = licenseChartSvg(series, new Set([2026]), 500);
     expect(withLimit.querySelector('.qam-lic-limit')).toBeTruthy();
     const lbl = [...withLimit.querySelectorAll('text')].map((t) => t.textContent);
-    expect(lbl).toContain('上限 500');
+    expect(lbl).toContain('IPs in Subscription 500');
     // limit=0 なら上限線なし
     const noLimit = licenseChartSvg(series, new Set([2026]), 0);
     expect(noLimit.querySelector('.qam-lic-limit')).toBeNull();
