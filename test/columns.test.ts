@@ -69,6 +69,12 @@ describe('historyColumns 追加/削除 値列', () => {
     const e = ev({ entity: 'host', field: 'IP', old: '10.0.0.1', new: '10.0.0.5' });
     expect(cellOf(cols, 'add_ip', e)).toBe('10.0.0.5');
     expect(cellOf(cols, 'rem_ip', e)).toBe('10.0.0.1');
+    // 専用列がある項目(IP)は 変更前/変更後 には出さない
+    expect(cellOf(cols, 'old', e)).toBe('');
+    expect(cellOf(cols, 'new', e)).toBe('');
+    // 専用列が無い項目(OS)は従来どおり 変更前/変更後 に出す
+    const os = ev({ entity: 'host', field: 'OS', old: 'Linux', new: 'Windows' });
+    expect(cellOf(cols, 'new', os)).toContain('Windows');
   });
 
   it('domain: NETBLOCK の追加/削除を IP 列に', () => {

@@ -56,7 +56,8 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].name).toBe('example.com');
     expect(ev[0].change).toBe('added');
     expect(ev[0].new).toContain('接続点ID:DM12'); // 接続点IDは併記
-    expect(ev[0].new).toContain('IP:10.0.0.1-10.0.0.255');
+    expect(ev[0].new).not.toContain('IP:');       // IP範囲は専用列(props)に出すので変更後テキストには入れない
+    expect(ev[0].props).toEqual(expect.arrayContaining([{ k: 'NETBLOCK', v: '10.0.0.1-10.0.0.255' }]));
   });
 
   it('domain: 同日・同ドメイン・同種別を1レコードに集約。連続範囲は統合・非連続はカンマ区切り', () => {
@@ -68,9 +69,9 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     const ev = parseHistoryCsv('domain', csv);
     expect(ev.length).toBe(2); // 06-01 集約1件 + 06-02 1件
     const d1 = ev.find((e) => e.ts.startsWith('2026-06-01'))!;
-    expect(d1.new).toContain('IP:10.0.0.1-10.0.0.20, 10.0.5.5');
+    expect(d1.props).toEqual(expect.arrayContaining([{ k: 'NETBLOCK', v: '10.0.0.1-10.0.0.20, 10.0.5.5' }]));
     const d2 = ev.find((e) => e.ts.startsWith('2026-06-02'))!;
-    expect(d2.new).toContain('IP:10.0.9.9');
+    expect(d2.props).toEqual(expect.arrayContaining([{ k: 'NETBLOCK', v: '10.0.9.9' }]));
   });
 
   it('host: FQDN の http(s):// を除去 / 未解決時 id は空 / 接続点ID・IPを併記', () => {
@@ -81,7 +82,7 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].name).toBe('host1.example'); // http(s):// と末尾スラッシュを除去
     expect(ev[0].change).toBe('added');
     expect(ev[0].new).toContain('接続点ID:AB123');
-    expect(ev[0].new).toContain('IP:10.1.1.1');
+    expect(ev[0].new).not.toContain('IP:10.1.1.1'); // IP/FQDN は専用列(props)に出すので変更後テキストには入れない
     // IP/FQDN を props と変更項目に入れる（追加/削除IP・FQDN 列に出すため）
     expect(ev[0].field).toBe('IPアドレス・FQDN');
     expect(ev[0].props).toEqual(expect.arrayContaining([{ k: 'FQDN', v: 'host1.example' }, { k: 'IP', v: '10.1.1.1' }]));

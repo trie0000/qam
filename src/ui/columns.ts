@@ -240,9 +240,12 @@ export function openEventProps(e: QamEvent): void {
 // agSetten: host ID → 所属AGの接続点ID（host履歴用・現スナップショット由来）。group はタイトルから算出。
 // agIdSetten: AssetGroup ID → 接続点ID。削除済みhostは props の ASSET_GROUP_IDS をこれで接続点IDに変換する。
 export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}, agIdSetten: Record<string, string> = {}): Column[] {
-  // 資産情報は行クリックで開く（openEventProps）。ここは変更前/削除値の表示のみ。
-  const oldCell = (e: QamEvent): string => e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? '');
-  const newCell = (e: QamEvent): string => e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? '');
+  // 専用列(追加/削除IP・DNS・FQDN)を持つ項目は 変更前/変更後 に重複表示しない。
+  const dedicatedFields: string[] = entity === 'group' ? ['IPS', 'DNS_LIST'] : entity === 'host' ? ['IP', 'FQDN'] : entity === 'domain' ? ['NETBLOCK'] : [];
+  const isDedicated = (e: QamEvent): boolean => !!e.field && dedicatedFields.includes(e.field);
+  // 資産情報は行クリックで開く（openEventProps）。ここは変更前/削除値の表示のみ（専用列項目は空）。
+  const oldCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? ''));
+  const newCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? ''));
   const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
   // props の ASSET_GROUP_IDS（"100, 300"）→ 接続点ID（重複除き昇順）。削除済みhostの所属AG復元用。
   const settenFromProps = (e: QamEvent): string => {

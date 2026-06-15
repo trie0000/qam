@@ -165,7 +165,8 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     let i = 0;
     for (const g of groups.values()) {
       const ranges = consolidateRanges(g.pairs);
-      const extras = [g.sid ? `接続点ID:${g.sid}` : '', ranges ? `IP:${ranges}` : ''].filter(Boolean);
+      // IP範囲は追加/削除IP列(props NETBLOCK)で表示するため、変更後テキストには入れない（接続点IDのみ）。
+      const extras = [g.sid ? `接続点ID:${g.sid}` : ''].filter(Boolean);
       // props に NETBLOCK(=IP範囲) を入れて、追加/削除IP 列・行クリックに反映させる。変更項目も付ける。
       const props = [ranges ? { k: 'NETBLOCK', v: ranges } : null, g.sid ? { k: '接続点ID', v: g.sid } : null].filter(Boolean) as { k: string; v: string }[];
       events.push({
@@ -193,7 +194,8 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     const content = get(contentI);
     const extraVals: Record<string, string> = {};
     extraDefs.forEach(([label, j]) => { const v = get(j); if (v) extraVals[label] = v; });
-    const extras = Object.entries(extraVals).map(([k, v]) => `${k}:${v}`);
+    // IP/FQDN は専用列(追加/削除IP・FQDN)で表示するため、変更後テキストには入れない。
+    const extras = Object.entries(extraVals).filter(([k]) => k !== 'IP' && k !== 'FQDN').map(([k, v]) => `${k}:${v}`);
     // host は IP/FQDN を props に入れて、追加/削除IP・FQDN 列・行クリックに反映させる。変更項目も付ける。
     let props: { k: string; v: string }[] | undefined;
     let field = '';
