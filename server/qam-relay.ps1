@@ -140,8 +140,9 @@ function Invoke-QualysFetch { param($Body)
     if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
     $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
     $client = New-Object System.Net.Http.HttpClient($handler)
-    # user_list.php / group(show_attributes=ALL) は応答が大きく60秒では足りずタイムアウト(HTTP 0)していた。300秒に延長。
-    $client.Timeout = [TimeSpan]::FromSeconds(300)
+    # user_list.php は生成に数分かかることがある（60秒では必ずタイムアウト）。user は長め、他は300秒。
+    $timeoutSec = if ($Body.kind -eq 'user') { 1800 } else { 300 }
+    $client.Timeout = [TimeSpan]::FromSeconds($timeoutSec)
     try {
         # User-Agent を必ず付与（無いと WAF が空応答/403 を返すことがある＝curl との差分の正体）。
         $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
