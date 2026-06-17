@@ -123,7 +123,9 @@ function Invoke-QualysFetch { param($Body)
             'group'  { $url = "$base/api/2.0/fo/asset/group/?action=list&show_attributes=ALL" }
             # host は v2 が EOS（EOL予告）。v5.0 に切替（同じ action=list/details=All、HOST_LIST_OUTPUT、
             # WARNING/URL ページング。次ページURLは応答が返すものに従うので自動で 5.0 になる）。
-            'host'   { $url = "$base/api/5.0/fo/asset/host/?action=list&details=All&truncation_limit=1000" }
+            # details=All/AGs にすると各ホストに所属 AssetGroup(ID/タイトル)が付く（接続点ID算出に必要）。
+            # v5.0 を維持（v2.0 は EOS）。details の値はバージョン共通。
+            'host'   { $url = "$base/api/5.0/fo/asset/host/?action=list&details=All/AGs&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
             # IPs in Subscription（サブスクリプションに登録された IP / IP_RANGE）。件数算出用。
             'ips'    { $url = "$base/api/2.0/fo/asset/ip/?action=list" }

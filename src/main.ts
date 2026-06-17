@@ -391,11 +391,11 @@ async function importAssetValues(text: string, onProgress?: (done: number, total
 // 戻り値: メンバーキー(host ID / domain名) → 接続点ID（複数AGはカンマ区切り全件）。
 async function buildAgSetten(entity: QamEntity, asof: string): Promise<Record<string, string>> {
   if (entity !== 'host' && entity !== 'domain') return {};
-  const gStamp = resolveAsof(await getSnapshotStamps(backend, 'group'), asof || undefined);
-  if (!gStamp) return {};
-  const gSnap = await readSnapshot(backend, 'group', gStamp);
   const acc: Record<string, Set<string>> = {};
   const agIdToSetten: Record<string, string> = {}; // AssetGroup ID → 接続点ID
+  // group スナップショットがあれば: タイトル→接続点ID と HOST_IDS/DOMAIN_LIST→メンバー紐付け。
+  const gStamp = resolveAsof(await getSnapshotStamps(backend, 'group'), asof || undefined);
+  const gSnap = gStamp ? await readSnapshot(backend, 'group', gStamp) : null;
   for (const g of Object.values(gSnap?.records ?? {}) as QamRecord[]) {
     const sid = settenId(g.name);
     if (!sid) continue; // 接続点IDとして妥当なタイトルのAGのみ
@@ -403,15 +403,14 @@ async function buildAgSetten(entity: QamEntity, asof: string): Promise<Record<st
     const members = (entity === 'host' ? g.set.HOST_IDS : g.set.DOMAIN_LIST) ?? [];
     for (const m of members) (acc[m] ??= new Set()).add(sid);
   }
-  // host は自身の ASSET_GROUP_IDS からも補完（AGの HOST_IDS が空でも host→AG→接続点ID で埋める）。
+  // host は自身の所属AGからも補完。タイトルがあれば直接、無ければ AG ID→接続点ID で。
+  // （group スナップショットが無くても host の AGタイトルだけで接続点IDを引ける）
   if (entity === 'host') {
     const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'), asof || undefined);
     const hSnap = hStamp ? await readSnapshot(backend, 'host', hStamp) : null;
     for (const h of Object.values(hSnap?.records ?? {}) as QamRecord[]) {
-      for (const agId of h.set.ASSET_GROUP_IDS ?? []) {
-        const sid = agIdToSetten[agId];
-        if (sid) (acc[h.key] ??= new Set()).add(sid);
-      }
+      for (const t of h.set.ASSET_GROUP_TITLES ?? []) { const sid = settenId(t); if (sid) (acc[h.key] ??= new Set()).add(sid); }
+      for (const agId of h.set.ASSET_GROUP_IDS ?? []) { const sid = agIdToSetten[agId]; if (sid) (acc[h.key] ??= new Set()).add(sid); }
     }
   }
   return Object.fromEntries(Object.entries(acc).map(([k, v]) => [k, [...v].sort().join(', ')]));

@@ -96,8 +96,10 @@ function readHost(h: Element): QamRecord {
   r.scalar.NETBIOS = text(h, 'NETBIOS');
   r.scalar.OS = text(h, 'OS');
   r.scalar.TRACKING_METHOD = text(h, 'TRACKING_METHOD');
-  // 所属 AssetGroup ID（カンマ区切り）。接続点ID列の補完に使う（AG側 HOST_IDS が空でも host 側から辿れる）。
-  r.set.ASSET_GROUP_IDS = uniq(csvValues(h, 'ASSET_GROUP_IDS'));
+  // 所属 AssetGroup（host list の details=All/AGs で付与）。接続点ID列の補完に使う。
+  // CSV形式 <ASSET_GROUP_IDS> と入れ子 <ASSET_GROUP_LIST>/<ASSET_GROUP>/<ID|TITLE> の両方に対応。
+  r.set.ASSET_GROUP_IDS = uniq([...csvValues(h, 'ASSET_GROUP_IDS'), ...listValues(h, 'ASSET_GROUP_LIST', 'ID')]);
+  r.set.ASSET_GROUP_TITLES = uniq([...listValues(h, 'ASSET_GROUP_LIST', 'TITLE'), ...tagValues(h, 'ASSET_GROUP_TITLE')]);
   r.info.LAST_VULN_SCAN_DATETIME = text(h, 'LAST_VULN_SCAN_DATETIME');
   r.info.FIRST_FOUND_DATE = text(h, 'FIRST_FOUND_DATE');
   r.name = fqdn || dns || ip;

@@ -65,6 +65,18 @@ describe('parse', () => {
     </HOST_LIST></RESPONSE></HOST_LIST_OUTPUT>`;
     expect(parseQualysXml(xml).records['9'].set.ASSET_GROUP_IDS).toEqual(['100', '300']);
   });
+  it('host: details=All/AGs の入れ子 ASSET_GROUP_LIST から ID とタイトルを取り込む', () => {
+    const xml = `<HOST_LIST_OUTPUT><RESPONSE><HOST_LIST>
+      <HOST><ID>9</ID><IP>10.9.9.9</IP><DNS_DATA><FQDN>h9.example</FQDN></DNS_DATA>
+        <ASSET_GROUP_LIST>
+          <ASSET_GROUP><ID>100</ID><TITLE><![CDATA[AB123 東京]]></TITLE></ASSET_GROUP>
+          <ASSET_GROUP><ID>300</ID><TITLE><![CDATA[CD456 大阪]]></TITLE></ASSET_GROUP>
+        </ASSET_GROUP_LIST></HOST>
+    </HOST_LIST></RESPONSE></HOST_LIST_OUTPUT>`;
+    const r = parseQualysXml(xml).records['9'];
+    expect(r.set.ASSET_GROUP_IDS).toEqual(['100', '300']);
+    expect(r.set.ASSET_GROUP_TITLES).toEqual(['AB123 東京', 'CD456 大阪']);
+  });
   it('domain: entity 自動判定 / NETBLOCK', () => {
     const s = parseQualysXml(DOMAIN1);
     expect(s.entity).toBe('domain');

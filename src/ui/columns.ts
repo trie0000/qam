@@ -247,10 +247,12 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
   const oldCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? ''));
   const newCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? ''));
   const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
-  // props の ASSET_GROUP_IDS（"100, 300"）→ 接続点ID（重複除き昇順）。削除済みhostの所属AG復元用。
+  // props の所属AG → 接続点ID（重複除き昇順）。削除済みhostの所属AG復元用。
+  // ASSET_GROUP_TITLES があればタイトルから直接、無ければ ASSET_GROUP_IDS を agIdSetten で変換。
   const settenFromProps = (e: QamEvent): string => {
+    const titles = propVal(e, 'ASSET_GROUP_TITLES').split(',').map((s) => s.trim()).filter(Boolean);
     const ids = propVal(e, 'ASSET_GROUP_IDS').split(',').map((s) => s.trim()).filter(Boolean);
-    const sids = [...new Set(ids.map((id) => agIdSetten[id]).filter(Boolean))].sort();
+    const sids = [...new Set([...titles.map((t) => settenId(t)), ...ids.map((id) => agIdSetten[id])].filter(Boolean))].sort();
     return sids.join(', ');
   };
   // 接続点ID: group はタイトルから算出。host は (1)現所属 (2)削除等は props の所属AG (3)CSV取込の接続点ID。
