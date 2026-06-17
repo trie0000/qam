@@ -138,8 +138,10 @@ function Invoke-QualysFetch { param($Body)
     # （login 200 でCookieを取れても fetch で QualysSession が送信されず 401 になる原因）。false にする。
     $handler.UseCookies = $false
     if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
+    $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
     $client = New-Object System.Net.Http.HttpClient($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
+    # user_list.php / group(show_attributes=ALL) は応答が大きく60秒では足りずタイムアウト(HTTP 0)していた。300秒に延長。
+    $client.Timeout = [TimeSpan]::FromSeconds(300)
     try {
         # User-Agent を必ず付与（無いと WAF が空応答/403 を返すことがある＝curl との差分の正体）。
         $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
@@ -153,7 +155,15 @@ function Invoke-QualysFetch { param($Body)
         $method = 'GET'
         Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
         Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
-        $resp = $client.GetAsync($url).Result
+        try { $resp = $client.GetAsync($url).Result }
+        catch {
+            # 例外（タイムアウト/プロキシ/SSL 等）は HTTP 0 で握り潰さず、理由をログ＋エラー返却する。
+            $ex = $_.Exception; while ($ex.InnerException) { $ex = $ex.InnerException }
+            $msg = $ex.Message
+            Write-Host "[qam] fetch EXCEPTION: $msg" -ForegroundColor Red
+            Add-QamLog "FETCH exception: $msg"
+            return [ordered]@{ ok = $false; status = 0; nextUrl = $null; xml = "fetch exception: $msg" }
+        }
         # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
         # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
         $content = $resp.Content
