@@ -109,10 +109,9 @@ function Get-QamText1 { param([string]$Xml, [string]$Pattern)
 
 # Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
 function Invoke-QualysFetch { param($Body)
-    # user 一覧は QPS RBAC API(POST /qps/rest/2.0/search/am/user/) を Basic 認証で叩く。
-    # （/api/2.0/fo/user/ は存在せず、/msp/user_list.php は VMDR で無効のため。公式: docs.qualys.com admin/api）
+    # user 一覧は /msp/user_list.php（GET・Basic 認証・USER_LIST_OUTPUT を返す）。
     $isUserList = (-not $Body.url) -and ($Body.kind -eq 'user')
-    # noSession 指定時は Basic 認証で叩く（401/403 再試行用）。user(QPS) も Basic 固定。
+    # noSession 指定時は Basic 認証で叩く（401/403 再試行用）。user(user_list.php) も Basic 固定。
     $useSession = $script:QSession -and -not $Body.noSession -and -not $isUserList
     # プロキシは本文指定を優先（session 経路でも確実にプロキシを通す。proxy=なしで直結する不具合対策）。
     $proxy = if ($Body.proxy) { $Body.proxy } elseif ($script:QProxy) { $script:QProxy } else { $null }
@@ -129,9 +128,8 @@ function Invoke-QualysFetch { param($Body)
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
             # IPs in Subscription（サブスクリプションに登録された IP / IP_RANGE）。件数算出用。
             'ips'    { $url = "$base/api/2.0/fo/asset/ip/?action=list" }
-            # user 一覧は QPS RBAC: POST /qps/rest/2.0/search/am/user/（末尾スラッシュ必須）。
-            # 応答 ServiceResponse(XML)。role/scopeTags を含む。Active ユーザのみ返る。
-            'user'   { $url = "$base/qps/rest/2.0/search/am/user/" }
+            # user 一覧は /msp/user_list.php（GET・Basic）。応答 USER_LIST_OUTPUT(XML)。
+            'user'   { $url = "$base/msp/user_list.php" }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }
@@ -152,44 +150,19 @@ function Invoke-QualysFetch { param($Body)
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
-        $method = if ($isUserList) { 'POST' } else { 'GET' }
+        $method = 'GET'
         Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
         Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
-        if ($isUserList) {
-            # QPS REST はページング（既定100件/ページ。hasMoreRecords/lastId で続き）。
-            # 全ページを POST で辿り、<User> 要素を結合して 1 つの ServiceResponse にする。
-            $sb = New-Object System.Text.StringBuilder
-            $lastId = ''; $page = 0; $ok = $true; $more = $false
-            do {
-                $page++
-                $crit = if ($lastId) { "<filters><Criteria field=`"id`" operator=`"GREATER`">$lastId</Criteria></filters>" } else { '' }
-                $bodyXml = "<ServiceRequest><preferences><limitResults>1000</limitResults></preferences>$crit</ServiceRequest>"
-                $resp = $client.PostAsync($url, (New-Object System.Net.Http.StringContent($bodyXml, [Text.Encoding]::UTF8, 'application/xml'))).Result
-                $reason = [string]$resp.ReasonPhrase
-                $ctype = if ($resp.Content -and $resp.Content.Headers.ContentType) { [string]$resp.Content.Headers.ContentType } else { '' }
-                $pageBytes = if ($resp.Content) { $resp.Content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
-                $pageXml = if ($pageBytes.Length) { [System.Text.Encoding]::UTF8.GetString($pageBytes) } else { '' }
-                if (-not $resp.IsSuccessStatusCode) { $ok = $false; $sb = New-Object System.Text.StringBuilder; [void]$sb.Append($pageXml); break }
-                foreach ($m in [regex]::Matches($pageXml, '(?s)<User>.*?</User>')) { [void]$sb.Append($m.Value) }
-                $more = ($pageXml -match '<hasMoreRecords>\s*true\s*</hasMoreRecords>')
-                $lm = [regex]::Match($pageXml, '<lastId>\s*(\d+)\s*</lastId>')
-                $lastId = if ($lm.Success) { $lm.Groups[1].Value } else { '' }
-                Add-QamLog "FETCH user page ${page}: more=$more lastId=$lastId"
-            } while ($ok -and $more -and $lastId -and $page -lt 200)
-            $xml = if ($ok) { "<?xml version=`"1.0`" encoding=`"UTF-8`"?><ServiceResponse><responseCode>SUCCESS</responseCode><data>$($sb.ToString())</data></ServiceResponse>" } else { $sb.ToString() }
-            $next = $null
-        } else {
-            $resp = $client.GetAsync($url).Result
-            # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
-            # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
-            $content = $resp.Content
-            $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
-            $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
-            $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
-            $ok = $resp.IsSuccessStatusCode
-            $reason = [string]$resp.ReasonPhrase
-            $ctype = if ($content -and $content.Headers.ContentType) { [string]$content.Headers.ContentType } else { '' }
-        }
+        $resp = $client.GetAsync($url).Result
+        # UTF-8 固定でデコード（charset ヘッダ依存で化けるのを防ぐ。Qualys 出力は UTF-8）。
+        # Content が null になり得る応答（リダイレクト/本文無し 401 等）でも落ちないようガードする。
+        $content = $resp.Content
+        $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
+        $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
+        $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
+        $ok = $resp.IsSuccessStatusCode
+        $reason = [string]$resp.ReasonPhrase
+        $ctype = if ($content -and $content.Headers.ContentType) { [string]$content.Headers.ContentType } else { '' }
         # 応答本文のスニペット（空白畳み込み）。成功は短め、失敗は理由が分かるよう長めに残す。
         $snippet = ($xml -replace '\s+', ' ').Trim()
         $cap = if ($ok) { 300 } else { 1500 }
