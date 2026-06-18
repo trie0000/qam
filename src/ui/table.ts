@@ -271,81 +271,40 @@ export function renderTable(opts: TableOpts): HTMLElement {
     fr.clear = () => { st.filters = []; st.excluded = {}; saveState(opts.viewId, st); render(); fr.onChange?.(); }; // チップ＋列オートフィルタを一括解除
   }
 
-  // 1行(tr)を生成。vc は表示列（呼び出し側で1回だけ算出して渡す）。
-  function buildRow(row: any, vc: Column[]): HTMLElement {
-    const key = opts.getKey(row);
-    const tr = el('tr', { class: 'qam-data' + (opts.selected.has(key) ? ' qam-selected' : '') + (opts.onRowClick ? ' qam-row-click' : '') });
-    if (opts.onRowClick) {
-      // ドラッグでの範囲選択（コピー目的）はクリック扱いにしない。
-      let downX = 0; let downY = 0;
-      tr.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
-      tr.addEventListener('click', (e) => {
-        if (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) return;
-        if ((window.getSelection()?.toString() ?? '').length > 0) return;
-        opts.onRowClick!(row);
-      });
-    }
-    const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
-    cb.checked = opts.selected.has(key);
-    cb.addEventListener('click', (e) => e.stopPropagation());
-    cb.addEventListener('change', () => { if (cb.checked) opts.selected.add(key); else opts.selected.delete(key); tr.classList.toggle('qam-selected', cb.checked); updateBulk(winRows.length); opts.onSelectionChange?.(); });
-    const tdC = el('td', { class: 'qam-col-check' }); tdC.append(cb); tr.append(tdC);
-    vc.forEach((c) => {
-      const td = el('td', { class: c.mono ? 'qam-mono' : '' });
-      const v = c.render(row);
-      if (typeof v === 'string') td.innerHTML = v; else td.append(v);
-      td.title = td.textContent || '';
-      tr.append(td);
-    });
-    return tr;
-  }
-
-  // 仮想スクロール: 行が多いとき(>VIRT_MIN)は可視範囲＋バッファのみ DOM 化し、残りは spacer 行で高さを確保。
-  const VIRT_MIN = 150;
-  const VBUF = 12; // 上下バッファ行数
-  let winRows: any[] = [];
-  let rowH = 33;   // 1行の高さ（初回描画後に実測で補正）
-  let virtual = false;
-  let lastStart = -1;
-
-  function fillTbody(tbody: HTMLElement): void {
-    const vc = vcols();
-    // 全文表示(折り返し)時は行高が可変で仮想化が崩れるため全描画（content-visibility で軽減）。
-    if (!virtual || table.classList.contains('qam-wrap')) {
-      for (const row of winRows) tbody.append(buildRow(row, vc));
-      lastStart = -1;
-      return;
-    }
-    const n = winRows.length;
-    const vh = wrap.clientHeight || window.innerHeight || 800; // 取り付け前は clientHeight=0 なので画面高で代用
-    let start = Math.floor(wrap.scrollTop / rowH) - VBUF; if (start < 0) start = 0;
-    let end = start + Math.ceil(vh / rowH) + VBUF * 2; if (end > n) end = n;
-    lastStart = start;
-    const colspan = String(vc.length + 1);
-    // spacer: 高さは内側 div に持たせる（fixed-layout の table では td 直接の height が無視されることがある）。
-    const spacer = (h: number): HTMLElement => el('tr', { class: 'qam-vspacer' }, [el('td', { colspan }, [el('div', { style: `height:${h}px` })])]);
-    if (start > 0) tbody.append(spacer(start * rowH));
-    for (let i = start; i < end; i++) tbody.append(buildRow(winRows[i], vc));
-    if (end < n) tbody.append(spacer((n - end) * rowH));
-  }
-
-  function rebuildTbody(): void {
-    const old = table.querySelector('tbody'); if (old) old.remove();
-    const tbody = el('tbody'); fillTbody(tbody); table.append(tbody);
-  }
-
   function renderBody(): void {
-    winRows = displayedRows().slice(0, MAX_ROWS);
-    virtual = winRows.length > VIRT_MIN;
-    table.dataset.big = virtual ? '1' : ''; // 全文表示ON時の待機表示要否を外側へ知らせる印
-    rebuildTbody();
-    updateBulk(winRows.length);
-    // 初回に実際の行高を測って補正（推定とずれていれば1回だけ貼り直す）。
-    if (virtual && !table.classList.contains('qam-wrap')) {
-      const probe = table.querySelector('tbody tr.qam-data') as HTMLElement | null;
-      const h = probe?.offsetHeight ?? 0;
-      if (h > 0 && Math.abs(h - rowH) > 2) { rowH = h; rebuildTbody(); }
+    const old = table.querySelector('tbody'); if (old) old.remove();
+    const tbody = el('tbody');
+    const rows = displayedRows();
+    const vc = vcols(); // 表示列は1回だけ算出（セルごとの filter 再計算を避ける）
+    for (const row of rows.slice(0, MAX_ROWS)) {
+      const key = opts.getKey(row);
+      const tr = el('tr', { class: (opts.selected.has(key) ? 'qam-selected' : '') + (opts.onRowClick ? ' qam-row-click' : '') });
+      if (opts.onRowClick) {
+        // ドラッグでの範囲選択（コピー目的）はクリック扱いにしない。
+        let downX = 0; let downY = 0;
+        tr.addEventListener('mousedown', (e) => { downX = e.clientX; downY = e.clientY; });
+        tr.addEventListener('click', (e) => {
+          if (Math.abs(e.clientX - downX) > 4 || Math.abs(e.clientY - downY) > 4) return;
+          if ((window.getSelection()?.toString() ?? '').length > 0) return;
+          opts.onRowClick!(row);
+        });
+      }
+      const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+      cb.checked = opts.selected.has(key);
+      cb.addEventListener('click', (e) => e.stopPropagation());
+      cb.addEventListener('change', () => { if (cb.checked) opts.selected.add(key); else opts.selected.delete(key); tr.classList.toggle('qam-selected', cb.checked); updateBulk(rows.length); opts.onSelectionChange?.(); });
+      const tdC = el('td', { class: 'qam-col-check' }); tdC.append(cb); tr.append(tdC);
+      vc.forEach((c) => {
+        const td = el('td', { class: c.mono ? 'qam-mono' : '' });
+        const v = c.render(row);
+        if (typeof v === 'string') td.innerHTML = v; else td.append(v);
+        td.title = td.textContent || '';
+        tr.append(td);
+      });
+      tbody.append(tr);
     }
+    table.append(tbody);
+    updateBulk(rows.length);
   }
 
   function render(): void {
@@ -442,28 +401,6 @@ export function renderTable(opts: TableOpts): HTMLElement {
     });
   }
 
-  // 仮想スクロール: スクロールで可視範囲(start)が変わったら tbody を貼り直す（rAF で間引き）。
-  let rafPending = false;
-  wrap.addEventListener('scroll', () => {
-    if (!virtual || table.classList.contains('qam-wrap')) return;
-    if (rafPending) return; rafPending = true;
-    requestAnimationFrame(() => {
-      rafPending = false;
-      const start = Math.max(0, Math.floor(wrap.scrollTop / rowH) - VBUF);
-      if (start !== lastStart) rebuildTbody();
-    });
-  });
-  // 全文表示トグル（外部が .qam-wrap を付け外し）に追従して描画方式を切り替える。
-  new MutationObserver(() => rebuildTbody()).observe(table, { attributes: true, attributeFilter: ['class'] });
-
   render();
-  // DOM 取り付け後に実際の行高・ビューポート高で window を貼り直す（初回は detached で測れないため）。
-  requestAnimationFrame(() => {
-    if (!virtual || table.classList.contains('qam-wrap')) { if (virtual) rebuildTbody(); return; }
-    const probe = table.querySelector('tbody tr.qam-data') as HTMLElement | null;
-    const h = probe?.offsetHeight ?? 0;
-    if (h > 0 && Math.abs(h - rowH) > 2) rowH = h;
-    rebuildTbody();
-  });
   return section;
 }

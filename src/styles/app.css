@@ -219,14 +219,6 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
    text-overflow:ellipsis の「…/点」が出ていたのを解消）。 */
 .qam-col-check { width: 38px; text-align: center; overflow: visible; text-overflow: clip; padding-left: var(--s-2); padding-right: var(--s-2); }
 .qam-col-check input { cursor: pointer; }
-/* 処理中オーバーレイ（重い同期処理の待機表示） */
-.qam-busy { position: fixed; inset: 0; background: rgba(0,0,0,0.25); display: flex; align-items: center; justify-content: center; z-index: 2000; }
-.qam-busy-box { display: flex; align-items: center; gap: var(--s-3); background: var(--paper); border: 1px solid var(--paper-3);
-  border-radius: var(--r-3); padding: var(--s-5) var(--s-7); box-shadow: var(--shadow-flyout); color: var(--ink); font-size: var(--fs-md); }
-
-/* 仮想スクロールの spacer 行（画面外の行数ぶんの高さを確保する空行）。 */
-.qam-table tbody tr.qam-vspacer:hover { background: transparent; }
-.qam-table tbody tr.qam-vspacer td { padding: 0; border: 0; }
 .qam-table tbody tr:hover { background: var(--paper-2); }
 .qam-table tbody tr.qam-row-click { cursor: pointer; }
 .qam-table tbody tr.qam-selected { background: var(--accent-soft); }
