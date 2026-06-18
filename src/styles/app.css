@@ -226,14 +226,10 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-table tbody tr.qam-row-click { cursor: pointer; }
 .qam-table tbody tr.qam-selected { background: var(--accent-soft); }
 .qam-mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
-/* 一覧内コメント: 最新を直接表示し、その場編集。右にスレッドボタン(件数)。 */
+/* 一覧内コメント: 最新メモを直接表示し、その場で編集（クリックで編集・空にするとブランク）。 */
 .qam-comment-cell { display: flex; align-items: flex-start; gap: var(--s-2); }
 .qam-comment-view { flex: 1 1 auto; min-width: 0; cursor: text; white-space: pre-wrap; overflow-wrap: anywhere; }
 .qam-comment-view.is-empty { color: var(--ink-4); cursor: pointer; }
-.qam-comment-tools { flex: none; }
-.qam-comment-thread { border: 0; background: transparent; color: var(--accent-strong); cursor: pointer;
-  display: inline-flex; align-items: center; gap: 2px; font: inherit; font-size: var(--fs-xs); padding: 2px; }
-.qam-comment-thread svg { width: 13px; height: 13px; }
 .qam-comment-edit { width: 100%; box-sizing: border-box; font: inherit; font-size: var(--fs-sm); resize: vertical; min-height: 46px;
   color: var(--ink); background: var(--paper); border: 1px solid var(--accent); border-radius: var(--r-1); padding: var(--s-2); }
 /* 手入力セル（Function/Location 等のその場編集） */
@@ -340,16 +336,6 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-spin { width: 14px; height: 14px; flex: 0 0 auto; border: 2px solid var(--line-strong);
   border-top-color: var(--accent); border-radius: 50%; animation: qam-rot .7s linear infinite; }
 @keyframes qam-rot { to { transform: rotate(360deg); } }
-
-/* comment thread */
-.qam-thread { display: flex; flex-direction: column; gap: var(--s-4); margin-bottom: var(--s-6); }
-.qam-comment { background: var(--paper-2); border-radius: var(--r-3); padding: var(--s-4) var(--s-5); }
-.qam-comment .qam-meta { font-size: var(--fs-xs); color: var(--ink-4); margin-bottom: var(--s-1); }
-.qam-note-form { position: relative; line-height: 0; }
-.qam-note-form textarea { width: 100%; min-height: 64px; padding: var(--s-4); padding-right: 52px; padding-bottom: 44px;
-  border: 1px solid var(--line); border-radius: var(--r-3); resize: none; font: inherit; font-size: var(--fs-md); background: var(--paper); color: var(--ink); }
-.qam-note-form textarea:focus { outline: none; border-color: var(--line-strong); }
-.qam-note-submit { position: absolute; right: 12px; bottom: 12px; width: 30px; height: 30px; }
 
 /* ---------- toast ---------- */
 .qam-toasts { position: fixed; top: var(--s-6); right: var(--s-6); display: flex; flex-direction: column; gap: var(--s-3); z-index: var(--z-toast); }

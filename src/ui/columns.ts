@@ -33,10 +33,9 @@ const latestText = (api: CommentApi, id: string): string => {
 };
 
 // 一覧のコメント列に渡すAPI。byId は id→コメント配列(ts昇順)。save は ts指定で編集/null で新規追加し、
-// 更新後の配列を返す。openThread は従来のスレッドモーダル（履歴閲覧・追記）。
+// 更新後の配列を返す（一覧セル内のその場編集のみ。スレッドモーダルは廃止）。
 export interface CommentApi {
   byId: Record<string, QamComment[]>;
-  openThread: (e: QamEntity, id: string) => void;
   save: (e: QamEntity, id: string, ts: string | null, text: string) => Promise<QamComment[]>;
 }
 
@@ -93,9 +92,7 @@ function commentCell(entity: QamEntity, id: string, api: CommentApi): HTMLElemen
     const hasText = !!(latest && latest.text);
     const text = el('div', { class: 'qam-comment-view' + (hasText ? '' : ' is-empty'), title: hasText ? latest!.text : 'クリックしてメモを追加' }, [hasText ? latest!.text : '＋ メモ']);
     text.addEventListener('click', (e) => { stop(e); edit(latest); });
-    const thread = el('button', { class: 'qam-comment-thread', title: '作業履歴を開く', html: `${icon('message', 13)}<span>${list.length || ''}</span>` });
-    thread.addEventListener('click', (e) => { stop(e); api.openThread(entity, id); });
-    cell.append(text, el('div', { class: 'qam-comment-tools' }, [thread]));
+    cell.append(text);
   }
 
   function edit(latest: QamComment | null): void {
