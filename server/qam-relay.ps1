@@ -36,12 +36,23 @@ function Import-QamEnv {
 }
 function Set-QamEnvValue {
     param([string]$Path, [string]$Key, [string]$Value)
-    $lines = @(); if (Test-Path -LiteralPath $Path) { $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8) }
+    $lines = @()
+    $existed = Test-Path -LiteralPath $Path
+    if ($existed) {
+        # 読み取り失敗(ロック/共有競合)で 0 行が返ると、新キーだけ書いて他キーを全消ししてしまう。
+        # 既存ファイルが非空なのに 0 行なら異常とみなし、クロバー防止で保存を中断する。
+        $lines = @(Get-Content -LiteralPath $Path -Encoding UTF8 -ErrorAction Stop)
+        if ($lines.Count -eq 0 -and ((Get-Item -LiteralPath $Path).Length -gt 0)) {
+            throw "qam.env の読み取りに失敗したため、保護のため保存を中止しました（既存内容は維持）"
+        }
+    }
     $found = $false
     for ($i = 0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match "^\s*#?\s*$([regex]::Escape($Key))\s*=") { $lines[$i] = "$Key=$Value"; $found = $true; break }
     }
     if (-not $found) { $lines += "$Key=$Value" }
+    # 上書き前に直近の状態を .bak へ退避（万一壊れても復旧できるように）。
+    if ($existed) { try { Copy-Item -LiteralPath $Path -Destination "$Path.bak" -Force } catch {} }
     Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
 }
 
