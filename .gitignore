@@ -22,3 +22,6 @@ test/.tmp-srv/
 .DS_Store
 *.swp
 *~
+
+# dev perf harness build artifact
+dev/perf.js

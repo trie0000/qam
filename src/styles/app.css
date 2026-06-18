@@ -219,6 +219,9 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
    text-overflow:ellipsis の「…/点」が出ていたのを解消）。 */
 .qam-col-check { width: 38px; text-align: center; overflow: visible; text-overflow: clip; padding-left: var(--s-2); padding-right: var(--s-2); }
 .qam-col-check input { cursor: pointer; }
+/* 仮想スクロールの spacer 行（画面外の行数ぶんの高さを内側 div で確保する空行）。 */
+.qam-table tbody tr.qam-vspacer:hover { background: transparent; }
+.qam-table tbody tr.qam-vspacer td { padding: 0; border: 0; }
 .qam-table tbody tr:hover { background: var(--paper-2); }
 .qam-table tbody tr.qam-row-click { cursor: pointer; }
 .qam-table tbody tr.qam-selected { background: var(--accent-soft); }
