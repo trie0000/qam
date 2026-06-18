@@ -322,9 +322,11 @@ export function renderTable(opts: TableOpts): HTMLElement {
     let end = start + Math.ceil(vh / rowH) + VBUF * 2; if (end > n) end = n;
     lastStart = start;
     const colspan = String(vc.length + 1);
-    if (start > 0) tbody.append(el('tr', { class: 'qam-vspacer' }, [el('td', { colspan, style: `height:${start * rowH}px` })]));
+    // spacer: 高さは内側 div に持たせる（fixed-layout の table では td 直接の height が無視されることがある）。
+    const spacer = (h: number): HTMLElement => el('tr', { class: 'qam-vspacer' }, [el('td', { colspan }, [el('div', { style: `height:${h}px` })])]);
+    if (start > 0) tbody.append(spacer(start * rowH));
     for (let i = start; i < end; i++) tbody.append(buildRow(winRows[i], vc));
-    if (end < n) tbody.append(el('tr', { class: 'qam-vspacer' }, [el('td', { colspan, style: `height:${(n - end) * rowH}px` })]));
+    if (end < n) tbody.append(spacer((n - end) * rowH));
   }
 
   function rebuildTbody(): void {

@@ -219,11 +219,7 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
    text-overflow:ellipsis の「…/点」が出ていたのを解消）。 */
 .qam-col-check { width: 38px; text-align: center; overflow: visible; text-overflow: clip; padding-left: var(--s-2); padding-right: var(--s-2); }
 .qam-col-check input { cursor: pointer; }
-/* 大量行（数千〜万件）でも軽く表示するため、画面外の行はレイアウト/描画をスキップ。
-   contain-intrinsic-size の auto は実測値を記憶し、折り返し(全文表示)でもスクロールがずれにくい。 */
-.qam-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 33px; }
-/* 仮想スクロールの spacer 行は実高さを正確に保つ（content-visibility の推定で潰れないように） */
-.qam-table tbody tr.qam-vspacer { content-visibility: visible; }
+/* 仮想スクロールの spacer 行（画面外の行数ぶんの高さを確保する空行）。 */
 .qam-table tbody tr.qam-vspacer:hover { background: transparent; }
 .qam-table tbody tr.qam-vspacer td { padding: 0; border: 0; }
 .qam-table tbody tr:hover { background: var(--paper-2); }
