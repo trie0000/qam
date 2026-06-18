@@ -89,7 +89,9 @@ function commentCell(entity: QamEntity, id: string, api: CommentApi): HTMLElemen
     clear(cell);
     const list = api.byId[id] ?? [];
     const latest = list.length ? list[list.length - 1] : null;
-    const text = el('div', { class: 'qam-comment-view' + (latest ? '' : ' is-empty'), title: latest ? latest.text : 'クリックしてメモを追加' }, [latest ? latest.text : '＋ メモ']);
+    // 空文字メモ（＝ブランク化済み）は本文なし扱いでプレースホルダを表示。編集時は latest の ts を引き継ぐ。
+    const hasText = !!(latest && latest.text);
+    const text = el('div', { class: 'qam-comment-view' + (hasText ? '' : ' is-empty'), title: hasText ? latest!.text : 'クリックしてメモを追加' }, [hasText ? latest!.text : '＋ メモ']);
     text.addEventListener('click', (e) => { stop(e); edit(latest); });
     const thread = el('button', { class: 'qam-comment-thread', title: '作業履歴を開く', html: `${icon('message', 13)}<span>${list.length || ''}</span>` });
     thread.addEventListener('click', (e) => { stop(e); api.openThread(entity, id); });
@@ -106,7 +108,9 @@ function commentCell(entity: QamEntity, id: string, api: CommentApi): HTMLElemen
     const finish = async (commit: boolean): Promise<void> => {
       if (closed) return; closed = true;
       const t = ta.value.trim();
-      if (commit && t && t !== (latest?.text ?? '')) {
+      const prev = latest?.text ?? '';
+      // 既存メモの編集なら空文字も保存してブランク化を許可（新規は空なら作らない）。
+      if (commit && t !== prev && (latest || t)) {
         try { api.byId[id] = await api.save(entity, id, latest?.ts ?? null, t); } catch { /* 失敗時は表示に戻すだけ */ }
       }
       view();

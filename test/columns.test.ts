@@ -136,3 +136,44 @@ describe('historyColumns 追加/削除 値列', () => {
     expect(historyColumns('group', noComments as any).some((c) => c.id === 'name')).toBe(true);
   });
 });
+
+describe('メモ列のその場編集（ブランク化）', () => {
+  const rec = { key: 'g1', name: 'X', scalar: {}, set: {}, info: {}, hash: '' } as any;
+  const cellFor = (api: any) => assetColumns('group', api).find((c) => c.id === '_c')!.render(rec) as HTMLElement;
+  const flush = () => new Promise((r) => setTimeout(r));
+
+  it('既存メモを全文消すと空文字で保存され、復活せずブランク表示になる', async () => {
+    let store: any[] = [{ ts: '2026-01-01T00:00:00Z', entity: 'group', id: 'g1', author: 'me', text: 'メモA' }];
+    const calls: any[] = [];
+    const api = {
+      byId: { g1: [...store] }, openThread: () => undefined,
+      save: async (_e: string, _id: string, ts: string | null, text: string) => {
+        calls.push({ ts, text });
+        store = ts ? store.map((c) => (c.ts === ts ? { ...c, text } : c)) : [...store, { ts: 'new', entity: 'group', id: 'g1', author: 'me', text }];
+        return [...store];
+      },
+    };
+    const cell = cellFor(api);
+    expect(cell.querySelector('.qam-comment-view')!.textContent).toBe('メモA');
+    (cell.querySelector('.qam-comment-view') as HTMLElement).click(); // → 編集
+    const ta = cell.querySelector('textarea.qam-comment-edit') as HTMLTextAreaElement;
+    expect(ta.value).toBe('メモA');
+    ta.value = ''; ta.dispatchEvent(new Event('blur')); // 全文消去して確定
+    await flush();
+    expect(calls).toEqual([{ ts: '2026-01-01T00:00:00Z', text: '' }]); // 既存 ts を空文字で更新
+    const v = cell.querySelector('.qam-comment-view')!;
+    expect(v.classList.contains('is-empty')).toBe(true);
+    expect(v.textContent).toBe('＋ メモ'); // 復活しない
+  });
+
+  it('メモ未登録のまま空で確定しても新規作成しない', async () => {
+    const calls: any[] = [];
+    const api = { byId: {}, openThread: () => undefined, save: async (..._a: any[]) => { calls.push(_a); return []; } };
+    const cell = cellFor(api);
+    (cell.querySelector('.qam-comment-view') as HTMLElement).click();
+    const ta = cell.querySelector('textarea.qam-comment-edit') as HTMLTextAreaElement;
+    ta.value = '   '; ta.dispatchEvent(new Event('blur'));
+    await flush();
+    expect(calls).toEqual([]); // 空の新規は保存しない
+  });
+});
