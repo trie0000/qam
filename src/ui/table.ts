@@ -78,7 +78,27 @@ export function cellText(col: Column, row: any): string {
 
 let colMenuBound = false;
 
+// マウスカーソルが一覧(.qam-tablewrap)の上にある時、PageUp/PageDown でその表をスクロールする。
+// （スクロール対象にフォーカスが無いとキーが効かないため。タブ切替後も最後のマウス位置で判定）。
+let keyNavBound = false;
+let lastMx = 0; let lastMy = 0;
+function bindTableKeyNav(): void {
+  if (keyNavBound) return; keyNavBound = true;
+  document.addEventListener('mousemove', (e) => { lastMx = e.clientX; lastMy = e.clientY; });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
+    const t = e.target as HTMLElement | null;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return; // 入力欄の操作は邪魔しない
+    const w = (document.elementFromPoint(lastMx, lastMy) as HTMLElement | null)?.closest('.qam-tablewrap') as HTMLElement | null;
+    if (!w) return;
+    const page = Math.max(40, w.clientHeight - 40); // 1ページ＝表示高さ（少し重ねる）
+    w.scrollTop += (e.key === 'PageDown' ? page : -page);
+    e.preventDefault();
+  });
+}
+
 export function renderTable(opts: TableOpts): HTMLElement {
+  bindTableKeyNav();
   const st = loadState(opts.viewId, opts.defaultHidden ?? []);
   const byId = new Map(opts.columns.map((c) => [c.id, c]));
   let cols = st.order.map((id) => byId.get(id)!).filter(Boolean);
