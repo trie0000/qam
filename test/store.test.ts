@@ -3,6 +3,7 @@ import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
   prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, importHistory,
+  backupSlot, listBackups, hasBackup, createBackup, pruneBackups, restoreBackup,
 } from '../src/store';
 import type { QamEvent } from '../src/types';
 
@@ -193,5 +194,45 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     // 空文字はクリア
     await setAnnotationsBulk(b, 'group', [{ id: 'g0', field: 'DIVISION', value: '' }]);
     expect((await readAnnotations(b, 'group'))['g0'].DIVISION).toBeUndefined();
+  });
+});
+
+describe('backup（ツール入力データの退避・復元・剪定）', () => {
+  let b: MemBackend;
+  beforeEach(() => { b = new MemBackend(); });
+
+  it('backupSlot は保存間隔で時刻を丸める（同間隔内は同一 slot）', () => {
+    const d1 = new Date('2026-06-18T14:05:00');
+    const d2 = new Date('2026-06-18T14:55:00');
+    const d3 = new Date('2026-06-18T15:01:00');
+    expect(backupSlot(d1, 60)).toBe(backupSlot(d2, 60)); // 同じ1時間枠
+    expect(backupSlot(d1, 60)).not.toBe(backupSlot(d3, 60));
+    expect(backupSlot(d1, 60).slice(11)).toBe('14-00-00');
+  });
+
+  it('createBackup は存在するツール入力データだけを退避し、復元で元に戻せる', async () => {
+    await addComment(b, { entity: 'group', id: 'g1', ts: '2026-06-18T10-00-00', author: 'x', text: 'メモA' } as any);
+    await setAnnotation(b, 'group', 'g1', 'FUNCTION', '中継');
+    const slot = backupSlot(new Date('2026-06-18T14:00:00'), 60);
+    const n = await createBackup(b, slot);
+    expect(n).toBe(2); // comments + annotations(group) のみ（他は未作成）
+    expect(await hasBackup(b, slot)).toBe(true);
+
+    // 退避後にメモ/注釈を改変 → 復元で退避時点に戻る
+    await editComment(b, 'group', 'g1', '2026-06-18T10-00-00', '改変');
+    await setAnnotation(b, 'group', 'g1', 'FUNCTION', '別物');
+    const r = await restoreBackup(b, slot);
+    expect(r).toBe(2);
+    expect((await readComments(b, 'group', 'g1'))[0].text).toBe('メモA');
+    expect((await readAnnotations(b, 'group'))['g1'].FUNCTION).toBe('中継');
+  });
+
+  it('pruneBackups は保管日数を超えた slot を削除する', async () => {
+    await addComment(b, { entity: 'group', id: 'g1', ts: 't', author: 'x', text: 'm' } as any);
+    await createBackup(b, '2026-06-01T08-00-00'); // 古い
+    await createBackup(b, '2026-06-17T08-00-00'); // 新しい
+    const removed = await pruneBackups(b, 7, '2026-06-18');
+    expect(removed).toEqual(['2026-06-01T08-00-00']);
+    expect(await listBackups(b)).toEqual(['2026-06-17T08-00-00']);
   });
 });

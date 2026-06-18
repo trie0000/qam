@@ -1,6 +1,6 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
-import { BUILD, BUILDTIME, ENTITIES, LS, fmtStamp, datetimeToStamp, stampNow } from './config';
+import { BUILD, BUILDTIME, ENTITIES, LS, fmtStamp, datetimeToStamp, stampNow, today } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -14,7 +14,7 @@ import { downloadEntity, downloadIpCount } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, backupSlot, listBackups, hasBackup, createBackup, pruneBackups, restoreBackup, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamRecord, QamRecords } from './types';
@@ -971,6 +971,8 @@ async function openSettings(): Promise<void> {
   const proxy = el('input', { class: 'in', value: cfg.proxy || '', placeholder: 'http://proxy:8080' }) as HTMLInputElement;
   const ret = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.retentionDays || 90) }) as HTMLInputElement;
   const licLimit = el('input', { class: 'in', type: 'number', min: '0', value: String(cfg.licenseLimit || 0) }) as HTMLInputElement;
+  const bkInterval = el('input', { class: 'in', type: 'number', min: '0', value: String(cfg.backupIntervalMin ?? 60) }) as HTMLInputElement;
+  const bkRetention = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.backupRetentionDays ?? 7) }) as HTMLInputElement;
   const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
   const author = el('input', { class: 'in', value: localStorage.getItem(LS.author) || '', placeholder: '例: 山田' }) as HTMLInputElement;
   const theme = el('select', { class: 'in' }) as HTMLSelectElement;
@@ -1017,9 +1019,24 @@ async function openSettings(): Promise<void> {
     } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
   });
 
+  // 共通設定: バックアップからの復元（メモ・注釈・変更履歴・ライセンス推移を退避時点へ戻す）。
+  const bkSelect = el('select', { class: 'in' }) as HTMLSelectElement;
+  const backups = await listBackups(backend);
+  if (backups.length) backups.forEach((s) => bkSelect.append(el('option', { value: s }, [fmtStamp(s)])));
+  else bkSelect.append(el('option', { value: '' }, ['(バックアップなし)']));
+  const bkRestoreBtn = el('button', { class: 'btn btn--sm' }, ['選択したバックアップから復元']);
+  bkRestoreBtn.addEventListener('click', async () => {
+    const slot = bkSelect.value;
+    if (!slot) { toast('復元するバックアップを選択してください', 'error'); return; }
+    if (!(await confirmModal('バックアップから復元', `${fmtStamp(slot)} 時点のメモ・注釈・変更履歴・ライセンス推移を復元します。現在の内容は上書きされます。よろしいですか？`, '復元'))) return;
+    try { const n = await restoreBackup(backend, slot); toast(`復元しました（${n}ファイル）`, 'ok'); refresh(); }
+    catch (e) { toast('復元に失敗: ' + (e as Error).message, 'error'); }
+  });
+  const bkRestoreBox = el('div', {}, [bkSelect, el('div', { style: 'margin-top:var(--s-3)' }, [bkRestoreBtn])]);
+
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけメモ・注釈・変更履歴・ライセンス推移を自動退避します（その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('バックアップから復元', bkRestoreBox, '選択した時点のメモ・注釈・変更履歴・ライセンス推移を復元します（現在の内容は上書き）。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
@@ -1040,7 +1057,7 @@ async function openSettings(): Promise<void> {
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
-        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0) });
+        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7) });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
         if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
@@ -1186,10 +1203,32 @@ function ensureAuthor(): Promise<void> {
   });
 }
 
+// 自動バックアップ（共有データの定期退避）。ツール起動時に実行を試みる:
+//   ・slot = 保存間隔で丸めた時刻。同 slot のバックアップが既にあればスキップ（＝1時間に1回）。
+//   ・ランダムなジッタ後に再確認して未取得なら作成 → 同時起動でも実質「ランダムな1名」だけが取得。
+//   ・誰もツールを上げていない時間帯は作成されない（起動時のみ実行のため自然にスキップ）。
+//   ・期限切れ（保管日数超過）は自動削除。失敗・作業ログ出力はしない（本処理を止めない）。
+async function maybeBackup(): Promise<void> {
+  try {
+    const cfg = await getConfig();
+    const interval = cfg.backupIntervalMin ?? 60;
+    const retention = cfg.backupRetentionDays ?? 7;
+    if (interval <= 0) return; // 0 で無効
+    const slot = backupSlot(new Date(), interval);
+    if (await hasBackup(backend, slot)) { await pruneBackups(backend, retention, today()); return; }
+    // ランダムジッタ（0〜5秒）で同時起動の競合を散らし、再確認して未取得の1名だけが作成する。
+    await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 5000)));
+    if (await hasBackup(backend, slot)) return;
+    const n = await createBackup(backend, slot);
+    if (n > 0) await pruneBackups(backend, retention, today());
+  } catch { /* バックアップ失敗は本処理に影響させない */ }
+}
+
 async function start(): Promise<void> {
   startRelayPolling(); // 30秒間隔で中継サーバを死活監視（落ちたら警告・復帰で自動クローズ）
   if (!(await checkRelay())) { showRelayDownModal(); return; }
   // 起動時に記入者名を強制入力させない。更新作業（取込/メモ・注釈の記載/削除）の直前に未設定なら促す。
   refresh();
+  void maybeBackup(); // 起動時バックアップ（バックグラウンドで実行。UI はブロックしない）
 }
 start();
