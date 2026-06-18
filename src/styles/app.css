@@ -222,6 +222,10 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 /* 大量行（数千〜万件）でも軽く表示するため、画面外の行はレイアウト/描画をスキップ。
    contain-intrinsic-size の auto は実測値を記憶し、折り返し(全文表示)でもスクロールがずれにくい。 */
 .qam-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 33px; }
+/* 仮想スクロールの spacer 行は実高さを正確に保つ（content-visibility の推定で潰れないように） */
+.qam-table tbody tr.qam-vspacer { content-visibility: visible; }
+.qam-table tbody tr.qam-vspacer:hover { background: transparent; }
+.qam-table tbody tr.qam-vspacer td { padding: 0; border: 0; }
 .qam-table tbody tr:hover { background: var(--paper-2); }
 .qam-table tbody tr.qam-row-click { cursor: pointer; }
 .qam-table tbody tr.qam-selected { background: var(--accent-soft); }
