@@ -88,20 +88,23 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].props).toEqual(expect.arrayContaining([{ k: 'FQDN', v: 'host1.example' }, { k: 'IP', v: '10.1.1.1' }]));
   });
 
-  it('host: eid は内容ベース（同FQDN/同日でも別行は別eid・再取込は同eid）／更新日や識別名なしはスキップして件数報告', () => {
+  it('host: FQDN空でもIPがあれば取込む／更新日なしはスキップ／eidは内容ベースで衝突しない', () => {
     const csv = '更新日,変更種別,接続点ID,IPアドレス,FQDN\n'
-      + '2026-06-02,追加,AB123,10.1.1.1,h1.example\n'        // 別host
+      + '2026-06-02,追加,AB123,10.1.1.1,h1.example\n'        // FQDNあり
       + '2026-06-02,追加,AB123,10.1.1.2,h2.example\n'        // 同日同接続点でも別host→別eid
       + ',追加,AB123,10.1.1.3,h3.example\n'                  // 更新日なし→スキップ
-      + '2026-06-02,追加,AB123,10.1.1.4,\n';                 // FQDNなし→スキップ
+      + '2026-06-02,追加,AB123,10.1.1.4,\n';                 // FQDN空だがIPあり→取込む
     const stats = { skipped: 0 };
     const ev = parseHistoryCsv('host', csv, () => '', stats);
-    expect(ev.length).toBe(2);
-    expect(stats.skipped).toBe(2);
-    expect(ev[0].eid).not.toBe(ev[1].eid); // 別行は別eid（id空でも衝突しない）
-    // 同じCSVを再パース→同じeid（再取込時に重複排除される）
-    const ev2 = parseHistoryCsv('host', csv, () => '');
-    expect(ev2.map((e) => e.eid)).toEqual(ev.map((e) => e.eid));
+    expect(ev.length).toBe(3);          // FQDN空でもIPで取り込まれる
+    expect(stats.skipped).toBe(1);      // 更新日なしの1行だけスキップ
+    expect(new Set(ev.map((e) => e.eid)).size).toBe(3); // 全て別eid
+    // FQDN空・IPのみの行: name=IP、FQDN prop は無し、IP prop はある
+    const ipOnly = ev.find((e) => e.name === '10.1.1.4')!;
+    expect(ipOnly.props?.some((p) => p.k === 'FQDN')).toBe(false);
+    expect(ipOnly.props).toEqual(expect.arrayContaining([{ k: 'IP', v: '10.1.1.4' }]));
+    // 再取込は同eid（重複排除される）
+    expect(parseHistoryCsv('host', csv, () => '').map((e) => e.eid)).toEqual(ev.map((e) => e.eid));
   });
 
   it('user: アカウント名=id / 氏名=name / 権限などを併記', () => {

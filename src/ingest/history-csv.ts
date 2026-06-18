@@ -76,9 +76,10 @@ const SPECS: Record<QamEntity, HistSpec> = {
     extras: [['接続点ID', /接続点ID/i]],
   },
   // Host: 更新日, 変更種別, 接続点ID, IPアドレス, FQDN（FQDN の http(s):// は除去）
+  // 識別子は FQDN を優先し、空なら IP で代替（FQDN が無くても IP があれば取り込む）。表示名も FQDN→IP。
   host: {
     date: /更新日/, type: /種別/, content: null,
-    keyCols: [/FQDN/i], keyIsIdentity: false, name: [/FQDN/i],
+    keyCols: [/FQDN/i, /IPアドレス|IP|アドレス/i], keyIsIdentity: false, name: [/FQDN/i, /IPアドレス|IP|アドレス/i],
     extras: [['接続点ID', /接続点ID/i], ['IP', /IPアドレス|IP|アドレス/i]],
   },
   user: {
@@ -196,7 +197,8 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     const date = normDate(get(dateI));
     let rawKey = keyIdx.map(get).find((v) => v) || '';
     if (entity === 'host') rawKey = stripProtocol(rawKey); // FQDN の http(s):// を除去
-    if (!date || !rawKey) { skipped++; return; } // 更新日・識別名が無い行はスキップ
+    // 更新日が無い、または識別子（host は FQDN/IP、他はタイトル等）が全く無い行はスキップ。
+    if (!date || !rawKey) { skipped++; return; }
     // Qualys ID へ解決。group/host は表示名(タイトル/FQDN)を ID に流用しない（未解決は空）。
     // domain/user は keyCols 自体が Qualys キーなので未解決でもそのまま採用。接続点IDは ID にしない。
     const id = resolveId(rawKey) || (spec.keyIsIdentity ? rawKey : '');
@@ -211,7 +213,10 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     let props: { k: string; v: string }[] | undefined;
     let field = '';
     if (entity === 'host') {
-      props = [{ k: 'FQDN', v: name }, { k: 'IP', v: extraVals.IP ?? '' }, { k: '接続点ID', v: extraVals['接続点ID'] ?? '' }].filter((p) => p.v);
+      // FQDN prop は FQDN 列の実値（空なら空。name は IP にフォールバックし得るので使わない）。
+      const fqdnI = idx(/FQDN/i);
+      const fqdnVal = fqdnI >= 0 ? stripProtocol(get(fqdnI)) : '';
+      props = [{ k: 'FQDN', v: fqdnVal }, { k: 'IP', v: extraVals.IP ?? '' }, { k: '接続点ID', v: extraVals['接続点ID'] ?? '' }].filter((p) => p.v);
       field = 'IPアドレス・FQDN';
     }
     const change = mapChange(get(typeI)) ?? inferChange(content || extras.join(' ')); // 変更種別列を優先、無ければ推定
