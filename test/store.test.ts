@@ -3,7 +3,7 @@ import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
   prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, importHistory,
-  backupSlot, listBackups, hasBackup, createBackup, pruneBackups, restoreBackup,
+  backupSlot, listBackups, hasBackup, pruneBackups,
 } from '../src/store';
 import type { QamEvent } from '../src/types';
 
@@ -197,7 +197,7 @@ describe('store ingest (取込日時 stamp ごと)', () => {
   });
 });
 
-describe('backup（ツール入力データの退避・復元・剪定）', () => {
+describe('backup（slot計算・zip一覧・保管剪定）', () => {
   let b: MemBackend;
   beforeEach(() => { b = new MemBackend(); });
 
@@ -210,29 +210,21 @@ describe('backup（ツール入力データの退避・復元・剪定）', () =
     expect(backupSlot(d1, 60).slice(11)).toBe('14-00-00');
   });
 
-  it('createBackup は存在するツール入力データだけを退避し、復元で元に戻せる', async () => {
-    await addComment(b, { entity: 'group', id: 'g1', ts: '2026-06-18T10-00-00', author: 'x', text: 'メモA' } as any);
-    await setAnnotation(b, 'group', 'g1', 'FUNCTION', '中継');
-    const slot = backupSlot(new Date('2026-06-18T14:00:00'), 60);
-    const n = await createBackup(b, slot);
-    expect(n).toBe(2); // comments + annotations(group) のみ（他は未作成）
-    expect(await hasBackup(b, slot)).toBe(true);
-
-    // 退避後にメモ/注釈を改変 → 復元で退避時点に戻る
-    await editComment(b, 'group', 'g1', '2026-06-18T10-00-00', '改変');
-    await setAnnotation(b, 'group', 'g1', 'FUNCTION', '別物');
-    const r = await restoreBackup(b, slot);
-    expect(r).toBe(2);
-    expect((await readComments(b, 'group', 'g1'))[0].text).toBe('メモA');
-    expect((await readAnnotations(b, 'group'))['g1'].FUNCTION).toBe('中継');
+  it('listBackups は backups/*.zip を slot 名（新しい順）で返す。無関係なファイルは無視', async () => {
+    await b.write('backups/2026-06-01T08-00-00.zip', 'ZIP');
+    await b.write('backups/2026-06-17T08-00-00.zip', 'ZIP');
+    await b.write('backups/relay.log', 'x'); // .zip でないものは対象外
+    expect(await listBackups(b)).toEqual(['2026-06-17T08-00-00', '2026-06-01T08-00-00']);
+    expect(await hasBackup(b, '2026-06-01T08-00-00')).toBe(true);
+    expect(await hasBackup(b, '2026-06-02T08-00-00')).toBe(false);
   });
 
-  it('pruneBackups は保管日数を超えた slot を削除する', async () => {
-    await addComment(b, { entity: 'group', id: 'g1', ts: 't', author: 'x', text: 'm' } as any);
-    await createBackup(b, '2026-06-01T08-00-00'); // 古い
-    await createBackup(b, '2026-06-17T08-00-00'); // 新しい
+  it('pruneBackups は保管日数を超えた zip を削除する', async () => {
+    await b.write('backups/2026-06-01T08-00-00.zip', 'ZIP'); // 古い
+    await b.write('backups/2026-06-17T08-00-00.zip', 'ZIP'); // 新しい
     const removed = await pruneBackups(b, 7, '2026-06-18');
     expect(removed).toEqual(['2026-06-01T08-00-00']);
     expect(await listBackups(b)).toEqual(['2026-06-17T08-00-00']);
+    expect(await b.read('backups/2026-06-01T08-00-00.zip')).toBeNull();
   });
 });

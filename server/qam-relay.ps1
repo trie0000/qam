@@ -18,6 +18,8 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http | Out-Null
+Add-Type -AssemblyName System.IO.Compression | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
 
 # ─── env 読込/保存 ───────────────────────────────────────────────────────────
 function Import-QamEnv {
@@ -109,6 +111,66 @@ function Resolve-SafePath { param([string]$Rel)
     $rel2 = ($Rel -replace '/', '\').TrimStart('\')
     if ($rel2 -match '(^|\\)\.\.(\\|$)' -or $rel2 -match ':') { throw "不正な path: $Rel" }
     return "$DataFull\$rel2"
+}
+
+# ─── バックアップ（データディレクトリ全体を zip 退避/展開） ───────────────────
+# 退避対象から外すトップ階層/ファイル: raw(再取得可・巨大)・backups(再帰)・ログ・env(環境固有設定)・.bak。
+function Test-QamBackupExcluded { param([string]$Rel)
+    $top = ($Rel -split '[\\/]')[0]
+    if ($top -ieq 'backups' -or $top -ieq 'raw') { return $true }
+    $leaf = Split-Path $Rel -Leaf
+    if ($leaf -ieq '.qam.env') { return $true }
+    if ($leaf -match '\.(log|bak)$') { return $true }
+    return $false
+}
+# データディレクトリ全体を backups/<slot>.zip へ圧縮。退避したファイル数を返す。
+function Invoke-QamBackup { param([string]$Slot)
+    if ($Slot -notmatch '^\d{4}-\d{2}-\d{2}T[\d-]+$') { throw "不正な slot: $Slot" }
+    $zipPath = Resolve-SafePath "backups\$Slot.zip"
+    $bdir = Split-Path $zipPath -Parent
+    if (-not (Test-Path -LiteralPath $bdir)) { New-Item -ItemType Directory -Path $bdir -Force | Out-Null }
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    $count = 0
+    $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($f in (Get-ChildItem -LiteralPath $DataFull -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            $rel = $f.FullName.Substring($DataFull.Length).TrimStart('\', '/')
+            if (Test-QamBackupExcluded $rel) { continue }
+            $entryName = $rel -replace '\\', '/'
+            # 共有ロック中でも読めるよう、CreateEntryFromFile ではなく明示的に共有読みで取り込む。
+            $entry = $zip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+            $es = $entry.Open()
+            try {
+                $fsr = New-Object System.IO.FileStream($f.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                try { $fsr.CopyTo($es) } finally { $fsr.Dispose() }
+            } finally { $es.Dispose() }
+            $count++
+        }
+    } finally { $zip.Dispose() }
+    Add-QamLog "BACKUP $Slot files=$count"
+    return $count
+}
+# backups/<slot>.zip を展開してデータディレクトリへ上書き復元。復元したファイル数を返す。
+# 既存ファイルは上書き。バックアップに無いファイル（退避後に増えたスナップショット等）は残す。
+function Invoke-QamRestore { param([string]$Slot)
+    if ($Slot -notmatch '^\d{4}-\d{2}-\d{2}T[\d-]+$') { throw "不正な slot: $Slot" }
+    $zipPath = Resolve-SafePath "backups\$Slot.zip"
+    if (-not (Test-Path -LiteralPath $zipPath)) { throw "バックアップが見つかりません: $Slot" }
+    $count = 0
+    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+    try {
+        foreach ($entry in $zip.Entries) {
+            if (-not $entry.Name) { continue } # ディレクトリエントリは無視
+            # zip-slip 対策: エントリ名も DataDir 配下に閉じ込めて解決（.. を拒否）。
+            $dest = Resolve-SafePath $entry.FullName
+            $ddir = Split-Path $dest -Parent
+            if (-not (Test-Path -LiteralPath $ddir)) { New-Item -ItemType Directory -Path $ddir -Force | Out-Null }
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+            $count++
+        }
+    } finally { $zip.Dispose() }
+    Add-QamLog "RESTORE $Slot files=$count"
+    return $count
 }
 
 # ─── Qualys プロキシ取得 ─────────────────────────────────────────────────────
@@ -367,6 +429,16 @@ function Invoke-Route { param($Ctx)
                 backupIntervalMin = if ($null -ne $env:QAM_BACKUP_INTERVAL_MIN -and $env:QAM_BACKUP_INTERVAL_MIN -ne '') { [int]$env:QAM_BACKUP_INTERVAL_MIN } else { 60 }
                 backupRetentionDays = if ($null -ne $env:QAM_BACKUP_RETENTION_DAYS -and $env:QAM_BACKUP_RETENTION_DAYS -ne '') { [int]$env:QAM_BACKUP_RETENTION_DAYS } else { 7 }
             }; return
+        }
+        '^/qam/backup$' {
+            try { $n = Invoke-QamBackup (Get-Body $req | ConvertFrom-Json).slot; Send-Json $Ctx @{ ok = $true; files = $n } }
+            catch { Add-QamLog "BACKUP error: $($_.Exception.Message)"; Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 500 }
+            return
+        }
+        '^/qam/restore$' {
+            try { $n = Invoke-QamRestore (Get-Body $req | ConvertFrom-Json).slot; Send-Json $Ctx @{ ok = $true; files = $n } }
+            catch { Add-QamLog "RESTORE error: $($_.Exception.Message)"; Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 500 }
+            return
         }
         '^/qam/shutdown$' { Send-Json $Ctx @{ ok = $true }; $script:QamStop = $true; return }
         default { Send-Json $Ctx @{ error = "no route: $path" } 404; return }

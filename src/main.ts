@@ -9,12 +9,12 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, getConfig, setConfig, shutdownRelay, checkRelay } from './relay';
+import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
 import { downloadEntity, downloadIpCount } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, backupSlot, listBackups, hasBackup, createBackup, pruneBackups, restoreBackup, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamRecord, QamRecords } from './types';
@@ -1035,9 +1035,10 @@ async function openSettings(): Promise<void> {
     try {
       const interval = Math.max(0, parseInt(bkInterval.value, 10) || 0) || 60;
       const slot = backupSlot(new Date(), interval);
-      const n = await createBackup(backend, slot);
-      if (n > 0) { await fillBackups(slot); toast(`バックアップしました（${n}ファイル / ${fmtStamp(slot)}）`, 'ok'); }
-      else toast('退避対象のデータがありません（メモ・注釈・変更履歴・ライセンス推移が未登録）', 'error');
+      const res = await backupNow(slot);
+      if (!res.ok) throw new Error(res.error || 'バックアップに失敗しました');
+      await fillBackups(slot);
+      toast(`バックアップしました（${res.files ?? 0}ファイル / ${fmtStamp(slot)}）`, 'ok');
     } catch (e) { toast('バックアップに失敗: ' + (e as Error).message, 'error'); }
     finally { bkNowBtn.removeAttribute('disabled'); }
   });
@@ -1045,15 +1046,15 @@ async function openSettings(): Promise<void> {
   bkRestoreBtn.addEventListener('click', async () => {
     const slot = bkSelect.value;
     if (!slot) { toast('復元するバックアップを選択してください', 'error'); return; }
-    if (!(await confirmModal('バックアップから復元', `${fmtStamp(slot)} 時点のメモ・注釈・変更履歴・ライセンス推移を復元します。現在の内容は上書きされます。よろしいですか？`, '復元'))) return;
-    try { const n = await restoreBackup(backend, slot); toast(`復元しました（${n}ファイル）`, 'ok'); refresh(); }
+    if (!(await confirmModal('バックアップから復元', `${fmtStamp(slot)} 時点の全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を復元します。現在の同名ファイルは上書きされます。よろしいですか？`, '復元'))) return;
+    try { const res = await restoreNow(slot); if (!res.ok) throw new Error(res.error || '復元に失敗しました'); toast(`復元しました（${res.files ?? 0}ファイル）`, 'ok'); refresh(); }
     catch (e) { toast('復元に失敗: ' + (e as Error).message, 'error'); }
   });
   const bkRestoreBox = el('div', {}, [bkSelect, el('div', { style: 'margin-top:var(--s-3)' }, [bkRestoreBtn])]);
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけメモ・注釈・変更履歴・ライセンス推移を自動退避します（その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在のメモ・注釈・変更履歴・ライセンス推移を手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点のメモ・注釈・変更履歴・ライセンス推移を復元します（現在の内容は上書き）。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の全データを復元します（現在の同名ファイルは上書き）。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
@@ -1220,7 +1221,7 @@ function ensureAuthor(): Promise<void> {
   });
 }
 
-// 自動バックアップ（共有データの定期退避）。ツール起動時に実行を試みる:
+// 自動バックアップ（データディレクトリ全体を zip 退避）。ツール起動時に実行を試みる:
 //   ・slot = 保存間隔で丸めた時刻。同 slot のバックアップが既にあればスキップ（＝1時間に1回）。
 //   ・ランダムなジッタ後に再確認して未取得なら作成 → 同時起動でも実質「ランダムな1名」だけが取得。
 //   ・誰もツールを上げていない時間帯は作成されない（起動時のみ実行のため自然にスキップ）。
@@ -1236,8 +1237,8 @@ async function maybeBackup(): Promise<void> {
     // ランダムジッタ（0〜5秒）で同時起動の競合を散らし、再確認して未取得の1名だけが作成する。
     await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 5000)));
     if (await hasBackup(backend, slot)) return;
-    const n = await createBackup(backend, slot);
-    if (n > 0) await pruneBackups(backend, retention, today());
+    const res = await backupNow(slot);
+    if (res.ok) await pruneBackups(backend, retention, today());
   } catch { /* バックアップ失敗は本処理に影響させない */ }
 }
 

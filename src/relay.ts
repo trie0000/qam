@@ -68,6 +68,11 @@ export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfi
 };
 export const shutdownRelay = (): Promise<unknown> => postJson('/qam/shutdown', {});
 
+// バックアップ（データディレクトリ全体の zip 退避/展開）。zip化・展開はファイルの所在地である relay 側で行う。
+export interface BackupResult { ok: boolean; files?: number; error?: string }
+export const backupNow = (slot: string): Promise<BackupResult> => postJson('/qam/backup', { slot });
+export const restoreNow = (slot: string): Promise<BackupResult> => postJson('/qam/restore', { slot });
+
 // 中継サーバの死活確認。起動していない/到達不能なら false（数秒でタイムアウト）。
 export async function checkRelay(timeoutMs = 3000): Promise<boolean> {
   const ctrl = new AbortController();

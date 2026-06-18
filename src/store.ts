@@ -214,19 +214,10 @@ export async function prune(b: FileBackend, retentionDays: number, refDate: stri
   return removed;
 }
 
-// --- バックアップ（ツール側で入力したデータの定期退避・復元） ---
-// 対象は「ツール側で入力したデータ」= メモ・手入力の注釈・変更履歴・ライセンス推移。
-// Qualys から再取得できるスナップショット/raw は対象外（容量大・復元不要）。
-// backups/<slot>/ 配下に各ファイルを退避する。slot は保存間隔で丸めた時刻スタンプ。
-const BACKUP_TARGETS: { src: string; bak: string }[] = [
-  { src: COMMENTS, bak: 'comments.jsonl' },
-  { src: LICENSES, bak: 'licenses.jsonl' },
-  ...ENTITIES.flatMap((e) => [
-    { src: annotPath(e), bak: `annotations-${e}.json` },
-    { src: histPath(e), bak: `history-${e}.jsonl` },
-  ]),
-];
-const backupDir = (slot: string): string => `backups/${slot}`;
+// --- バックアップ（データディレクトリ全体の定期退避・復元） ---
+// バックアップ実体は backups/<slot>.zip（データディレクトリ全体を圧縮したもの。raw/backups/ログ/設定は除外）。
+// zip 化・展開はファイルの所在地である relay 側で行う（relay.ts の backupNow/restoreNow）。
+// store 側は slot 計算・一覧・保管期間の剪定だけを担う（FileBackend だけで完結＝単体テスト可能）。
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
 // 保存間隔(分)で丸めたローカル時刻を 'YYYY-MM-DDTHH-mm-ss' で返す。同一スロットは同名＝重複退避を防ぐ。
@@ -236,46 +227,25 @@ export function backupSlot(date: Date, intervalMin: number): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}-${pad2(d.getMinutes())}-${pad2(d.getSeconds())}`;
 }
 
-// 既存バックアップの slot 一覧（新しい順）。
+// 既存バックアップの slot 一覧（新しい順）。backups/<slot>.zip の .zip を除いた名前。
 export async function listBackups(b: FileBackend): Promise<string[]> {
-  return (await b.list('backups')).filter((n) => /^\d{4}-\d{2}-\d{2}T/.test(n)).sort().reverse();
+  return (await b.list('backups'))
+    .filter((n) => /^\d{4}-\d{2}-\d{2}T.*\.zip$/.test(n))
+    .map((n) => n.replace(/\.zip$/, ''))
+    .sort().reverse();
 }
 export const hasBackup = async (b: FileBackend, slot: string): Promise<boolean> =>
   (await listBackups(b)).includes(slot);
 
-// 現在のツール入力データを backups/<slot>/ に退避。退避したファイル数を返す（0=対象データなし）。
-export async function createBackup(b: FileBackend, slot: string): Promise<number> {
-  let n = 0;
-  for (const t of BACKUP_TARGETS) {
-    const raw = await b.read(t.src);
-    if (raw == null) continue;
-    await b.write(`${backupDir(slot)}/${t.bak}`, raw);
-    n++;
-  }
-  return n;
-}
-
-// 保管日数を超えた古いバックアップを削除。削除した slot を返す。
+// 保管日数を超えた古いバックアップ(zip)を削除。削除した slot を返す。
 export async function pruneBackups(b: FileBackend, retentionDays: number, refDate: string): Promise<string[]> {
   if (retentionDays <= 0) return [];
   const cutoff = cutoffDate(refDate, retentionDays);
   const removed: string[] = [];
   for (const slot of await listBackups(b)) {
-    if (slot.slice(0, 10) < cutoff) { await b.remove(backupDir(slot)); removed.push(slot); }
+    if (slot.slice(0, 10) < cutoff) { await b.remove(`backups/${slot}.zip`); removed.push(slot); }
   }
   return removed;
-}
-
-// バックアップから復元（現在の対象ファイルを上書き）。復元したファイル数を返す。
-export async function restoreBackup(b: FileBackend, slot: string): Promise<number> {
-  let n = 0;
-  for (const t of BACKUP_TARGETS) {
-    const raw = await b.read(`${backupDir(slot)}/${t.bak}`);
-    if (raw == null) continue;
-    await b.write(t.src, raw);
-    n++;
-  }
-  return n;
 }
 
 // --- 取込確定（取込日時 stamp ごとに 1 スナップショット。直前取込との差分を履歴へ） ---
