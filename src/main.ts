@@ -99,6 +99,13 @@ function callout(text: string): HTMLElement {
   return el('div', { class: 'qam-callout' }, [el('span', { html: icon('alert', 13) }), el('span', {}, [text])]);
 }
 
+// 全画面の処理中オーバーレイ（重い同期処理の前に表示し、終わったら close）。
+function busyOverlay(label: string): { close: () => void } {
+  const ov = el('div', { class: 'qam-busy' }, [el('div', { class: 'qam-busy-box' }, [el('span', { class: 'qam-spin' }), el('span', {}, [label])])]);
+  document.body.append(ov);
+  return { close: () => ov.remove() };
+}
+
 const root = document.getElementById('qam-root')!;
 const main = el('div', { class: 'qam-main' });
 const left = el('div', { class: 'qam-left' });
@@ -202,7 +209,14 @@ async function refresh(): Promise<void> {
     wrapBtn.addEventListener('click', () => {
       state.wrap = !state.wrap;
       wrapBtn.className = state.wrap ? 'btn btn--sm btn--primary' : 'btn btn--sm';
-      main.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
+      const tbl = main.querySelector('.qam-table') as HTMLElement | null;
+      // 全文表示ONかつ大量件数（仮想化中）は全行描画で固まるので、待機オーバーレイを出してから切り替える。
+      if (tbl && state.wrap && tbl.dataset.big === '1') {
+        const busy = busyOverlay('全文表示を準備中…（件数が多いため少し時間がかかります）');
+        requestAnimationFrame(() => { tbl.classList.add('qam-wrap'); requestAnimationFrame(() => busy.close()); });
+      } else {
+        tbl?.classList.toggle('qam-wrap', state.wrap);
+      }
     });
     toolbar.append(wrapBtn);
   }

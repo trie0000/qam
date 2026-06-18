@@ -337,6 +337,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
   function renderBody(): void {
     winRows = displayedRows().slice(0, MAX_ROWS);
     virtual = winRows.length > VIRT_MIN;
+    table.dataset.big = virtual ? '1' : ''; // 全文表示ON時の待機表示要否を外側へ知らせる印
     rebuildTbody();
     updateBulk(winRows.length);
     // 初回に実際の行高を測って補正（推定とずれていれば1回だけ貼り直す）。
