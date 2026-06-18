@@ -150,8 +150,9 @@ function Invoke-QamBackup { param([string]$Slot)
     Add-QamLog "BACKUP $Slot files=$count"
     return $count
 }
-# backups/<slot>.zip を展開してデータディレクトリへ上書き復元。復元したファイル数を返す。
-# 既存ファイルは上書き。バックアップに無いファイル（退避後に増えたスナップショット等）は残す。
+# backups/<slot>.zip を展開してデータディレクトリへ「その時点の状態」に復元。復元したファイル数を返す。
+# 真の時点復元: 退避対象スコープ内で zip に無い現ファイルは削除する（退避後に追加したメモ/注釈/
+# スナップショット等を取り除き、退避時点と同じ状態に戻す）。除外スコープ(raw/backups/ログ/設定)は対象外。
 function Invoke-QamRestore { param([string]$Slot)
     if ($Slot -notmatch '^\d{4}-\d{2}-\d{2}T[\d-]+$') { throw "不正な slot: $Slot" }
     $zipPath = Resolve-SafePath "backups\$Slot.zip"
@@ -159,6 +160,15 @@ function Invoke-QamRestore { param([string]$Slot)
     $count = 0
     $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
     try {
+        # zip に含まれるエントリ名（DataDir 相対・スラッシュ区切り）の集合。
+        $keep = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($entry in $zip.Entries) { if ($entry.Name) { [void]$keep.Add($entry.FullName) } }
+        # スコープ内で zip に無い現ファイルを削除（メモ削除等を反映＝退避時点へ巻き戻す）。
+        foreach ($f in (Get-ChildItem -LiteralPath $DataFull -Recurse -File -Force -ErrorAction SilentlyContinue)) {
+            $rel = $f.FullName.Substring($DataFull.Length).TrimStart('\', '/')
+            if (Test-QamBackupExcluded $rel) { continue }
+            if (-not $keep.Contains(($rel -replace '\\', '/'))) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
+        }
         foreach ($entry in $zip.Entries) {
             if (-not $entry.Name) { continue } # ディレクトリエントリは無視
             # zip-slip 対策: エントリ名も DataDir 配下に閉じ込めて解決（.. を拒否）。

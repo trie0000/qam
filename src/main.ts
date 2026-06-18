@@ -1046,7 +1046,7 @@ async function openSettings(): Promise<void> {
   bkRestoreBtn.addEventListener('click', async () => {
     const slot = bkSelect.value;
     if (!slot) { toast('復元するバックアップを選択してください', 'error'); return; }
-    if (!(await confirmModal('バックアップから復元', `${fmtStamp(slot)} 時点の全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を復元します。現在の同名ファイルは上書きされます。よろしいですか？`, '復元'))) return;
+    if (!(await confirmModal('バックアップから復元', `${fmtStamp(slot)} 時点の状態に戻します（全データ＝資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）。この時点以降に追加したメモ・取込なども取り除かれ、退避時点と同じ状態になります。よろしいですか？`, '復元'))) return;
     try { const res = await restoreNow(slot); if (!res.ok) throw new Error(res.error || '復元に失敗しました'); toast(`復元しました（${res.files ?? 0}ファイル）`, 'ok'); refresh(); }
     catch (e) { toast('復元に失敗: ' + (e as Error).message, 'error'); }
   });
@@ -1054,7 +1054,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の全データを復元します（現在の同名ファイルは上書き）。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
