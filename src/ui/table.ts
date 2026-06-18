@@ -275,6 +275,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
     const old = table.querySelector('tbody'); if (old) old.remove();
     const tbody = el('tbody');
     const rows = displayedRows();
+    const vc = vcols(); // 表示列は1回だけ算出（セルごとの filter 再計算を避ける）
     for (const row of rows.slice(0, MAX_ROWS)) {
       const key = opts.getKey(row);
       const tr = el('tr', { class: (opts.selected.has(key) ? 'qam-selected' : '') + (opts.onRowClick ? ' qam-row-click' : '') });
@@ -293,7 +294,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
       cb.addEventListener('click', (e) => e.stopPropagation());
       cb.addEventListener('change', () => { if (cb.checked) opts.selected.add(key); else opts.selected.delete(key); tr.classList.toggle('qam-selected', cb.checked); updateBulk(rows.length); opts.onSelectionChange?.(); });
       const tdC = el('td', { class: 'qam-col-check' }); tdC.append(cb); tr.append(tdC);
-      vcols().forEach((c) => {
+      vc.forEach((c) => {
         const td = el('td', { class: c.mono ? 'qam-mono' : '' });
         const v = c.render(row);
         if (typeof v === 'string') td.innerHTML = v; else td.append(v);
