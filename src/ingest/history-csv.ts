@@ -93,6 +93,14 @@ const SPECS: Record<QamEntity, HistSpec> = {
 // FQDN 等から先頭の http:// https:// と末尾スラッシュを除去。
 const stripProtocol = (s: string): string => s.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
 
+// CSV行の内容から安定したハッシュ。eid に使い「同一内容の再取込は重複排除／別内容は別行として登録」を満たす。
+// （従来は行番号 import:i だったため、host のように id が空だと別CSV/複数回取込で eid が衝突し取りこぼしていた）
+function eidHash(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (((h << 5) + h) ^ s.charCodeAt(i)) >>> 0;
+  return h.toString(36);
+}
+
 // IPv4 → 整数（不正は null）。
 function ipToInt(s: string): number | null {
   const m = s.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
@@ -128,7 +136,8 @@ function consolidateRanges(pairs: [string, string][]): string {
 }
 
 // resolveId: 識別名(タイトル等) → 現スナップショットの Qualys ID。未解決は '' を返す。
-export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (rawName: string) => string = () => ''): QamEvent[] {
+// stats: 更新日/識別名が無くスキップした行数を呼び出し側へ返す（取込結果の表示用）。
+export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (rawName: string) => string = () => '', stats?: { skipped: number }): QamEvent[] {
   const spec = SPECS[entity];
   const rows = parseCsv(text).filter((r) => r.some((c) => c.trim() !== ''));
   if (!rows.length) throw new Error('CSV が空です');
@@ -148,11 +157,12 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
     const fromI = idx(/from/i); const toI = idx(/to/i); const sidI = idx(/接続点ID/i);
     interface DG { date: string; change: QamChange; id: string; name: string; sid: string; pairs: [string, string][] }
     const groups = new Map<string, DG>();
+    let dskipped = 0;
     for (const r of rows.slice(1)) {
       const get = (j: number): string => (j >= 0 ? (r[j] ?? '').trim() : '');
       const date = normDate(get(dateI));
       const rawKey = keyIdx.map(get).find((v) => v) || '';
-      if (!date || !rawKey) continue;
+      if (!date || !rawKey) { dskipped++; continue; }
       const id = resolveId(rawKey) || rawKey; // domain はドメイン名がキー
       const change = mapChange(get(typeI)) ?? inferChange('');
       const key = `${date}|${id}|${change}`;
@@ -161,8 +171,8 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
       g.pairs.push([get(fromI), get(toI)]);
       groups.set(key, g);
     }
+    if (stats) stats.skipped = dskipped;
     const events: QamEvent[] = [];
-    let i = 0;
     for (const g of groups.values()) {
       const ranges = consolidateRanges(g.pairs);
       // IP範囲は追加/削除IP列(props NETBLOCK)で表示するため、変更後テキストには入れない（接続点IDのみ）。
@@ -170,7 +180,7 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
       // props に NETBLOCK(=IP範囲) を入れて、追加/削除IP 列・行クリックに反映させる。変更項目も付ける。
       const props = [ranges ? { k: 'NETBLOCK', v: ranges } : null, g.sid ? { k: '接続点ID', v: g.sid } : null].filter(Boolean) as { k: string; v: string }[];
       events.push({
-        eid: `domain:${g.id}:${g.date}:import:${i++}`, ts: `${g.date}T00-00-00`,
+        eid: `domain:${g.id}:${g.date}:${eidHash([g.change, g.sid, ranges].join(''))}`, ts: `${g.date}T00-00-00`,
         entity: 'domain', id: g.id, name: g.name, change: g.change, field: 'IPアドレス範囲', old: '',
         new: [marker, ...extras].join(' / '), props,
       });
@@ -180,12 +190,13 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
   }
 
   const events: QamEvent[] = [];
-  rows.slice(1).forEach((r, i) => {
+  let skipped = 0;
+  rows.slice(1).forEach((r) => {
     const get = (j: number): string => (j >= 0 ? (r[j] ?? '').trim() : '');
     const date = normDate(get(dateI));
     let rawKey = keyIdx.map(get).find((v) => v) || '';
     if (entity === 'host') rawKey = stripProtocol(rawKey); // FQDN の http(s):// を除去
-    if (!date || !rawKey) return; // 更新日・識別名が無い行はスキップ
+    if (!date || !rawKey) { skipped++; return; } // 更新日・識別名が無い行はスキップ
     // Qualys ID へ解決。group/host は表示名(タイトル/FQDN)を ID に流用しない（未解決は空）。
     // domain/user は keyCols 自体が Qualys キーなので未解決でもそのまま採用。接続点IDは ID にしない。
     const id = resolveId(rawKey) || (spec.keyIsIdentity ? rawKey : '');
@@ -203,19 +214,23 @@ export function parseHistoryCsv(entity: QamEntity, text: string, resolveId: (raw
       props = [{ k: 'FQDN', v: name }, { k: 'IP', v: extraVals.IP ?? '' }, { k: '接続点ID', v: extraVals['接続点ID'] ?? '' }].filter((p) => p.v);
       field = 'IPアドレス・FQDN';
     }
+    const change = mapChange(get(typeI)) ?? inferChange(content || extras.join(' ')); // 変更種別列を優先、無ければ推定
+    const newText = [marker, content, ...extras].filter(Boolean).join(' / ');
+    // eid は内容ハッシュ（id が空でも行内容で一意。同一内容の再取込のみ重複排除）。
+    const sig = [change, name, ...extras, ...(props?.map((p) => `${p.k}=${p.v}`) ?? [])].join('');
     events.push({
-      eid: `${entity}:${id}:${date}:import:${i}`,
+      eid: `${entity}:${id || rawKey}:${date}:${eidHash(sig)}`,
       ts: `${date}T00-00-00`,
-      entity, id, name,
-      change: mapChange(get(typeI)) ?? inferChange(content || extras.join(' ')), // 変更種別列を優先、無ければ推定
+      entity, id, name, change,
       // CSV取込は項目単位の差分ではない。host/domain は IP/FQDN を props・変更項目に出す。group/user は空。
       field,
       old: '',
       // 全種別統一: 変更後/追加 列の先頭に「CSVインポートで登録」を入れ、取込履歴と分かるようにする。
-      new: [marker, content, ...extras].filter(Boolean).join(' / '),
+      new: newText,
       ...(props && props.length ? { props } : {}),
     });
   });
+  if (stats) stats.skipped = skipped;
   if (!events.length) throw new Error('取り込める行がありません（更新日・識別名列を確認してください）');
   return events;
 }

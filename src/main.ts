@@ -910,10 +910,12 @@ function openIngest(): void {
       try {
         setProg('CSV を解析中…', true);
         const resolveId = await buildIdResolver(entity); // 名前→Qualys ID（接続点IDは ID にしない）
-        const events = parseHistoryCsv(entity, await file.files[0].text(), resolveId);
+        const stats = { skipped: 0 }; // 更新日/識別名が無くスキップした行
+        const events = parseHistoryCsv(entity, await file.files[0].text(), resolveId, stats);
         setProg(`解析完了（${events.length.toLocaleString()} 行）。取込を開始します…`, true);
         const n = await importHistory(backend, entity, events, (done, total) => setProg(`変更履歴を取込中… ${done.toLocaleString()} / ${total.toLocaleString()} 件`, true));
-        setProg(`完了しました（${n.toLocaleString()} 件追加 / ${(events.length - n).toLocaleString()} 件は重複でスキップ）`, false);
+        const skipMsg = stats.skipped ? ` / ${stats.skipped.toLocaleString()} 行は更新日/識別名なしでスキップ` : '';
+        setProg(`完了しました（${n.toLocaleString()} 件追加 / ${(events.length - n).toLocaleString()} 件は重複でスキップ${skipMsg}）`, false);
         toast(`変更履歴を ${n.toLocaleString()} 件取り込みました`, 'ok');
         recordOp('変更履歴CSV取込', `${n.toLocaleString()}件追加`, entity);
         refresh();

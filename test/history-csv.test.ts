@@ -88,6 +88,22 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].props).toEqual(expect.arrayContaining([{ k: 'FQDN', v: 'host1.example' }, { k: 'IP', v: '10.1.1.1' }]));
   });
 
+  it('host: eid は内容ベース（同FQDN/同日でも別行は別eid・再取込は同eid）／更新日や識別名なしはスキップして件数報告', () => {
+    const csv = '更新日,変更種別,接続点ID,IPアドレス,FQDN\n'
+      + '2026-06-02,追加,AB123,10.1.1.1,h1.example\n'        // 別host
+      + '2026-06-02,追加,AB123,10.1.1.2,h2.example\n'        // 同日同接続点でも別host→別eid
+      + ',追加,AB123,10.1.1.3,h3.example\n'                  // 更新日なし→スキップ
+      + '2026-06-02,追加,AB123,10.1.1.4,\n';                 // FQDNなし→スキップ
+    const stats = { skipped: 0 };
+    const ev = parseHistoryCsv('host', csv, () => '', stats);
+    expect(ev.length).toBe(2);
+    expect(stats.skipped).toBe(2);
+    expect(ev[0].eid).not.toBe(ev[1].eid); // 別行は別eid（id空でも衝突しない）
+    // 同じCSVを再パース→同じeid（再取込時に重複排除される）
+    const ev2 = parseHistoryCsv('host', csv, () => '');
+    expect(ev2.map((e) => e.eid)).toEqual(ev.map((e) => e.eid));
+  });
+
   it('user: アカウント名=id / 氏名=name / 権限などを併記', () => {
     const csv = '更新日,更新内容,接続点ID,氏名,名前,姓,事業場名,TEL,e_mail,アカウント名,Language,権限,ログイン方法(SAML),スキャン結果通知\n'
       + '2026-06-03,権限変更,U99,山田 太郎,太郎,山田,東京,03-0000,a@e.x,acme_yamada,ja,Manager,SAML,有効';
