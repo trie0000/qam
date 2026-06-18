@@ -213,7 +213,11 @@ async function refresh(): Promise<void> {
       // 全文表示ONかつ大量件数（仮想化中）は全行描画で固まるので、待機オーバーレイを出してから切り替える。
       if (tbl && state.wrap && tbl.dataset.big === '1') {
         const busy = busyOverlay('全文表示を準備中…（件数が多いため少し時間がかかります）');
-        requestAnimationFrame(() => { tbl.classList.add('qam-wrap'); requestAnimationFrame(() => busy.close()); });
+        // ダブル rAF: オーバーレイを1フレーム確実に描画させてから、重い全行描画を実行する。
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          tbl.classList.add('qam-wrap');
+          requestAnimationFrame(() => busy.close());
+        }));
       } else {
         tbl?.classList.toggle('qam-wrap', state.wrap);
       }
