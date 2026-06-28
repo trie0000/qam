@@ -100,3 +100,12 @@ describe('analyzeSubscriptionIps（IP重複チェック）', () => {
     expect(r.duplicates).toBe(1); expect(r.pairs.length).toBe(1);
   });
 });
+
+import { extractIpTokens } from '../src/qualys';
+describe('extractIpTokens（単体/レンジ抽出）', () => {
+  it('単体IPとレンジを分けて抽出・不正値は除外', () => {
+    const t = extractIpTokens(wrapIp('<IP>10.0.0.1</IP><IP network_id="3">10.0.0.2</IP><IP_RANGE>10.0.0.10-10.0.0.12</IP_RANGE><IP>bad</IP>'));
+    expect(t.singles).toEqual(['10.0.0.1', '10.0.0.2']);
+    expect(t.ranges).toEqual(['10.0.0.10-10.0.0.12']);
+  });
+});

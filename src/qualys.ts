@@ -50,6 +50,35 @@ export function countSubscriptionIps(xml: string): number {
   return total;
 }
 
+// asset/ip 応答から単体IP/レンジのトークン一覧を抽出（診断・差分用）。
+export function extractIpTokens(xml: string): { singles: string[]; ranges: string[] } {
+  const singles: string[] = [];
+  for (const m of xml.matchAll(/<IP(?:\s[^>]*)?>([^<]+)<\/IP>/gi)) { if (ipToInt(m[1]) !== null) singles.push(m[1].trim()); }
+  const ranges: string[] = [];
+  for (const m of xml.matchAll(/<IP_RANGE(?:\s[^>]*)?>([^<]+)<\/IP_RANGE>/gi)) ranges.push(m[1].trim());
+  return { singles, ranges };
+}
+
+// IPスコープ診断: asset/ip を「フィルタ無し / VM限定 / CertView / PC」で取得し、件数とIP一覧を返す。
+// 「全体にあって VM限定に無いIP」を見れば、UI(VM)との差分IPがどのスコープ由来かを特定できる。
+export interface IpScopeRow { label: string; key: string; ok: boolean; unique: number | null; singles: string[]; ranges: string[]; error?: string }
+export async function diagnoseSubscriptionIps(creds: QualysCreds): Promise<IpScopeRow[]> {
+  const base = creds.base.replace(/\/+$/, '');
+  const variants: { label: string; key: string; q: string }[] = [
+    { label: '全モジュール（フィルタ無し＝ツール既定）', key: 'all', q: '' },
+    { label: 'VM限定（compliance_enabled=0&certview_enabled=0）', key: 'vm', q: '&compliance_enabled=0&certview_enabled=0' },
+    { label: 'CertView（certview_enabled=1）', key: 'certview', q: '&certview_enabled=1' },
+    { label: 'PC（compliance_enabled=1）', key: 'pc', q: '&compliance_enabled=1' },
+  ];
+  const rows: IpScopeRow[] = [];
+  for (const v of variants) {
+    const r = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url: `${base}/api/2.0/fo/asset/ip/?action=list${v.q}` });
+    if (r.ok) { const t = extractIpTokens(r.xml); rows.push({ label: v.label, key: v.key, ok: true, unique: countSubscriptionIps(r.xml), singles: t.singles, ranges: t.ranges }); }
+    else rows.push({ label: v.label, key: v.key, ok: false, unique: null, singles: [], ranges: [], error: r.error || `HTTP ${r.status}` });
+  }
+  return rows;
+}
+
 // IPs in Subscription の重複チェック。<IP>（単体）と <IP_RANGE>（レンジ）を区間化し、
 // 重なり（単体×レンジ・レンジ×レンジ・完全重複）を検出して、件数のズレ要因を可視化する。
 const ipIntToStr = (n: number): string => `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;

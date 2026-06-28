@@ -10,7 +10,7 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
-import { downloadEntity, downloadIps, addQualysUser, analyzeSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { downloadEntity, downloadIps, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
@@ -676,7 +676,7 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
     + 'IPs in Subscription（登録IP総数）は API取込時に Qualys から自動取得し、上限とは別の値として表示。'
     + 'x 軸は年度（4月〜翌3月）の月。データの無い月は未記載。';
   const dupBox = await buildIpDupBox(); // IPs in Subscription の重複チェック（応答XMLがあれば）
-  wrap.append(el('div', { class: 'qam-lic-note' }, [note]), summary, ...(dupBox ? [dupBox] : []), chartBox, legend);
+  wrap.append(el('div', { class: 'qam-lic-note' }, [note]), summary, ...(dupBox ? [dupBox] : []), buildIpScopeDiagBox(), chartBox, legend);
   host.append(wrap);
   redraw();
 }
@@ -709,6 +709,42 @@ async function buildIpDupBox(): Promise<HTMLElement | null> {
   } else {
     box.append(el('div', { class: 'qam-lic-note' }, ['単体表記・レンジ表記の間に重複IPはありません。']));
   }
+  return box;
+}
+
+// IPスコープ診断: asset/ip を「全モジュール / VM限定 / CertView / PC」で取得し、件数と
+// 「全体にあって VM限定に無いIP」を表示して、UI(VM)との差分IPがどのスコープ由来かを特定する。
+function buildIpScopeDiagBox(): HTMLElement {
+  const box = el('div', { class: 'qam-lic-summary' });
+  const btn = el('button', { class: 'btn btn--sm' }, ['IPスコープ診断（VM/CertView/PC別に取得して差分表示）']);
+  const out = el('div', { style: 'margin-top:var(--s-2)' });
+  const mono = (t: string): HTMLElement => el('div', { class: 'qam-mono', style: 'font-size:var(--fs-sm);user-select:text' }, [t]);
+  btn.addEventListener('click', async () => {
+    btn.setAttribute('disabled', 'true'); clear(out); out.append(el('div', { class: 'qam-count' }, ['取得中…（4回 asset/ip を呼び出します）']));
+    try {
+      const cfg = await getConfig();
+      const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+      if (!creds.base) { clear(out); toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return; }
+      if (!creds.user || !creds.pass) { const got = await promptQualysCreds(creds.user, creds.pass); if (!got) { clear(out); return; } creds.user = got.user; creds.pass = got.pass; }
+      setRelayBusy(true);
+      const rows = await diagnoseSubscriptionIps(creds);
+      setRelayBusy(false);
+      clear(out);
+      const stat = (k: string, v: string): HTMLElement => el('div', { class: 'qam-lic-stat' }, [el('span', { class: 'qam-lic-stat-k' }, [k]), el('span', { class: 'qam-lic-stat-v' }, [v])]);
+      for (const r of rows) out.append(stat(r.label, r.ok ? `一意 ${(r.unique ?? 0).toLocaleString()} / 単体 ${r.singles.length} / レンジ ${r.ranges.length}` : `取得失敗: ${r.error ?? ''}`));
+      const all = rows.find((r) => r.key === 'all'); const vm = rows.find((r) => r.key === 'vm'); const cv = rows.find((r) => r.key === 'certview');
+      if (all?.ok && vm?.ok) {
+        const vmS = new Set(vm.singles); const vmR = new Set(vm.ranges); const cvS = new Set(cv?.singles ?? []); const cvR = new Set(cv?.ranges ?? []);
+        const exS = all.singles.filter((s) => !vmS.has(s)); const exR = all.ranges.filter((s) => !vmR.has(s));
+        out.append(el('div', { class: 'qam-lic-note', style: 'margin-top:var(--s-3)' }, [`全体にあって VM限定に無いIP（＝VMのAddress Managementに出ない差分。CertView/PC由来の可能性）: 単体 ${exS.length} 件 / レンジ ${exR.length} 件`]));
+        if (!exS.length && !exR.length) out.append(el('div', { class: 'qam-count' }, ['差分なし（全体 = VM限定）。差分は別要因（Network 等）の可能性。']));
+        for (const s of exS) out.append(mono(`${s}${cvS.has(s) ? '  ← CertViewにも在り' : ''}`));
+        for (const s of exR) out.append(mono(`${s}${cvR.has(s) ? '  ← CertViewにも在り' : ''}（レンジ）`));
+      }
+    } catch (e) { clear(out); toast('IPスコープ診断に失敗: ' + (e as Error).message, 'error'); }
+    finally { setRelayBusy(false); btn.removeAttribute('disabled'); }
+  });
+  box.append(btn, out);
   return box;
 }
 
