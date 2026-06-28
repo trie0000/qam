@@ -119,7 +119,10 @@ export function analyzeSubscriptionIps(xml: string, maxPairs = 500): IpDupReport
 export interface IpListResult { count: number | null; xml: string }
 export async function downloadIps(creds: QualysCreds): Promise<IpListResult> {
   try {
-    const res = await fetchQualys({ kind: 'ips', base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
+    // VM限定（compliance_enabled=0&certview_enabled=0）で取得し、VMのAddress Management 件数に一致させる。
+    // フィルタ無しだと CertView/PC 区分のIPまで拾い、UI(VM)より多くなる（実測でVM限定にすると一致）。
+    const base = creds.base.replace(/\/+$/, '');
+    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url: `${base}/api/2.0/fo/asset/ip/?action=list&compliance_enabled=0&certview_enabled=0` });
     if (!res.ok || !res.xml) return { count: null, xml: res.xml || '' };
     return { count: countSubscriptionIps(res.xml), xml: res.xml };
   } catch { return { count: null, xml: '' }; }
