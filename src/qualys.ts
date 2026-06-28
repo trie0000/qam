@@ -26,22 +26,36 @@ function ipToInt(s: string): number | null {
   return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
 }
 
-// IPs in Subscription を Qualys から取得（/api/2.0/fo/asset/ip/?action=list）。
-// 応答中の <IP> は1、<IP_RANGE>a-b</IP_RANGE> は (b-a+1) を加算して登録IP総数を数える。
-// 取得不可（権限/エラー）なら null（呼び出し側で手入力値にフォールバック）。
+// IPs in Subscription を XML から数える（/api/2.0/fo/asset/ip/?action=list の応答）。
+// <IP> は1点、<IP_RANGE>a-b</IP_RANGE> は [a,b] 区間。これらの和集合の要素数＝一意IP数を返す。
+// 単純合計だと「単一IPがレンジに含まれる」「レンジ同士が重なる」場合に二重計上し、Qualys UI の
+// 値より多くなる（重複1つで +1）。区間をマージして重複を除外し、Qualys のカウントに一致させる。
+export function countSubscriptionIps(xml: string): number {
+  const intervals: [number, number][] = [];
+  for (const m of xml.matchAll(/<IP(?:\s[^>]*)?>([^<]+)<\/IP>/gi)) {
+    const v = ipToInt(m[1]); if (v !== null) intervals.push([v, v]);
+  }
+  for (const m of xml.matchAll(/<IP_RANGE(?:\s[^>]*)?>([^<]+)<\/IP_RANGE>/gi)) {
+    const [a, b] = m[1].split('-').map((x) => x.trim());
+    const ai = ipToInt(a); const bi = ipToInt(b);
+    if (ai !== null && bi !== null && bi >= ai) intervals.push([ai, bi]);
+  }
+  intervals.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+  let total = 0; let curStart = -1; let curEnd = -2;
+  for (const [s, e] of intervals) {
+    if (s > curEnd) { total += curEnd - curStart + 1; curStart = s; curEnd = e; } // 非重複：直前区間を確定し新区間へ
+    else if (e > curEnd) curEnd = e; // 重複：区間を拡張（重なり分は数えない）
+  }
+  if (curStart >= 0) total += curEnd - curStart + 1; // 末尾区間
+  return total;
+}
+
+// IPs in Subscription を Qualys から取得。取得不可（権限/エラー）なら null（呼び出し側で手入力値にフォールバック）。
 export async function downloadIpCount(creds: QualysCreds): Promise<number | null> {
   try {
     const res = await fetchQualys({ kind: 'ips', base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
     if (!res.ok || !res.xml) return null;
-    const xml = res.xml;
-    let n = 0;
-    for (const m of xml.matchAll(/<IP(?:\s[^>]*)?>([^<]+)<\/IP>/gi)) { if (ipToInt(m[1]) !== null) n += 1; }
-    for (const m of xml.matchAll(/<IP_RANGE(?:\s[^>]*)?>([^<]+)<\/IP_RANGE>/gi)) {
-      const [a, b] = m[1].split('-').map((x) => x.trim());
-      const ai = ipToInt(a); const bi = ipToInt(b);
-      if (ai !== null && bi !== null && bi >= ai) n += bi - ai + 1;
-    }
-    return n;
+    return countSubscriptionIps(res.xml);
   } catch { return null; }
 }
 
