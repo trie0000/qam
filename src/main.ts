@@ -10,7 +10,7 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
-import { downloadEntity, downloadIpCount, addQualysUser, type ScanType, type UserRole } from './qualys';
+import { downloadEntity, downloadIps, addQualysUser, type ScanType, type UserRole } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
@@ -889,8 +889,14 @@ function openIngest(): void {
         // 取得は Basic 認証のみ（セッションCookieは環境により 401 で拒否されるため使わない）。
         setRelayBusy(true); // 取得中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
         // host を取り込むなら IPs in Subscription（登録IP総数）も取得（best-effort）。
+        // 件数照合の検証用に、応答XMLを raw/<日付>/ips-<stamp>.xml にも残す。
         let ipCount: number | null = null;
-        if (kinds.includes('host')) { setProg('IPs in Subscription を取得中…', true); ipCount = await downloadIpCount(creds); }
+        if (kinds.includes('host')) {
+          setProg('IPs in Subscription を取得中…', true);
+          const ipRes = await downloadIps(creds);
+          ipCount = ipRes.count;
+          if (ipRes.xml) { try { await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ipRes.xml); } catch { /* XML保存失敗は本処理に影響させない */ } }
+        }
         for (const k of kinds) {
           setProg(`${labelOf(k)}: ダウンロード中…`, true);
           const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));

@@ -50,13 +50,15 @@ export function countSubscriptionIps(xml: string): number {
   return total;
 }
 
-// IPs in Subscription を Qualys から取得。取得不可（権限/エラー）なら null（呼び出し側で手入力値にフォールバック）。
-export async function downloadIpCount(creds: QualysCreds): Promise<number | null> {
+// IPs in Subscription を Qualys から取得。件数と生XMLを返す（XMLは raw 保存・件数照合の検証用）。
+// 取得不可（権限/エラー）なら count=null（呼び出し側で手入力値にフォールバック）。xml は取れた分を返す。
+export interface IpListResult { count: number | null; xml: string }
+export async function downloadIps(creds: QualysCreds): Promise<IpListResult> {
   try {
     const res = await fetchQualys({ kind: 'ips', base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
-    if (!res.ok || !res.xml) return null;
-    return countSubscriptionIps(res.xml);
-  } catch { return null; }
+    if (!res.ok || !res.xml) return { count: null, xml: res.xml || '' };
+    return { count: countSubscriptionIps(res.xml), xml: res.xml };
+  } catch { return { count: null, xml: '' }; }
 }
 
 export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProgress?: DownloadProgress): Promise<DownloadResult> {
