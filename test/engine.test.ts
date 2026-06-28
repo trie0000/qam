@@ -212,3 +212,18 @@ describe('shrinkGuard', () => {
     expect(shrinkGuard(0, 0, 0.5)).toBe(false);
   });
 });
+
+describe('domain NETBLOCK 単一IP（レンジ表記にしない）', () => {
+  it('START===END は単一IP、START≠END はレンジ、END空も単一IP', () => {
+    const xml = `<DOMAIN_LIST>
+      <DOMAIN><DOMAIN_NAME>d.example</DOMAIN_NAME><DOMAIN_ID>20</DOMAIN_ID>
+        <NETBLOCK>
+          <RANGE><START>10.0.0.5</START><END>10.0.0.5</END></RANGE>
+          <RANGE><START>10.0.0.10</START><END>10.0.0.20</END></RANGE>
+          <RANGE><START>10.0.0.30</START><END></END></RANGE>
+        </NETBLOCK></DOMAIN>
+    </DOMAIN_LIST>`;
+    expect(parseQualysXml(xml, 'domain').records['d.example'].set.NETBLOCK) // uniq でソート済み
+      .toEqual(['10.0.0.10-10.0.0.20', '10.0.0.30', '10.0.0.5']);
+  });
+});

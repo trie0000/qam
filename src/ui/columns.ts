@@ -11,6 +11,13 @@ export const changeTag = (c: string): string => `<span class="qam-tag qam-tag--$
 
 const joined = (a?: string[]): string => esc((a ?? []).join(', '));
 
+// 単一IPのレンジ表記("a-a")を "a" に畳む（既存データの表示補正。IP にカンマは含まれない前提でトークン分割）。
+export const collapseIpRanges = (s: string): string => (s ?? '').split(',').map((t) => {
+  const tk = t.trim(); const i = tk.indexOf('-');
+  if (i > 0) { const a = tk.slice(0, i).trim(); const b = tk.slice(i + 1).trim(); if (a && a === b) return a; }
+  return tk;
+}).filter(Boolean).join(', ');
+
 // ISO UTC（例 2024-06-13T08:30:00Z）→ JST 表示 'YYYY-MM-DD HH:MM:SS JST'。
 // 日本は夏時間なしなので UTC+9 固定。端末のタイムゾーンに依存しないよう getUTC* で組み立てる。
 // パースできない/空はそのまま返す。
@@ -172,7 +179,7 @@ export function assetColumns(entity: QamEntity, comments: CommentApi, agSetten: 
   return [
     c('key', 'ドメイン名', (r) => esc(r.key)),
     c('AG_SETTEN', '接続点ID', (r) => esc(agSetten[r.key] ?? ''), true),
-    c('NETBLOCK', 'ネットブロック', stc('NETBLOCK')), comment,
+    c('NETBLOCK', 'ネットブロック', (r) => esc(collapseIpRanges((r.set.NETBLOCK ?? []).join(', ')))), comment,
     // 既定非表示
     c('NETWORK_NAME', 'ネットワーク', sc('NETWORK_NAME')),
   ];
@@ -294,7 +301,7 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
       ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, 'IP', null), true), mkChg('add_fqdn', '追加FQDN', (e) => addedOf(e, 'FQDN', null)),
          mkChg('rem_ip', '削除IP', (e) => removedOf(e, 'IP', null), true), mkChg('rem_fqdn', '削除FQDN', (e) => removedOf(e, 'FQDN', null))]
       : entity === 'domain'
-        ? [mkChg('add_ip', '追加IP', (e) => addedOf(e, null, 'NETBLOCK'), true), mkChg('rem_ip', '削除IP', (e) => removedOf(e, null, 'NETBLOCK'), true)]
+        ? [mkChg('add_ip', '追加IP', (e) => collapseIpRanges(addedOf(e, null, 'NETBLOCK')), true), mkChg('rem_ip', '削除IP', (e) => collapseIpRanges(removedOf(e, null, 'NETBLOCK')), true)]
         : [];
 
   // 列構成（entityごと・既定表示順）。既定で隠す列（HISTORY_DEFAULT_HIDDEN）は末尾。

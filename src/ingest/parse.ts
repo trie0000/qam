@@ -118,9 +118,13 @@ function readDomain(d: Element): QamRecord {
   r.scalar.NETWORK_NAME = net ? text(net, 'NETWORK_NAME') : '';
   const nb = d.getElementsByTagName('NETBLOCK')[0] ?? null;
   const blocks = nb
-    ? Array.from(nb.getElementsByTagName('RANGE')).map((rg) => `${text(rg, 'START')}-${text(rg, 'END')}`)
+    // START===END（または END 空）は単一IP。レンジ表記(a-a)にせず単一IPとして格納する。
+    ? Array.from(nb.getElementsByTagName('RANGE')).map((rg) => {
+      const s = text(rg, 'START'); const e = text(rg, 'END');
+      return e && e !== s ? `${s}-${e}` : s;
+    })
     : [];
-  r.set.NETBLOCK = uniq(blocks.filter((b) => b !== '-'));
+  r.set.NETBLOCK = uniq(blocks.filter(Boolean));
   return r;
 }
 

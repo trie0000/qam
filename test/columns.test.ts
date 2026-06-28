@@ -177,3 +177,13 @@ describe('メモ列のその場編集（ブランク化）', () => {
     expect(calls).toEqual([]); // 空の新規は保存しない
   });
 });
+
+import { collapseIpRanges } from '../src/ui/columns';
+describe('collapseIpRanges（単一IPのレンジ表記を畳む）', () => {
+  it('a-a は a に、a-b はそのまま、複数はカンマ区切り', () => {
+    expect(collapseIpRanges('10.0.0.5-10.0.0.5')).toBe('10.0.0.5');
+    expect(collapseIpRanges('10.0.0.1-10.0.0.9')).toBe('10.0.0.1-10.0.0.9');
+    expect(collapseIpRanges('10.0.0.5-10.0.0.5, 10.0.0.1-10.0.0.9, 10.0.0.2')).toBe('10.0.0.5, 10.0.0.1-10.0.0.9, 10.0.0.2');
+    expect(collapseIpRanges('')).toBe('');
+  });
+});
