@@ -50,6 +50,41 @@ export function countSubscriptionIps(xml: string): number {
   return total;
 }
 
+// IPs in Subscription の重複チェック。<IP>（単体）と <IP_RANGE>（レンジ）を区間化し、
+// 重なり（単体×レンジ・レンジ×レンジ・完全重複）を検出して、件数のズレ要因を可視化する。
+const ipIntToStr = (n: number): string => `${(n >>> 24) & 255}.${(n >>> 16) & 255}.${(n >>> 8) & 255}.${n & 255}`;
+export interface IpDupPair { a: string; b: string; overlap: number } // a と b が overlap 個のIPで重複
+export interface IpDupReport { unique: number; rawSum: number; duplicates: number; pairs: IpDupPair[]; truncated: boolean }
+export function analyzeSubscriptionIps(xml: string, maxPairs = 500): IpDupReport {
+  const items: { raw: string; a: number; b: number }[] = [];
+  for (const m of xml.matchAll(/<IP(?:\s[^>]*)?>([^<]+)<\/IP>/gi)) {
+    const v = ipToInt(m[1]); if (v !== null) items.push({ raw: m[1].trim(), a: v, b: v });
+  }
+  for (const m of xml.matchAll(/<IP_RANGE(?:\s[^>]*)?>([^<]+)<\/IP_RANGE>/gi)) {
+    const [s, e] = m[1].split('-').map((x) => x.trim());
+    const ai = ipToInt(s); const bi = ipToInt(e);
+    if (ai !== null && bi !== null && bi >= ai) items.push({ raw: `${ipIntToStr(ai)}-${ipIntToStr(bi)}`, a: ai, b: bi });
+  }
+  const rawSum = items.reduce((n, it) => n + (it.b - it.a + 1), 0);
+  // 一意IP数（区間ユニオン）
+  const sorted = [...items].sort((x, y) => x.a - y.a || x.b - y.b);
+  let unique = 0; let cs = -1; let ce = -2;
+  for (const it of sorted) { if (it.a > ce) { unique += ce - cs + 1; cs = it.a; ce = it.b; } else if (it.b > ce) ce = it.b; }
+  if (cs >= 0) unique += ce - cs + 1;
+  // 重複ペア検出（開始順スイープ。終了済みは捨てる）。
+  const pairs: IpDupPair[] = []; let truncated = false;
+  const active: { raw: string; a: number; b: number }[] = [];
+  for (const it of sorted) {
+    for (let i = active.length - 1; i >= 0; i--) { if (active[i].b < it.a) active.splice(i, 1); } // 重ならない過去を除去
+    for (const p of active) {
+      const ov = Math.min(p.b, it.b) - Math.max(p.a, it.a) + 1;
+      if (ov > 0) { if (pairs.length < maxPairs) pairs.push({ a: p.raw, b: it.raw, overlap: ov }); else truncated = true; }
+    }
+    active.push(it);
+  }
+  return { unique, rawSum, duplicates: rawSum - unique, pairs, truncated };
+}
+
 // IPs in Subscription を Qualys から取得。件数と生XMLを返す（XMLは raw 保存・件数照合の検証用）。
 // 取得不可（権限/エラー）なら count=null（呼び出し側で手入力値にフォールバック）。xml は取れた分を返す。
 export interface IpListResult { count: number | null; xml: string }

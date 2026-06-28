@@ -10,7 +10,7 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
-import { downloadEntity, downloadIps, addQualysUser, type ScanType, type UserRole } from './qualys';
+import { downloadEntity, downloadIps, addQualysUser, analyzeSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
@@ -675,9 +675,41 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
     + '破線 = ライセンス上限（設定の QAM_LICENSE_LIMIT）。'
     + 'IPs in Subscription（登録IP総数）は API取込時に Qualys から自動取得し、上限とは別の値として表示。'
     + 'x 軸は年度（4月〜翌3月）の月。データの無い月は未記載。';
-  wrap.append(el('div', { class: 'qam-lic-note' }, [note]), summary, chartBox, legend);
+  const dupBox = await buildIpDupBox(); // IPs in Subscription の重複チェック（応答XMLがあれば）
+  wrap.append(el('div', { class: 'qam-lic-note' }, [note]), summary, ...(dupBox ? [dupBox] : []), chartBox, legend);
   host.append(wrap);
   redraw();
+}
+
+// 直近の IPs in Subscription 応答XML（raw/<日付>/ips-*.xml の最新）を読む。無ければ null。
+async function latestIpsXml(): Promise<string | null> {
+  const dates = (await backend.list('raw')).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
+  for (const d of [...dates].reverse()) {
+    const files = (await backend.list(`raw/${d}`)).filter((f) => /^ips-.*\.xml$/.test(f)).sort();
+    if (files.length) return backend.read(`raw/${d}/${files[files.length - 1]}`);
+  }
+  return null;
+}
+
+// IP重複チェックのパネル。単体×レンジ・レンジ×レンジ・完全重複を検出して表示。
+async function buildIpDupBox(): Promise<HTMLElement | null> {
+  const xml = await latestIpsXml();
+  if (!xml) return null;
+  const rep = analyzeSubscriptionIps(xml);
+  const stat = (k: string, v: string): HTMLElement => el('div', { class: 'qam-lic-stat' }, [el('span', { class: 'qam-lic-stat-k' }, [k]), el('span', { class: 'qam-lic-stat-v' }, [v])]);
+  const box = el('div', { class: 'qam-lic-summary' }, [
+    stat('IP重複チェック（一意 / 単純合計 / 重複）', `${rep.unique.toLocaleString()} / ${rep.rawSum.toLocaleString()} / ${rep.duplicates.toLocaleString()}`),
+  ]);
+  if (rep.duplicates > 0) {
+    box.append(el('div', { class: 'qam-lic-note' }, [`重複IPが ${rep.duplicates.toLocaleString()} 件あります（一意IP数が正。単純合計はこの分だけ多くなる＝UIとのズレ要因）。重複している登録:`]));
+    const list = el('div', { style: 'display:flex;flex-direction:column;gap:2px;margin-top:var(--s-2)' });
+    for (const p of rep.pairs) list.append(el('div', { class: 'qam-mono', style: 'font-size:var(--fs-sm);user-select:text' }, [`${p.a}  ∩  ${p.b}  （重複 ${p.overlap} 個）`]));
+    if (rep.truncated) list.append(el('div', { class: 'qam-count' }, ['…（重複が多いため一部のみ表示）']));
+    box.append(list);
+  } else {
+    box.append(el('div', { class: 'qam-lic-note' }, ['単体表記・レンジ表記の間に重複IPはありません。']));
+  }
+  return box;
 }
 
 let licenseDefaulted = false; // ライセンス推移の初期表示（直近2年度）をセッション内で一度だけ適用

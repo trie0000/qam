@@ -75,3 +75,28 @@ describe('ユーザ登録の入力整形', () => {
     expect('asset_groups' in f).toBe(false);
   });
 });
+
+import { analyzeSubscriptionIps } from '../src/qualys';
+const wrapIp = (inner: string): string => `<IP_LIST_OUTPUT><RESPONSE><IP_SET>${inner}</IP_SET></RESPONSE></IP_LIST_OUTPUT>`;
+
+describe('analyzeSubscriptionIps（IP重複チェック）', () => {
+  it('重複なし: unique==rawSum, pairs空', () => {
+    const r = analyzeSubscriptionIps(wrapIp('<IP>10.0.0.1</IP><IP_RANGE>10.0.0.10-10.0.0.12</IP_RANGE>'));
+    expect(r.unique).toBe(4); expect(r.rawSum).toBe(4); expect(r.duplicates).toBe(0); expect(r.pairs).toEqual([]);
+  });
+  it('単体×レンジの重複を検出（+1のズレ要因）', () => {
+    const r = analyzeSubscriptionIps(wrapIp('<IP>10.0.0.10</IP><IP_RANGE>10.0.0.10-10.0.0.12</IP_RANGE>'));
+    expect(r.unique).toBe(3); expect(r.rawSum).toBe(4); expect(r.duplicates).toBe(1);
+    expect(r.pairs.length).toBe(1); expect(r.pairs[0].overlap).toBe(1);
+    expect(r.pairs[0].a).toBe('10.0.0.10'); expect(r.pairs[0].b).toBe('10.0.0.10-10.0.0.12');
+  });
+  it('レンジ×レンジの重複', () => {
+    const r = analyzeSubscriptionIps(wrapIp('<IP_RANGE>10.0.0.1-10.0.0.5</IP_RANGE><IP_RANGE>10.0.0.4-10.0.0.8</IP_RANGE>'));
+    expect(r.unique).toBe(8); expect(r.rawSum).toBe(10); expect(r.duplicates).toBe(2);
+    expect(r.pairs[0].overlap).toBe(2); // .4,.5
+  });
+  it('完全重複の単体IP', () => {
+    const r = analyzeSubscriptionIps(wrapIp('<IP>10.0.0.7</IP><IP>10.0.0.7</IP>'));
+    expect(r.duplicates).toBe(1); expect(r.pairs.length).toBe(1);
+  });
+});
