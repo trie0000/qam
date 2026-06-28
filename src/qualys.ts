@@ -1,7 +1,7 @@
 // Qualys API ダウンロード: relay 経由でプロキシ取得し、Host の nextUrl ページングを辿って
 // 全件をマージ → 正規化スナップショットにする。XML アップロードと同じ正規化(parse)に合流。
 import { parseQualysXml } from './ingest/parse';
-import { fetchQualys, type FetchResult } from './relay';
+import { fetchQualys, qualysUserAdd, type FetchResult } from './relay';
 import type { QamEntity, QamRecords, QamSnapshot } from './types';
 
 export interface QualysCreds { base: string; user: string; pass: string; proxy: string }
@@ -92,4 +92,64 @@ export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProg
     onProgress?.({ page: rawPages.length, records: Object.keys(records).length });
   }
   return { snapshot: { entity: kind, datetime, records }, raw: rawPages.join('\n<!-- page -->\n'), pages: rawPages.length };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// ユーザ登録（/msp/user.php?action=add）。言語/SAMLはAPI非対応のため扱わない。
+// SAMLは「新規ユーザにSSO有効化」をQualysサブスクリプション側で設定する前提。
+// ──────────────────────────────────────────────────────────────────────────
+export type ScanType = 'static' | 'dynamic';
+export type UserRole = 'scanner' | 'reader';
+export interface UserAddInput {
+  fullName: string;        // 氏名（全角スペース区切り「姓 名」。英字は全角入力でも可）
+  email: string;
+  scanType: ScanType;      // 検査対象区分（独自概念・役割ルールにのみ使用、Qualysへは送らない）
+  role: UserRole;          // 静的時の選択。動的は reader 固定
+  assetGroups: string[];   // 接続点IDから解決した AssetGroup タイトル
+  businessUnit: string;    // 共通設定
+  country: string;         // 共通設定（Qualysが受け付ける国名）
+}
+
+// 全角ASCII(！-～)→半角、全角スペース→半角スペース。漢字・かなはそのまま。
+export function toHalfWidth(s: string): string {
+  return (s ?? '')
+    .replace(/[！-～]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
+    .replace(/　/g, ' ');
+}
+
+// 氏名「姓 名」を分割（全角/半角スペース区切り）。英字の全角は半角化。姓=先頭トークン, 名=残り。
+export function splitJpName(fullName: string): { lastName: string; firstName: string } {
+  const norm = toHalfWidth(fullName).trim().replace(/\s+/g, ' ');
+  const parts = norm ? norm.split(' ') : [];
+  return { lastName: parts[0] ?? '', firstName: parts.slice(1).join(' ') };
+}
+
+// 検査対象区分による役割確定。動的は Reader 固定、静的は選択値。
+export const roleForScanType = (scanType: ScanType, picked: UserRole): UserRole =>
+  (scanType === 'dynamic' ? 'reader' : picked);
+
+// user.php?action=add に渡すフィールド。必須の title/phone/address1/city は "-"。
+// 値が空のもの（asset_groups 等）は呼び出し側/relay で除外する。
+export function buildUserAddFields(input: UserAddInput): Record<string, string> {
+  const { lastName, firstName } = splitJpName(input.fullName);
+  const f: Record<string, string> = {
+    user_role: roleForScanType(input.scanType, input.role),
+    business_unit: input.businessUnit.trim(),
+    first_name: firstName,
+    last_name: lastName,
+    email: input.email.trim(),
+    title: '-', phone: '-', address1: '-', city: '-',
+    country: input.country.trim(),
+    send_email: '0', // SAML運用：登録メール（パスワード設定案内）は送らない
+  };
+  if (input.assetGroups.length) f.asset_groups = input.assetGroups.join(',');
+  return f;
+}
+
+// Qualys へユーザを1人登録。成功時は作成された USER_LOGIN を返す。失敗は例外。
+export async function addQualysUser(creds: QualysCreds, input: UserAddInput): Promise<{ login: string }> {
+  const fields = buildUserAddFields(input);
+  const res = await qualysUserAdd({ base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy, fields });
+  if (!res.ok) throw new Error(res.error || 'ユーザ登録に失敗しました');
+  return { login: res.login ?? '' };
 }

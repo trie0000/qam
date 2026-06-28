@@ -29,3 +29,49 @@ describe('countSubscriptionIps（IPs in Subscription = 一意IP数）', () => {
     expect(countSubscriptionIps(wrap('<IP>not-an-ip</IP>'))).toBe(0);
   });
 });
+
+import { toHalfWidth, splitJpName, roleForScanType, buildUserAddFields } from '../src/qualys';
+
+describe('ユーザ登録の入力整形', () => {
+  it('toHalfWidth: 全角英数記号・全角スペースを半角化、漢字は不変', () => {
+    expect(toHalfWidth('ＴＡＲＯ')).toBe('TARO');
+    expect(toHalfWidth('ａｂ１２＠')).toBe('ab12@');
+    expect(toHalfWidth('山田　太郎')).toBe('山田 太郎'); // 全角スペース→半角
+    expect(toHalfWidth('山田')).toBe('山田');
+  });
+
+  it('splitJpName: 全角スペースで姓/名に分割（英字は半角化）', () => {
+    expect(splitJpName('山田　太郎')).toEqual({ lastName: '山田', firstName: '太郎' });
+    expect(splitJpName('ＹＡＭＡＤＡ　ＴＡＲＯ')).toEqual({ lastName: 'YAMADA', firstName: 'TARO' });
+    expect(splitJpName('山田 太郎')).toEqual({ lastName: '山田', firstName: '太郎' }); // 半角区切りも可
+  });
+
+  it('roleForScanType: 動的は Reader 固定、静的は選択値', () => {
+    expect(roleForScanType('dynamic', 'scanner')).toBe('reader');
+    expect(roleForScanType('dynamic', 'reader')).toBe('reader');
+    expect(roleForScanType('static', 'scanner')).toBe('scanner');
+    expect(roleForScanType('static', 'reader')).toBe('reader');
+  });
+
+  it('buildUserAddFields: 必須は"-"・送信不要は除外・動的はreader・asset_groups結合', () => {
+    const f = buildUserAddFields({
+      fullName: '山田　太郎', email: ' t@example.com ', scanType: 'dynamic', role: 'scanner',
+      assetGroups: ['AB123 拠点', 'CD456 拠点2'], businessUnit: 'Unassigned', country: 'Japan',
+    });
+    expect(f.user_role).toBe('reader');        // 動的→reader固定
+    expect(f.first_name).toBe('太郎');
+    expect(f.last_name).toBe('山田');
+    expect(f.email).toBe('t@example.com');      // trim
+    expect(f.title).toBe('-'); expect(f.phone).toBe('-'); expect(f.address1).toBe('-'); expect(f.city).toBe('-');
+    expect(f.country).toBe('Japan');
+    expect(f.business_unit).toBe('Unassigned');
+    expect(f.send_email).toBe('0');
+    expect(f.asset_groups).toBe('AB123 拠点,CD456 拠点2');
+  });
+
+  it('buildUserAddFields: asset_groups 空なら項目自体を出さない', () => {
+    const f = buildUserAddFields({ fullName: '佐藤　花子', email: 'h@example.com', scanType: 'static', role: 'scanner', assetGroups: [], businessUnit: 'BU1', country: 'Japan' });
+    expect(f.user_role).toBe('scanner');
+    expect('asset_groups' in f).toBe(false);
+  });
+});

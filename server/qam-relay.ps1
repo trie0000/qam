@@ -332,6 +332,59 @@ function Invoke-QualysLogout {
     finally { $client.Dispose(); $handler.Dispose(); $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null }
 }
 
+# ユーザ登録: /msp/user.php?action=add を Basic 認証＋プロキシで GET。
+# fields は TS 側で組んだ user_role/business_unit/first_name/last_name/email/title/phone/
+# address1/city/country/asset_groups/send_email 等。空値は送らない。
+function Invoke-QualysUserAdd { param($Body)
+    $base = ([string]$Body.base).TrimEnd('/')
+    if (-not $base) { return [ordered]@{ ok = $false; error = '接続先(POD)が未設定です' } }
+    $parts = New-Object System.Collections.ArrayList
+    [void]$parts.Add('action=add')
+    if ($Body.fields) {
+        foreach ($p in $Body.fields.PSObject.Properties) {
+            if ($null -eq $p.Value -or [string]$p.Value -eq '') { continue }
+            [void]$parts.Add("{0}={1}" -f [Uri]::EscapeDataString([string]$p.Name), [Uri]::EscapeDataString([string]$p.Value))
+        }
+    }
+    $url = "$base/msp/user.php?" + ($parts -join '&')
+    $proxy = if ($Body.proxy) { $Body.proxy } else { $null }
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseCookies = $false
+    if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
+    $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(120)
+    try {
+        $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
+        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
+        if ($Body.user) {
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
+            $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
+        }
+        # パスワードは出さず、ログイン名以外のフィールドだけログに残す。
+        $logFields = if ($Body.fields) { ($Body.fields.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ', ' } else { '' }
+        Add-QamLog "USERADD start $base/msp/user.php ($logFields)"
+        $resp = $client.GetAsync($url).Result
+        $content = $resp.Content
+        $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
+        $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
+        # 成功/失敗判定: <RETURN status="SUCCESS"> か USER_LOGIN があれば成功。<TEXT> はエラー文。
+        $login = Get-QamText1 $xml '<USER_LOGIN>(.*?)</USER_LOGIN>'
+        $statusAttr = [regex]::Match($xml, '<RETURN[^>]*status="([^"]+)"', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $errText = Get-QamText1 $xml '<TEXT>(.*?)</TEXT>'
+        $ok = $resp.IsSuccessStatusCode -and ($login -or ($statusAttr.Success -and $statusAttr.Groups[1].Value -eq 'SUCCESS')) -and -not ($errText)
+        $snippet = ($xml -replace '\s+', ' ').Trim(); if ($snippet.Length -gt 600) { $snippet = $snippet.Substring(0, 600) + ' …(truncated)' }
+        Add-QamLog "USERADD done HTTP $([int]$resp.StatusCode), ok=$ok, login=$login, body: $snippet"
+        if ($ok) { return [ordered]@{ ok = $true; login = $login; status = [int]$resp.StatusCode } }
+        $err = if ($errText) { $errText } else { "HTTP $([int]$resp.StatusCode): $snippet" }
+        return [ordered]@{ ok = $false; status = [int]$resp.StatusCode; error = $err }
+    } catch {
+        $ex = $_.Exception; while ($ex.InnerException) { $ex = $ex.InnerException }
+        Add-QamLog "USERADD exception: $($ex.Message)"
+        return [ordered]@{ ok = $false; error = "接続エラー: $($ex.Message)" }
+    } finally { $client.Dispose(); $handler.Dispose() }
+}
+
 # ─── ルーティング ────────────────────────────────────────────────────────────
 $IndexHtml = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QAM — Qualys Asset Management</title></head><body><div id="qam-root"></div><script src="/qam/bundle/qam.bundle.js"></script></body></html>'
 
@@ -360,6 +413,11 @@ function Invoke-Route { param($Ctx)
         }
         '^/qam/qualys/logout$' {
             try { Send-Json $Ctx (Invoke-QualysLogout) }
+            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            return
+        }
+        '^/qam/qualys/user-add$' {
+            try { Send-Json $Ctx (Invoke-QualysUserAdd (Get-Body $req | ConvertFrom-Json)) }
             catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
             return
         }
@@ -422,6 +480,8 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'licenseLimit') { Set-QamEnvValue $EnvFile 'QAM_LICENSE_LIMIT' ([int]$b.licenseLimit) }
                 if ($b.PSObject.Properties.Name -contains 'backupIntervalMin') { Set-QamEnvValue $EnvFile 'QAM_BACKUP_INTERVAL_MIN' ([int]$b.backupIntervalMin) }
                 if ($b.PSObject.Properties.Name -contains 'backupRetentionDays') { Set-QamEnvValue $EnvFile 'QAM_BACKUP_RETENTION_DAYS' ([int]$b.backupRetentionDays) }
+                if ($b.PSObject.Properties.Name -contains 'userBusinessUnit') { Set-QamEnvValue $EnvFile 'QAM_USER_BUSINESS_UNIT' $b.userBusinessUnit }
+                if ($b.PSObject.Properties.Name -contains 'userCountry') { Set-QamEnvValue $EnvFile 'QAM_USER_COUNTRY' $b.userCountry }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -438,6 +498,8 @@ function Invoke-Route { param($Ctx)
                 licenseLimit = if ($env:QAM_LICENSE_LIMIT) { [int]$env:QAM_LICENSE_LIMIT } else { 0 }
                 backupIntervalMin = if ($null -ne $env:QAM_BACKUP_INTERVAL_MIN -and $env:QAM_BACKUP_INTERVAL_MIN -ne '') { [int]$env:QAM_BACKUP_INTERVAL_MIN } else { 60 }
                 backupRetentionDays = if ($null -ne $env:QAM_BACKUP_RETENTION_DAYS -and $env:QAM_BACKUP_RETENTION_DAYS -ne '') { [int]$env:QAM_BACKUP_RETENTION_DAYS } else { 7 }
+                userBusinessUnit = if ($env:QAM_USER_BUSINESS_UNIT) { $env:QAM_USER_BUSINESS_UNIT } else { 'Unassigned' }
+                userCountry = $env:QAM_USER_COUNTRY
             }; return
         }
         '^/qam/backup$' {
