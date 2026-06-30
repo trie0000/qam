@@ -210,28 +210,39 @@ const FIELD_LABELS: Record<string, string> = {
 const fieldLabel = (entity: QamEntity, k: string): string =>
   k === 'name' ? HIST_NAME_LABEL[entity] : k === 'key' ? HIST_ID_LABEL[entity] : (FIELD_LABELS[k] ?? k);
 
-// 変更履歴イベントの資産情報をプロパティシート風（ラベル｜値）にモーダル表示（行クリックで開く）。
-// 追加/削除イベントは取込時に記録した資産スナップショット(props)を、変更イベントは変更項目の前後を出す。
+// 変更履歴の表示/エクスポートで共通利用する派生ロジック（point-in-time。最新スナップショット非参照）。
+export const histFieldLabel = (entity: QamEntity, k: string): string => fieldLabel(entity, k);
+export const changeLabelOf = (c: string): string => CHANGE_LABEL[c] ?? c;
+// イベントの接続点ID（props の所属AGタイトル由来、無ければCSV取込の接続点ID）。
+export function eventSetten(entity: QamEntity, e: QamEvent): string {
+  if (entity === 'group') return settenId(e.name);
+  const propVal = (k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
+  const titles = propVal('ASSET_GROUP_TITLES').split(',').map((s) => s.trim()).filter(Boolean);
+  return [...new Set(titles.map((t) => settenId(t)).filter(Boolean))].sort().join(', ') || propVal('接続点ID');
+}
+// 変更前/変更後のプロパティ集合。added=変更後のみ / deleted=変更前のみ / modified=前後（旧データは項目前後）。
+export function eventBeforeAfter(e: QamEvent): { before: Map<string, string>; after: Map<string, string> } {
+  const toMap = (ps?: { k: string; v: string }[]): Map<string, string> => new Map((ps ?? []).map((p) => [p.k, p.v]));
+  if (e.change === 'added') return { before: new Map(), after: toMap(e.props) };
+  if (e.change === 'deleted') return { before: toMap(e.props), after: new Map() };
+  const before = toMap(e.propsOld); const after = toMap(e.props);
+  if (!before.size && !after.size) { // 旧データ（props未記録）: 変更項目の前後のみ
+    const k = e.field || '変更項目';
+    if (e.name) { before.set('name', e.name); after.set('name', e.name); }
+    before.set(k, e.removed?.length ? e.removed.join(', ') : (e.old ?? ''));
+    after.set(k, e.added?.length ? e.added.join(', ') : (e.new ?? ''));
+  }
+  return { before, after };
+}
+
+// 変更履歴イベントの資産情報を「項目｜変更前｜変更後」の2カラムでモーダル表示（行クリックで開く）。
 export function openEventProps(e: QamEvent): void {
   const body = el('div', { class: 'qam-props' });
   body.append(el('div', { class: 'qam-props-head' }, [
     el('span', { class: `qam-tag qam-tag--${e.change}` }, [CHANGE_LABEL[e.change] ?? e.change]),
     el('span', { class: 'qam-props-id' }, [`${HIST_ID_LABEL[e.entity]}: ${e.id}`]),
   ]));
-  // 変更前/変更後のプロパティ集合（その変更を行った時点の値。最新スナップショットは参照しない）。
-  const toMap = (ps?: { k: string; v: string }[]): Map<string, string> => new Map((ps ?? []).map((p) => [p.k, p.v]));
-  let before: Map<string, string>; let after: Map<string, string>;
-  if (e.change === 'added') { before = new Map(); after = toMap(e.props); }
-  else if (e.change === 'deleted') { before = toMap(e.props); after = new Map(); }
-  else { // modified
-    before = toMap(e.propsOld); after = toMap(e.props);
-    if (!before.size && !after.size) { // 旧データ（props未記録）: 変更項目の前後のみ
-      const k = e.field || '変更項目';
-      if (e.name) { before.set('name', e.name); after.set('name', e.name); }
-      before.set(k, e.removed?.length ? e.removed.join(', ') : (e.old ?? ''));
-      after.set(k, e.added?.length ? e.added.join(', ') : (e.new ?? ''));
-    }
-  }
+  const { before, after } = eventBeforeAfter(e);
   // 2カラム表示（項目｜変更前｜変更後）。追加=変更後のみ / 削除=変更前のみ / 変更=差分を色分け。
   const table = el('div', { class: 'qam-props2' });
   table.append(el('div', { class: 'qam-props2-row qam-props2-head' }, [
@@ -263,16 +274,8 @@ export function historyColumns(entity: QamEntity, comments: CommentApi): Column[
   const oldCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? ''));
   const newCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? ''));
   const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
-  // props（その変更時点のスナップショット）の所属AGタイトル → 接続点ID（重複除き昇順）。
-  // 最新スナップショットは参照しない（point-in-time 固定）。タイトルは host list の details=All/AGs 由来。
-  const settenFromProps = (e: QamEvent): string => {
-    const titles = propVal(e, 'ASSET_GROUP_TITLES').split(',').map((s) => s.trim()).filter(Boolean);
-    return [...new Set(titles.map((t) => settenId(t)).filter(Boolean))].sort().join(', ');
-  };
-  // 接続点ID: group はタイトルから算出。host/domain は props（変更時点）の所属AGタイトル、無ければ
-  // CSV取込の接続点ID。いずれもイベントに保存された point-in-time の値で、最新情報では変化しない。
-  const settenOf = (e: QamEvent): string =>
-    entity === 'group' ? settenId(e.name) : (settenFromProps(e) || propVal(e, '接続点ID'));
+  // 接続点ID: イベントに保存された point-in-time の値で解決（最新スナップショットは参照しない）。
+  const settenOf = (e: QamEvent): string => eventSetten(entity, e);
   // 「追加された/削除された 値」列。modified は項目別差分(set=added/removed・scalar=new/old)のみ。
   // 追加イベントは props 全体を「追加側」に、削除イベントは props 全体を「削除側」に出す（point-in-time）。
   const addedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {

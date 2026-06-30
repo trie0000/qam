@@ -32,7 +32,7 @@ export interface TableOpts {
   onSelectionChange?: () => void;
   bulkActions?: (keys: string[]) => HTMLElement[];
   // 現在の表示（フィルタ・並べ替え後）をテキスト行列で取り出す関数を受け取る箱（エクスポート用）。
-  exportRef?: { fn?: () => ExportMatrix };
+  exportRef?: { fn?: () => ExportMatrix; rows?: () => any[] };
   filterRef?: FilterRef;                                          // フィルタ操作の窓口（任意）
   columnRef?: { open?: (anchor: HTMLElement) => void };          // 列表示メニューを開く窓口（ボタンは外側に置く）
   onRowClick?: (row: any) => void;                                // 行クリック（チェックボックス/編集セル等は stopPropagation 済みなので発火しない）
@@ -275,10 +275,14 @@ export function renderTable(opts: TableOpts): HTMLElement {
   const displayedRows = (): any[] => sortedRows().filter(passesFilters);
 
   // エクスポート: 現在表示中（フィルタ・並べ替え後）の全行をテキスト行列に。列順も画面どおり。
-  if (opts.exportRef) opts.exportRef.fn = () => ({
-    headers: vcols().map((c) => c.label || c.id),
-    rows: displayedRows().map((r) => vcols().map((c) => cellText(c, r))),
-  });
+  // rows() は表示中の生データ行も公開する（呼び出し側が独自のエクスポートを組み立てる用＝変更履歴の前後展開）。
+  if (opts.exportRef) {
+    opts.exportRef.fn = () => ({
+      headers: vcols().map((c) => c.label || c.id),
+      rows: displayedRows().map((r) => vcols().map((c) => cellText(c, r))),
+    });
+    opts.exportRef.rows = () => displayedRows();
+  }
 
   // フィルタ操作の窓口を main へ公開（チップUIは main 側が描画）。表示中の列のみ対象。
   if (opts.filterRef) {

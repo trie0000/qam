@@ -8,7 +8,7 @@ import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns, settenId, openEventProps, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
+import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
 import { downloadEntity, downloadIps, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { parseQualysXml } from './ingest/parse';
@@ -578,7 +578,7 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
   count.textContent = `${events.length} 件${span}`;
   const comments = await commentApi(state.entity);
   // 接続点ID等の列はイベントに保存された point-in-time の値で描画する（最新スナップショットは参照しない）。
-  const exportRef: { fn?: () => ExportMatrix } = {};
+  const exportRef: { fn?: () => ExportMatrix; rows?: () => QamEvent[] } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
   clear(host);
@@ -588,6 +588,8 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
     bulkActions: histBulk, onRowClick: (e: QamEvent) => openEventProps(e), // 行クリックで追加/削除/変更したアセットの情報を表示
     defaultHidden: HISTORY_DEFAULT_HIDDEN[state.entity],
   }));
+  // CSV/Excel は各項目の変更前/変更後をそれぞれ列に展開（表示中＝フィルタ後の行が対象）。
+  exportRef.fn = () => buildHistoryExport((exportRef.rows?.() ?? events) as QamEvent[], state.entity);
   addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '変更履歴', exportRef, columnRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
@@ -740,6 +742,21 @@ function buildIpScopeDiagBox(): HTMLElement {
 let licenseDefaulted = false; // ライセンス推移の初期表示（直近2年度）をセッション内で一度だけ適用
 
 const emptyState = (t: string, d: string): HTMLElement => el('div', { class: 'qam-empty' }, [el('div', { class: 'qam-empty-title' }, [t]), el('div', {}, [d])]);
+
+// 変更履歴のCSV/Excel: 各プロパティの「変更前」「変更後」をそれぞれ列に展開する。
+// 共通列(更新日/変更種別/接続点ID/ID/変更項目) ＋ 出現した各項目について 〈項目〉(変更前)/(変更後) の2列。
+function buildHistoryExport(events: QamEvent[], entity: QamEntity): ExportMatrix {
+  const decoded = events.map((e) => ({ e, ...eventBeforeAfter(e) }));
+  const keys: string[] = []; const seen = new Set<string>();
+  for (const d of decoded) for (const k of [...d.before.keys(), ...d.after.keys()]) if (!seen.has(k)) { seen.add(k); keys.push(k); }
+  const headers = ['更新日', '変更種別', '接続点ID', 'ID', '変更項目',
+    ...keys.flatMap((k) => [`${histFieldLabel(entity, k)}(変更前)`, `${histFieldLabel(entity, k)}(変更後)`])];
+  const rows = decoded.map(({ e, before, after }) => [
+    fmtStamp(e.ts), changeLabelOf(e.change), eventSetten(entity, e), e.id, e.field ? histFieldLabel(entity, e.field) : '',
+    ...keys.flatMap((k) => [before.get(k) ?? '', after.get(k) ?? '']),
+  ]);
+  return { headers, rows };
+}
 
 // 変更履歴の手動削除（選択した eid を history から除去）。
 function histBulk(keys: string[]): HTMLElement[] {

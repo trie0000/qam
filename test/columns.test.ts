@@ -185,3 +185,21 @@ describe('collapseIpRanges（単一IPのレンジ表記を畳む）', () => {
     expect(collapseIpRanges('')).toBe('');
   });
 });
+
+import { eventBeforeAfter, eventSetten } from '../src/ui/columns';
+describe('eventBeforeAfter / eventSetten（前後展開エクスポート用）', () => {
+  const ev = (p: Partial<QamEvent>): QamEvent => ({ eid: 'x', ts: '2026-06-01', entity: 'group', id: '1', name: 'n', change: 'modified', ...p });
+  it('added=変更後のみ / deleted=変更前のみ / modified=前後', () => {
+    const add = eventBeforeAfter(ev({ change: 'added', props: [{ k: 'IP', v: '10.0.0.1' }] }));
+    expect([...add.before]).toEqual([]); expect(add.after.get('IP')).toBe('10.0.0.1');
+    const del = eventBeforeAfter(ev({ change: 'deleted', props: [{ k: 'IP', v: '10.0.0.9' }] }));
+    expect(del.before.get('IP')).toBe('10.0.0.9'); expect([...del.after]).toEqual([]);
+    const mod = eventBeforeAfter(ev({ change: 'modified', field: 'OS', old: 'Win10', new: 'Win11',
+      propsOld: [{ k: 'OS', v: 'Win10' }], props: [{ k: 'OS', v: 'Win11' }] }));
+    expect(mod.before.get('OS')).toBe('Win10'); expect(mod.after.get('OS')).toBe('Win11');
+  });
+  it('eventSetten: host は props の所属AGタイトルから（point-in-time）', () => {
+    expect(eventSetten('host', ev({ entity: 'host', props: [{ k: 'ASSET_GROUP_TITLES', v: 'AB123 東京, CD456 大阪' }] }))).toBe('AB123, CD456');
+    expect(eventSetten('group', ev({ entity: 'group', name: 'AB123 グループ' }))).toBe('AB123');
+  });
+});
