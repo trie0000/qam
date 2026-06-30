@@ -36,8 +36,11 @@ export interface QamEvent {
   new?: string;
   added?: string[];
   removed?: string[];
-  // 追加/削除イベント時、その時点の資産プロパティ（フィールドキー→値）。表示用スナップショット。
+  // その変更を行った時点の資産プロパティ（フィールドキー→値）。最新ではなく point-in-time のスナップショット。
+  //   added: 追加後の値 / deleted: 削除直前の値 / modified: 変更後(curr)の値。
   props?: { k: string; v: string }[];
+  // modified の変更前(prev)プロパティ。変更前/変更後の2カラム表示に使う。
+  propsOld?: { k: string; v: string }[];
 }
 
 // 資産単位の作業履歴コメント。

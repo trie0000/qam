@@ -227,3 +227,25 @@ describe('domain NETBLOCK 単一IP（レンジ表記にしない）', () => {
       .toEqual(['10.0.0.10-10.0.0.20', '10.0.0.30', '10.0.0.5']);
   });
 });
+
+describe('modified イベントは point-in-time プロパティ(props/propsOld)を保持', () => {
+  it('変更イベントに変更後(props)・変更前(propsOld)の全プロパティが付く', () => {
+    const a = `<HOST_LIST_OUTPUT><RESPONSE><HOST_LIST>
+      <HOST><ID>9</ID><IP>10.0.0.1</IP><DNS_DATA><FQDN>h.example</FQDN></DNS_DATA><OS>Win10</OS>
+        <ASSET_GROUP_LIST><ASSET_GROUP><ID>100</ID><TITLE>AB123 東京</TITLE></ASSET_GROUP></ASSET_GROUP_LIST></HOST>
+    </HOST_LIST></RESPONSE></HOST_LIST_OUTPUT>`;
+    const b = `<HOST_LIST_OUTPUT><RESPONSE><HOST_LIST>
+      <HOST><ID>9</ID><IP>10.0.0.1</IP><DNS_DATA><FQDN>h.example</FQDN></DNS_DATA><OS>Win11</OS>
+        <ASSET_GROUP_LIST><ASSET_GROUP><ID>100</ID><TITLE>AB123 東京</TITLE></ASSET_GROUP></ASSET_GROUP_LIST></HOST>
+    </HOST_LIST></RESPONSE></HOST_LIST_OUTPUT>`;
+    const ev = compareSnapshots(parseQualysXml(a, 'host').records, parseQualysXml(b, 'host').records, 'host', '2026-06-13T00-00-00');
+    const osEv = ev.find((e) => e.field === 'OS')!;
+    expect(osEv.change).toBe('modified');
+    expect(osEv.old).toBe('Win10'); expect(osEv.new).toBe('Win11');
+    // 変更後(props)・変更前(propsOld) の所属AGタイトルが point-in-time で保持される
+    expect(osEv.props?.find((p) => p.k === 'ASSET_GROUP_TITLES')?.v).toBe('AB123 東京');
+    expect(osEv.propsOld?.find((p) => p.k === 'ASSET_GROUP_TITLES')?.v).toBe('AB123 東京');
+    expect(osEv.propsOld?.find((p) => p.k === 'OS')?.v).toBe('Win10');
+    expect(osEv.props?.find((p) => p.k === 'OS')?.v).toBe('Win11');
+  });
+});

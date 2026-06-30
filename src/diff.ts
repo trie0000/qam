@@ -33,11 +33,15 @@ function recordProps(rec: QamRecord): { k: string; v: string }[] {
 function fieldDiffs(entity: QamEntity, id: string, name: string, p: QamRecord, c: QamRecord, ingestStamp: string, ts: string): QamEvent[] {
   const out: QamEvent[] = [];
   const base = { ts, ingestStamp, entity, id, name, change: 'modified' as const };
+  // 各 modified イベントに、その時点の前後プロパティを添付（接続点ID/IP/FQDN/AG等の列・モーダルを
+  // point-in-time に固定するため。最新スナップショットを参照しないようにする）。
+  const cProps = recordProps(c); const pProps = recordProps(p);
+  const ctx = { props: cProps, propsOld: pProps };
   const sKeys = Array.from(new Set([...Object.keys(p.scalar), ...Object.keys(c.scalar)])).sort();
   for (const f of sKeys) {
     const ov = p.scalar[f] ?? '';
     const nv = c.scalar[f] ?? '';
-    if (ov !== nv) out.push({ eid: `${entity}:${id}:${ingestStamp}:${f}`, ...base, field: f, old: ov, new: nv });
+    if (ov !== nv) out.push({ eid: `${entity}:${id}:${ingestStamp}:${f}`, ...base, ...ctx, field: f, old: ov, new: nv });
   }
   const tKeys = Array.from(new Set([...Object.keys(p.set), ...Object.keys(c.set)])).sort();
   for (const f of tKeys) {
@@ -45,7 +49,7 @@ function fieldDiffs(entity: QamEntity, id: string, name: string, p: QamRecord, c
     const nv = c.set[f] ?? [];
     const added = nv.filter((x) => !ov.includes(x));
     const removed = ov.filter((x) => !nv.includes(x));
-    if (added.length || removed.length) out.push({ eid: `${entity}:${id}:${ingestStamp}:${f}`, ...base, field: f, added, removed });
+    if (added.length || removed.length) out.push({ eid: `${entity}:${id}:${ingestStamp}:${f}`, ...base, ...ctx, field: f, added, removed });
   }
   return out;
 }

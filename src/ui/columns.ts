@@ -1,6 +1,5 @@
 // 資産一覧 / 変更履歴 の列定義（共通テーブル §25 用）。
 import { el, esc, clear } from './dom';
-import { icon } from '../icons';
 import { openModal } from './modal';
 import { fmtStamp } from '../config';
 import type { Column } from './table';
@@ -219,35 +218,44 @@ export function openEventProps(e: QamEvent): void {
     el('span', { class: `qam-tag qam-tag--${e.change}` }, [CHANGE_LABEL[e.change] ?? e.change]),
     el('span', { class: 'qam-props-id' }, [`${HIST_ID_LABEL[e.entity]}: ${e.id}`]),
   ]));
-  const propRow = (k: string, v: string): HTMLElement => el('div', { class: 'qam-prop-row' }, [
-    el('div', { class: 'qam-prop-k' }, [k]),
-    el('div', { class: 'qam-prop-v', title: v }, [v]),
-  ]);
-  if (e.props?.length) {
-    // 追加/削除: 記録済みの資産スナップショット
-    for (const p of e.props) body.append(propRow(fieldLabel(e.entity, p.k), p.v));
-  } else if (e.change === 'modified') {
-    // 変更: 名前＋変更項目の前後
-    body.append(propRow(HIST_NAME_LABEL[e.entity], e.name || ''));
-    if (e.field) body.append(propRow('変更項目', fieldLabel(e.entity, e.field)));
-    const before = e.removed?.length ? e.removed.join(', ') : (e.old ?? '');
-    const after = e.added?.length ? e.added.join(', ') : (e.new ?? '');
-    body.append(propRow('変更前', before), propRow('変更後', after));
-  } else {
-    // props 未記録（この機能の導入前 / CSV取込の履歴）
-    body.append(propRow(HIST_NAME_LABEL[e.entity], e.name || ''));
-    body.append(el('div', { class: 'qam-callout', style: 'margin-top:var(--s-3)' }, [
-      el('span', { html: icon('alert', 13) }),
-      el('span', {}, ['この履歴には資産スナップショットが記録されていません（機能導入前、またはCSV取込の履歴）。']),
+  // 変更前/変更後のプロパティ集合（その変更を行った時点の値。最新スナップショットは参照しない）。
+  const toMap = (ps?: { k: string; v: string }[]): Map<string, string> => new Map((ps ?? []).map((p) => [p.k, p.v]));
+  let before: Map<string, string>; let after: Map<string, string>;
+  if (e.change === 'added') { before = new Map(); after = toMap(e.props); }
+  else if (e.change === 'deleted') { before = toMap(e.props); after = new Map(); }
+  else { // modified
+    before = toMap(e.propsOld); after = toMap(e.props);
+    if (!before.size && !after.size) { // 旧データ（props未記録）: 変更項目の前後のみ
+      const k = e.field || '変更項目';
+      if (e.name) { before.set('name', e.name); after.set('name', e.name); }
+      before.set(k, e.removed?.length ? e.removed.join(', ') : (e.old ?? ''));
+      after.set(k, e.added?.length ? e.added.join(', ') : (e.new ?? ''));
+    }
+  }
+  // 2カラム表示（項目｜変更前｜変更後）。追加=変更後のみ / 削除=変更前のみ / 変更=差分を色分け。
+  const table = el('div', { class: 'qam-props2' });
+  table.append(el('div', { class: 'qam-props2-row qam-props2-head' }, [
+    el('div', { class: 'qam-prop-k' }, ['項目']), el('div', { class: 'qam-prop-v' }, ['変更前']), el('div', { class: 'qam-prop-v' }, ['変更後']),
+  ]));
+  const keys = [...new Set([...before.keys(), ...after.keys()])];
+  for (const k of keys) {
+    const bv = before.get(k) ?? ''; const av = after.get(k) ?? '';
+    const cls = bv && !av ? ' qam-diff-del' : !bv && av ? ' qam-diff-add' : bv !== av ? ' qam-diff-chg' : '';
+    table.append(el('div', { class: 'qam-props2-row' + cls }, [
+      el('div', { class: 'qam-prop-k' }, [fieldLabel(e.entity, k)]),
+      el('div', { class: 'qam-prop-v', title: bv }, [bv]),
+      el('div', { class: 'qam-prop-v', title: av }, [av]),
     ]));
   }
+  if (!keys.length) table.append(el('div', { class: 'qam-props2-row' }, [el('div', { class: 'qam-prop-k' }, ['—']), el('div', { class: 'qam-prop-v' }, ['']), el('div', { class: 'qam-prop-v' }, [''])]));
+  body.append(table);
   const label = CHANGE_LABEL[e.change] ?? e.change;
   openModal({ title: `${label}アセットの情報 — ${e.name || e.id}`, body });
 }
 
 // agSetten: host ID → 所属AGの接続点ID（host履歴用・現スナップショット由来）。group はタイトルから算出。
 // agIdSetten: AssetGroup ID → 接続点ID。削除済みhostは props の ASSET_GROUP_IDS をこれで接続点IDに変換する。
-export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten: Record<string, string> = {}, agIdSetten: Record<string, string> = {}): Column[] {
+export function historyColumns(entity: QamEntity, comments: CommentApi): Column[] {
   // 専用列(追加/削除IP・DNS・FQDN)を持つ項目は 変更前/変更後 に重複表示しない。
   const dedicatedFields: string[] = entity === 'group' ? ['IPS', 'DNS_LIST'] : entity === 'host' ? ['IP', 'FQDN'] : entity === 'domain' ? ['NETBLOCK'] : [];
   const isDedicated = (e: QamEvent): boolean => !!e.field && dedicatedFields.includes(e.field);
@@ -255,24 +263,22 @@ export function historyColumns(entity: QamEntity, comments: CommentApi, agSetten
   const oldCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.removed?.length ? `<span class="qam-rem">− ${joined(e.removed)}</span>` : esc(e.old ?? ''));
   const newCell = (e: QamEvent): string => isDedicated(e) ? '' : (e.added?.length ? `<span class="qam-add">+ ${joined(e.added)}</span>` : esc(e.new ?? ''));
   const propVal = (e: QamEvent, k: string): string => e.props?.find((p) => p.k === k)?.v ?? '';
-  // props の所属AG → 接続点ID（重複除き昇順）。削除済みhostの所属AG復元用。
-  // ASSET_GROUP_TITLES があればタイトルから直接、無ければ ASSET_GROUP_IDS を agIdSetten で変換。
+  // props（その変更時点のスナップショット）の所属AGタイトル → 接続点ID（重複除き昇順）。
+  // 最新スナップショットは参照しない（point-in-time 固定）。タイトルは host list の details=All/AGs 由来。
   const settenFromProps = (e: QamEvent): string => {
     const titles = propVal(e, 'ASSET_GROUP_TITLES').split(',').map((s) => s.trim()).filter(Boolean);
-    const ids = propVal(e, 'ASSET_GROUP_IDS').split(',').map((s) => s.trim()).filter(Boolean);
-    const sids = [...new Set([...titles.map((t) => settenId(t)), ...ids.map((id) => agIdSetten[id])].filter(Boolean))].sort();
-    return sids.join(', ');
+    return [...new Set(titles.map((t) => settenId(t)).filter(Boolean))].sort().join(', ');
   };
-  // 接続点ID: group はタイトルから算出。host は (1)現所属 (2)削除等は props の所属AG (3)CSV取込の接続点ID。
+  // 接続点ID: group はタイトルから算出。host/domain は props（変更時点）の所属AGタイトル、無ければ
+  // CSV取込の接続点ID。いずれもイベントに保存された point-in-time の値で、最新情報では変化しない。
   const settenOf = (e: QamEvent): string =>
-    entity === 'group' ? settenId(e.name)
-      : (agSetten[e.id] || settenFromProps(e) || propVal(e, '接続点ID'));
-  // 「追加された/削除された 値」列。優先: modified の項目別差分(set=added/removed・scalar=new/old)。
-  // 無ければ props から（追加/変更→追加側、削除→削除側）。CSV取込も props を入れるので各列に出る。
+    entity === 'group' ? settenId(e.name) : (settenFromProps(e) || propVal(e, '接続点ID'));
+  // 「追加された/削除された 値」列。modified は項目別差分(set=added/removed・scalar=new/old)のみ。
+  // 追加イベントは props 全体を「追加側」に、削除イベントは props 全体を「削除側」に出す（point-in-time）。
   const addedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {
     if (setF && e.field === setF && e.added?.length) return e.added.join(', ');
     if (scalarF && e.field === scalarF && e.new) return e.new;
-    if (e.change === 'added' || e.change === 'modified') return propVal(e, (setF ?? scalarF)!);
+    if (e.change === 'added') return propVal(e, (setF ?? scalarF)!);
     return '';
   };
   const removedOf = (e: QamEvent, scalarF: string | null, setF: string | null): string => {

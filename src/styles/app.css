@@ -262,6 +262,15 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-prop-row:last-child { border-bottom: 0; }
 .qam-prop-k { color: var(--ink-4); }
 .qam-prop-v { color: var(--ink); overflow-wrap: anywhere; white-space: pre-wrap; }
+/* 変更前/変更後の2カラム表示（行クリックのモーダル）。差分は色分け。 */
+.qam-props2 { display: flex; flex-direction: column; min-width: 520px; }
+.qam-props2-row { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr 2fr; gap: var(--s-4); padding: var(--s-2) 0; border-bottom: 1px solid var(--line); }
+.qam-props2-row:last-child { border-bottom: 0; }
+.qam-props2-head { font-size: var(--fs-xs); color: var(--ink-4); }
+.qam-props2 .qam-prop-k { color: var(--ink-3); }
+.qam-diff-add .qam-prop-v:last-child { color: var(--ok); font-weight: 600; }        /* 追加（変更後のみ） */
+.qam-diff-del .qam-prop-v:nth-child(2) { color: var(--danger); font-weight: 600; }   /* 削除（変更前のみ・変更後ブランク） */
+.qam-diff-chg .qam-prop-v { color: var(--warn); font-weight: 600; }                  /* 変更（前後で値が違う） */
 
 /* ---------- ライセンス数推移グラフ ---------- */
 .qam-lic { padding: var(--s-5) var(--gutter); display: flex; flex-direction: column; gap: var(--s-4); }

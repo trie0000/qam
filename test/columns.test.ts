@@ -115,16 +115,14 @@ describe('historyColumns 追加/削除 値列', () => {
       .toEqual(['ts', 'id', 'change', 'field', 'add_ip', 'rem_ip', '_c']);
   });
 
-  it('host履歴の接続点ID: 現所属/削除時の所属AG/ CSV取込 の順で解決', () => {
-    const agSetten = { h1: 'XX999' };                 // 現スナップショットの host→接続点ID
-    const agIdSetten = { '100': 'AB123', '300': 'CD456' }; // AG ID→接続点ID
-    const cols = historyColumns('host', noComments as any, agSetten, agIdSetten);
-    // (1) 現所属の host
-    expect(cellOf(cols, 'setten', ev({ entity: 'host', id: 'h1' }))).toBe('XX999');
-    // (2) 削除済み host は props の ASSET_GROUP_IDS から復元
-    expect(cellOf(cols, 'setten', ev({ entity: 'host', id: 'gone', change: 'deleted', props: [{ k: 'ASSET_GROUP_IDS', v: '100, 300' }] }))).toBe('AB123, CD456');
-    // (3) CSV取込（id未解決）は props の接続点ID
+  it('host履歴の接続点ID: イベント保存の point-in-time 値で解決（最新スナップショットは参照しない）', () => {
+    const cols = historyColumns('host', noComments as any);
+    // (1) props の所属AGタイトルから算出（変更時点の値）
+    expect(cellOf(cols, 'setten', ev({ entity: 'host', id: 'h1', props: [{ k: 'ASSET_GROUP_TITLES', v: 'AB123 東京, CD456 大阪' }] }))).toBe('AB123, CD456');
+    // (2) CSV取込（id未解決）は props の接続点ID
     expect(cellOf(cols, 'setten', ev({ entity: 'host', id: '', props: [{ k: '接続点ID', v: 'EF789' }] }))).toBe('EF789');
+    // (3) props 無し（点-in-time情報なし）は空。現スナップショットに依存して変化させない。
+    expect(cellOf(cols, 'setten', ev({ entity: 'host', id: 'h1' }))).toBe('');
   });
 
   it('domain/host は名前列を出さない（host は IP列も無し）', () => {
