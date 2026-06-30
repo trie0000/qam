@@ -756,7 +756,7 @@ function histBulk(keys: string[]): HTMLElement[] {
 // ---- ingest ----
 // 重複確認の方針を取込ラン内で共有（「すべて」取込で一件ごとに聞かず最初の1回だけ確認）。
 interface DupPolicy { decided: boolean; proceed: boolean }
-async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string, dup?: DupPolicy, ipCount?: number | null): Promise<void> {
+async function commitOne(snap: { entity: QamEntity; datetime: string; records: any }, raw?: string, dup?: DupPolicy, ipCount?: number | null, auto = false): Promise<void> {
   const cfg = await getConfig();
   // 取込日時 = XML の DATETIME 由来。重複チェック: 同 stamp=上書き / 同日=別取込として追加。
   const stamp = datetimeToStamp(snap.datetime);
@@ -765,7 +765,9 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   const sameDay = !sameStamp && existing.some((s) => dateOfStamp(s) === dateOfStamp(stamp));
   if (sameStamp || sameDay) {
     let proceed: boolean;
-    if (dup?.decided) {
+    if (auto) {
+      proceed = sameStamp; // 自動取込: 同 stamp は上書き、同日別追加はしない（無人で重複追加を避ける）
+    } else if (dup?.decided) {
       proceed = dup.proceed; // ラン内で確認済み → 同じ判断を引き継ぐ（再確認しない）
     } else {
       proceed = sameStamp
@@ -773,18 +775,19 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
         : await confirmModal('同じ日に取込済み', `${dateOfStamp(stamp)} に取込済みです。別の取込として追加しますか？（前のスナップショットは残ります。このラン内の重複は以降確認しません）`);
       if (dup) { dup.decided = true; dup.proceed = proceed; }
     }
-    if (!proceed) { toast(`${snap.entity}: 取込を中止しました`, 'info'); return; }
+    if (!proceed) { if (!auto) toast(`${snap.entity}: 取込を中止しました`, 'info'); return; }
   }
   const opts = { stamp, guardRatio: GUARD_RATIO, retentionDays: cfg.retentionDays || 90, rawXml: raw };
   let res = await ingestSnapshot(backend, snap as any, opts);
   if (res.guard && !res.committed) {
+    if (auto) { recordOp('自動取込スキップ', `${snap.entity}: 件数急減ガード(${res.prevCount}→${res.currCount})`, snap.entity); return; }
     const ok = await confirmModal('件数が大きく減少しています', `${snap.entity}: ${res.prevCount} → ${res.currCount} 件。誤ったファイルでないか確認してください。取り込みますか？`);
     if (!ok) { toast(`${snap.entity}: 取り込みを中止しました`, 'info'); return; }
     res = await ingestSnapshot(backend, snap as any, { ...opts, force: true });
   }
   const sum = res.baseline ? '初回取込・基準確立' : `+${res.added}/~${res.modified}/-${res.deleted}`;
-  toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
-  recordOp('取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
+  if (!auto) toast(`${snap.entity} ${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, res.currCount === 0 ? 'info' : 'ok');
+  recordOp(auto ? '自動取込' : '取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
   // Host 取込ごとに、その時点の使用ライセンス数(登録IP数)を日時(stamp)つきで記録（推移グラフ用）。
   // host 取込ごとに Unique Hosts Scanned を記録。IPs in Subscription(ipCount)は API取得時のみ（XMLは null→0）。
   if (res.committed && snap.entity === 'host') await recordLicense(backend, res.stamp, ipCount ?? 0, uniqueHostsScanned(snap.records as QamRecords)).catch(() => undefined);
@@ -1339,11 +1342,46 @@ async function maybeBackup(): Promise<void> {
   } catch { /* バックアップ失敗は本処理に影響させない */ }
 }
 
+// 無人取込（Edge ヘッドレス等から ?autoingest=<種別CSV> で起動）。確認ダイアログは出さない。
+// 当日スナップショットが既にある種別はスキップ。認証情報はこのブラウザプロファイルの localStorage を使う。
+async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
+  recordOp('自動取込開始', kinds.join(','));
+  try {
+    const cfg = await getConfig();
+    const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+    if (!creds.base || !creds.user || !creds.pass) { recordOp('自動取込中止', '接続先/認証情報が未設定（このプロファイルに保存が必要）'); return; }
+    const today = dateOfStamp(stampNow());
+    const todayDone = async (k: QamEntity): Promise<boolean> => (await getSnapshotStamps(backend, k)).some((s) => dateOfStamp(s) === today);
+    const pending: QamEntity[] = [];
+    for (const k of kinds) { if (!(await todayDone(k))) pending.push(k); }
+    if (!pending.length) { recordOp('自動取込スキップ', '本日分は取込済み'); return; }
+    setRelayBusy(true);
+    let ipCount: number | null = null;
+    if (pending.includes('host')) {
+      const r = await downloadIps(creds); ipCount = r.count;
+      if (r.xml) await backend.write(`raw/${today}/ips-${stampNow()}.xml`, r.xml).catch(() => undefined);
+    }
+    for (const k of pending) {
+      const dl = await downloadEntity(k, creds);
+      await commitOne(dl.snapshot, dl.raw, undefined, ipCount, true); // auto=true（非対話）
+    }
+    recordOp('自動取込完了', pending.join(','));
+  } catch (e) { recordOp('自動取込エラー', (e as Error).message); }
+  finally { setRelayBusy(false); }
+}
+
 async function start(): Promise<void> {
   startRelayPolling(); // 30秒間隔で中継サーバを死活監視（落ちたら警告・復帰で自動クローズ）
   if (!(await checkRelay())) { showRelayDownModal(); return; }
   // 起動時に記入者名を強制入力させない。更新作業（取込/メモ・注釈の記載/削除）の直前に未設定なら促す。
   refresh();
-  void maybeBackup(); // 起動時バックアップ（バックグラウンドで実行。UI はブロックしない）
+  const ai = new URLSearchParams(location.search).get('autoingest');
+  if (ai !== null) {
+    // 無人モード: バックアップ→取込 の順に実行し、終わったらウィンドウを閉じる（ヘッドレス用）。
+    const kinds = (ai || 'host,group,domain,user').split(',').map((s) => s.trim()).filter(Boolean) as QamEntity[];
+    void (async () => { await maybeBackup(); await runAutoIngest(kinds); try { window.close(); } catch { /* 通常ブラウザでは閉じない */ } })();
+  } else {
+    void maybeBackup(); // 起動時バックアップ（バックグラウンドで実行。UI はブロックしない）
+  }
 }
 start();
