@@ -120,13 +120,14 @@ exportAllBtn.addEventListener('click', () => { Promise.resolve().then(exportAllA
 const licenseBadge = el('button', { class: 'qam-license', title: 'Unique Hosts Scanned（スキャン済み一意ホスト数）/ IPs in Subscription（契約の登録IP数・設定で入力）。クリックで推移を表示' });
 licenseBadge.addEventListener('click', () => { state.mode = 'licenses'; state.selected.clear(); refresh(); });
 async function updateLicenseBadge(): Promise<void> {
-  clear(licenseBadge);
   const [stamps, lic] = await Promise.all([getSnapshotStamps(backend, 'host'), readLicenses(backend)]);
   const stamp = resolveAsof(stamps);
   const snap = stamp ? await readSnapshot(backend, 'host', stamp) : null;
   const scanned = snap ? uniqueHostsScanned(snap.records) : null;
   // IPs in Subscription: 直近に取得できた登録IP数（自動取得のみ。ライセンス上限とは別）。
   const ips = [...lic].reverse().find((s) => s.ips > 0)?.ips ?? 0;
+  // clear→append は await を挟まず不可分に行う（検索等で本関数が連続発火しても重複表示しないため）。
+  clear(licenseBadge);
   licenseBadge.append(
     el('span', { class: 'qam-license-cap' }, ['Scanned / IPs in Subscription']),
     el('span', { class: 'qam-license-num' }, [`${scanned == null ? '—' : scanned.toLocaleString()} / ${ips ? ips.toLocaleString() : '—'}`]),
