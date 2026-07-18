@@ -19,7 +19,7 @@ import {
   getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, readInspection, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
-import type { QamComment, QamEntity, QamEvent, QamRecord, QamRecords } from './types';
+import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords } from './types';
 
 // 操作履歴記録: 作業者(個人設定の記入者名)＋時刻で登録/削除/変更を残す。失敗しても本処理は止めない。
 function recordOp(action: string, detail: string, entity?: QamEntity): void {
@@ -695,6 +695,22 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   host.append(renderInspectionView({ data, busy: inspectionBusy, onFetch: () => { void runInspectionFetch(); } }));
 }
 
+// 取得した生XMLを raw/<日付>/ に保存する（応答の中身を後から確認できるように。IPs in Subscription と同じ作法）。
+// 保存失敗は本処理を止めない。raw/ は .gitignore 済み・保存期間を過ぎれば剪定される。
+async function saveInspectionRaw(raw: QamInspectionRaw): Promise<void> {
+  const stamp = stampNow();
+  const date = dateOfStamp(stamp);
+  const files: [string, string][] = [
+    ['scans', raw.scans], ['maps', raw.maps],
+    ['scan-schedules', raw.scanSchedules], ['map-schedules', raw.mapSchedules],
+  ];
+  for (const [name, xml] of files) {
+    if (!xml) continue;
+    try { await backend.write(`raw/${date}/inspection-${name}-${stamp}.xml`, xml); }
+    catch { /* XML保存失敗は本処理に影響させない */ }
+  }
+}
+
 // Qualys から 実施済み/スケジュールの scan・map を取得してキャッシュし、再描画する。
 async function runInspectionFetch(): Promise<void> {
   if (inspectionBusy) return;
@@ -714,6 +730,7 @@ async function runInspectionFetch(): Promise<void> {
     const q = quarterOf(new Date(), cfg.fiscalStartMonth || 4);
     const { raw, warnings } = await downloadInspection(creds, q.start);
     await writeInspection(backend, raw);
+    await saveInspectionRaw(raw); // 応答XMLを raw/<日付>/ に保存（原因調査用）
     recordOp('四半期検査 取得', `${q.label} の実施済み/スケジュールを取得${warnings.length ? `（一部失敗: ${warnings.length} 件）` : ''}`);
     // 一部のエンドポイントが取れなくても表示はする。取れなかったものは理由を出す（黙って0件にしない）。
     if (warnings.length) toast(`一部を取得できませんでした — ${warnings.join(' / ')}`, 'error');

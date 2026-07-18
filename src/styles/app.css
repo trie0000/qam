@@ -404,3 +404,5 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-insp-badge.is-pending { color: var(--danger); border-color: var(--danger); }
 .qam-insp-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
 .qam-insp-muted { color: var(--ink-4); }
+.qam-insp-src { display: flex; flex-direction: column; gap: var(--s-2); }
+.qam-insp-warn { font-size: var(--fs-sm); color: var(--warn); margin: 0; user-select: text; }

@@ -69,8 +69,13 @@ function elements(doc: Document, tags: string[]): Element[] {
   return [];
 }
 
+// 未取得/取得失敗のエンドポイントは空文字で渡ってくる。パースを試みると例外になり
+// ビュー全体が描画できなくなるので、空は「0 件」として扱う。
+const isBlank = (xml: string): boolean => !xml || !xml.trim();
+
 // 実施済みスキャン一覧（/api/2.0/fo/scan/?action=list）。
 export function parseScanList(xml: string): ScanRun[] {
+  if (isBlank(xml)) return [];
   const doc = parseXmlDocument(xml);
   // SCHEDULE_SCAN_LIST_OUTPUT と取り違えないよう、スケジュール応答なら空を返す。
   if (doc.documentElement.nodeName.startsWith('SCHEDULE_')) return [];
@@ -87,6 +92,7 @@ export function parseScanList(xml: string): ScanRun[] {
 //   <MAP_REPORT_LIST><MAP_REPORT ref=".." date=".." domain=".." status="FINISHED"><TITLE/>…
 // v2 に相当エンドポイントは無い（/api/2.0/fo/map/ は 404）。
 export function parseMapList(xml: string): MapRun[] {
+  if (isBlank(xml)) return [];
   const doc = parseXmlDocument(xml);
   const root = doc.documentElement.nodeName;
   if (root.startsWith('SCHEDULE') || root === 'SCHEDULEDSCANS') return []; // スケジュール応答を誤読しない
@@ -101,6 +107,7 @@ export function parseMapList(xml: string): MapRun[] {
 
 // スケジュール済みスキャン一覧（/api/2.0/fo/schedule/scan/?action=list）。
 export function parseScanSchedules(xml: string): ScanScheduleRow[] {
+  if (isBlank(xml)) return [];
   const doc = parseXmlDocument(xml);
   return elements(doc, ['SCAN']).map((s) => ({
     id: pick(s, ['id'], ['ID']),
@@ -117,6 +124,7 @@ export function parseScanSchedules(xml: string): ScanScheduleRow[] {
 // v1 は type=map でもタスク要素が <SCAN> で返る場合があるため両方を見る。
 // TARGETS はカンマ区切りで、ドメインと AssetGroup 名が混在しうる（ドメイン照合なので非ドメインは素通り）。
 export function parseMapSchedules(xml: string): MapScheduleRow[] {
+  if (isBlank(xml)) return [];
   const doc = parseXmlDocument(xml);
   return elements(doc, ['MAP', 'SCAN']).map((m) => ({
     id: pick(m, ['id', 'ref'], ['ID', 'REF']),

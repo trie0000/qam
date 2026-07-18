@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_AG_PATTERN, agPattern, quarterOf, buildTargets, classify, countStatus, weeklySummary,
-  pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished,
+  pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished, computeInspection,
 } from '../src/inspection';
 import { parseScanList, parseMapList, parseScanSchedules, parseMapSchedules } from '../src/inspection-parse';
 import type { QamRecord, QamRecords } from '../src/types';
@@ -168,6 +168,43 @@ describe('週次サマリ / 未対応AG', () => {
     expect(pending.map((p) => p.ag)).toEqual(['AB123', 'CD456']);
     expect(pending[0]).toMatchObject({ ag: 'AB123', scanPending: true, mapPendingDomains: [] });
     expect(pending[1]).toMatchObject({ ag: 'CD456', scanPending: false, mapPendingDomains: ['b.example'] });
+  });
+});
+
+describe('取得内訳（診断）', () => {
+  const scansXml = (ag: string) => `<?xml version="1.0"?><SCAN_LIST_OUTPUT><RESPONSE><SCAN_LIST>
+    <SCAN><REF>scan/1</REF><LAUNCH_DATETIME>2026-07-09T02:00:00Z</LAUNCH_DATETIME><STATUS><STATE>Finished</STATE></STATUS>
+      <ASSET_GROUP_TITLE_LIST><ASSET_GROUP_TITLE>${ag}</ASSET_GROUP_TITLE></ASSET_GROUP_TITLE_LIST>
+    </SCAN></SCAN_LIST></RESPONSE></SCAN_LIST_OUTPUT>`;
+  const raw = (scans: string) => ({ scans, maps: '', scanSchedules: '', mapSchedules: '', fetchedAt: '2026-07-18T00:00:00Z' });
+
+  it('対象パターンに一致しないAGで検査されていたら unmatched に出る', () => {
+    const recs = records(group('AB123'));
+    const d = computeInspection(recs, raw(scansXml('ZZ-LEGACY-01')), 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.sources.scanRuns).toBe(1);
+    expect(d.sources.scanRunsInQuarter).toBe(1);
+    expect(d.sources.unmatchedScanAgs).toEqual(['ZZ-LEGACY-01']); // 対象外AGで実施されている
+    expect(d.scan[0].status).toBe('pending');                     // 対象AGは未対応のまま
+  });
+
+  it('対象AGで検査されていれば unmatched は空で検査済みになる', () => {
+    const d = computeInspection(records(group('AB123')), raw(scansXml('AB123')), 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.sources.unmatchedScanAgs).toEqual([]);
+    expect(d.scan[0].status).toBe('done');
+  });
+
+  it('四半期外の実施は「うち今四半期」に数えない', () => {
+    const old = scansXml('AB123').replace('2026-07-09', '2026-05-09'); // 前四半期
+    const d = computeInspection(records(group('AB123')), raw(old), 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.sources.scanRuns).toBe(1);
+    expect(d.sources.scanRunsInQuarter).toBe(0);
+    expect(d.scan[0].status).toBe('pending');
+  });
+
+  it('未取得(raw=null)でも算出でき、件数は0になる', () => {
+    const d = computeInspection(records(group('AB123')), null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.sources).toMatchObject({ scanRuns: 0, mapRuns: 0, scanScheds: 0, mapScheds: 0 });
+    expect(d.fetchedAt).toBe('');
   });
 });
 

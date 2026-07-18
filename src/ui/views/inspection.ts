@@ -107,6 +107,44 @@ function matrixSection(d: InspectionData): HTMLElement {
   );
 }
 
+// 取得内訳: 応答から何件読めたか。「取得したのに全部未対応」の切り分け用。
+// 対象に紐づかなかったキーを出すことで、対象パターンのズレをその場で気付けるようにする。
+function sourcesSection(d: InspectionData): HTMLElement {
+  const s = d.sources;
+  const body = el('div', { class: 'qam-insp-src' }, [
+    table(
+      ['応答', '読めた件数', 'うち今四半期'],
+      [
+        ['実施済みスキャン', String(s.scanRuns), String(s.scanRunsInQuarter)],
+        ['実施済みマップ', String(s.mapRuns), String(s.mapRunsInQuarter)],
+        ['スキャンのスケジュール', String(s.scanScheds), '—'],
+        ['マップのスケジュール', String(s.mapScheds), '—'],
+      ],
+      'qam-insp-weekly',
+    ),
+  ]);
+  if (s.unmatchedScanAgs.length) {
+    body.append(el('p', { class: 'qam-insp-warn' }, [
+      `対象に含まれない AssetGroup が実施済みスキャンに ${s.unmatchedScanAgs.length} 件ありました: ${s.unmatchedScanAgs.join(', ')}`,
+    ]), el('p', { class: 'qam-insp-sec-note' }, [
+      '実際に検査されている AssetGroup が対象パターンに一致していない可能性があります。共通設定の「四半期検査: 対象 AssetGroup パターン」を実態に合わせてください。',
+    ]));
+  }
+  if (s.unmatchedMapDomains.length) {
+    body.append(el('p', { class: 'qam-insp-warn' }, [
+      `対象に含まれないドメインが実施済みマップに ${s.unmatchedMapDomains.length} 件ありました: ${s.unmatchedMapDomains.join(', ')}`,
+    ]), el('p', { class: 'qam-insp-sec-note' }, [
+      'AssetGroup の DOMAIN_LIST に登録されていないドメインが検査されています（MAP 対象は AssetGroup の登録ドメインから導出しています）。',
+    ]));
+  }
+  if (!s.mapRuns) {
+    body.append(el('p', { class: 'qam-insp-sec-note' }, [
+      '実施済みマップが 0 件の場合、マップが「レポートを保存する」設定で実行されていない可能性があります（保存されたマップレポートしか API から取得できません）。',
+    ]));
+  }
+  return section('取得内訳（診断）', 'Qualys の応答から読み取れた件数。全て未対応になる場合はここを確認する。', body);
+}
+
 // エクスポート用シート（表示と同じ内容をテキストで）。
 function sheets(d: InspectionData): Sheet[] {
   const target: Sheet = {
@@ -170,7 +208,7 @@ export function renderInspectionView(o: InspectionViewOpts): HTMLElement {
   ]);
   return el('div', { class: 'qam-insp' }, [
     head, toolbarRow(o), cards,
-    pendingSection(d), weeklySection(d), matrixSection(d),
+    pendingSection(d), sourcesSection(d), weeklySection(d), matrixSection(d),
   ]);
 }
 

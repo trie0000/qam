@@ -196,6 +196,14 @@ export function pendingAgs(scan: InspRow[], map: InspRow[]): PendingAg[] {
 
 // AssetGroup スナップショット + 取得済み生XML → ビューが表示する一式。
 // raw が無い（未取得）ときは全件が「未対応」ではなく、実施/予定が空の状態として算出される。
+// 応答から読めた件数と、対象に紐づかなかったキー。「取得したのに全部未対応」の原因切り分け用。
+//   unmatchedScanAgs が多い = 対象パターンが実際の AssetGroup 名と合っていない可能性が高い。
+export interface InspectionSources {
+  scanRuns: number; mapRuns: number; scanScheds: number; mapScheds: number;
+  scanRunsInQuarter: number; mapRunsInQuarter: number;
+  unmatchedScanAgs: string[]; unmatchedMapDomains: string[];
+}
+
 export interface InspectionData {
   quarter: Quarter;
   scan: InspRow[];
@@ -203,6 +211,22 @@ export interface InspectionData {
   weeks: WeekSummary[];
   pending: PendingAg[];
   fetchedAt: string;
+  sources: InspectionSources;
+}
+
+// 四半期内のヒットのうち、対象キー集合に含まれないものを列挙（先頭 limit 件）。
+function unmatched(hits: RunHit[], targets: InspTarget[], q: Quarter, limit = 50): { inQuarter: number; keys: string[] } {
+  const known = new Set(targets.map((t) => norm(t.key)));
+  const seen = new Set<string>();
+  let inQuarter = 0;
+  for (const h of hits) {
+    const d = toDate(h.datetime);
+    if (!d || d < q.start || d > q.end) continue;
+    inQuarter++;
+    const k = norm(h.key);
+    if (k && !known.has(k)) seen.add(h.key.trim());
+  }
+  return { inQuarter, keys: [...seen].sort().slice(0, limit) };
 }
 
 export function computeInspection(
@@ -210,17 +234,24 @@ export function computeInspection(
 ): InspectionData {
   const q = quarterOf(now, fiscalStartMonth);
   const t = buildTargets(records, agPattern(patternSrc));
-  const scan = classify(
-    t.scan,
-    raw ? scanRunHits(parseScanList(raw.scans)) : [],
-    raw ? scanSchedHits(parseScanSchedules(raw.scanSchedules)) : [],
-    q,
-  );
-  const map = classify(
-    t.map,
-    raw ? mapRunHits(parseMapList(raw.maps)) : [],
-    raw ? mapSchedHits(parseMapSchedules(raw.mapSchedules)) : [],
-    q,
-  );
-  return { quarter: q, scan, map, weeks: weeklySummary(scan, map, q), pending: pendingAgs(scan, map), fetchedAt: raw?.fetchedAt ?? '' };
+  const scanHits = raw ? scanRunHits(parseScanList(raw.scans)) : [];
+  const mapHits = raw ? mapRunHits(parseMapList(raw.maps)) : [];
+  const scanScheds = raw ? scanSchedHits(parseScanSchedules(raw.scanSchedules)) : [];
+  const mapScheds = raw ? mapSchedHits(parseMapSchedules(raw.mapSchedules)) : [];
+  const scan = classify(t.scan, scanHits, scanScheds, q);
+  const map = classify(t.map, mapHits, mapScheds, q);
+  const us = unmatched(scanHits, t.scan, q);
+  const um = unmatched(mapHits, t.map, q);
+  return {
+    quarter: q, scan, map,
+    weeks: weeklySummary(scan, map, q),
+    pending: pendingAgs(scan, map),
+    fetchedAt: raw?.fetchedAt ?? '',
+    sources: {
+      scanRuns: scanHits.length, mapRuns: mapHits.length,
+      scanScheds: scanScheds.length, mapScheds: mapScheds.length,
+      scanRunsInQuarter: us.inQuarter, mapRunsInQuarter: um.inQuarter,
+      unmatchedScanAgs: us.keys, unmatchedMapDomains: um.keys,
+    },
+  };
 }
