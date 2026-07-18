@@ -59,6 +59,12 @@ export interface UserAddResult { ok: boolean; login?: string; error?: string; st
 export const qualysUserAdd = (body: { base: string; user: string; pass: string; proxy: string; fields: Record<string, string> }): Promise<UserAddResult> =>
   postJson('/qam/qualys/user-add', body);
 
+// スケジュール登録（作成）。relay が form-urlencoded で POST し、応答XMLをそのまま返す。
+export interface ScheduleAddResult { ok: boolean; status?: number; xml?: string; error?: string }
+export const qualysScheduleAdd = (body: {
+  base: string; user: string; pass: string; proxy: string; path: string; fields: Record<string, string>;
+}): Promise<ScheduleAddResult> => postJson('/qam/qualys/schedule-add', body);
+
 export interface SessionResult { ok: boolean; status?: number; error?: string }
 export const qualysLogin = (creds: { base: string; user: string; pass: string; proxy: string }): Promise<SessionResult> => postJson('/qam/qualys/login', creds);
 export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/logout', {});

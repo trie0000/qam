@@ -230,6 +230,19 @@ qam/
   マップは一覧に出ない）。マップが未対応に偏る場合はまずこれを疑う。
 - **設定**: `fiscalStartMonth` / `inspectionAgPattern` を relay `/qam/config`（env）へ永続化。
 
+## 7.6 スケジュール登録（作成のみ・Qualys への書き込み）
+
+- **組立/検証**: `src/schedule.ts`（純粋関数）。SCAN=v2 / MAP=v1 で表記差（`active` が `0/1` と
+  `yes/no`、曜日の大小、対象キー `asset_groups` / `scan_target`、プロファイルキー `option_title` /
+  `option`）を内部表現から変換する。空値の項目は送らない（Qualys が不正パラメータとして弾くため）。
+- **送信**: relay `POST /qam/qualys/schedule-add` が form-urlencoded で POST。
+  **送信先は `/api/2.0/fo/schedule/scan/` と `/msp/scheduled_scans.php` の 2 つに限定**
+  （任意 URL への書き込みを受け付けない）。
+- **成否判定**: `scheduleResult`。v1 は `<RETURN status>`、v2 は `<CODE>` の有無で判定し、
+  Qualys の `<TEXT>` をそのまま利用者に見せる（HTTP 200 でも本文がエラーのことがある）。
+- **安全策**: 送信前に `describeSchedule` の要約で確認モーダル → 成功まで入力モーダルを閉じない →
+  成功時は操作履歴に記録。作成時の状態は既定「無効」。更新・削除は実装しない（Qualys 画面で行う）。
+
 ## 8. 確定事項（2026-06-13）
 
 1. **AssetGroup のメンバ差分**: IPS（IP+範囲）と DNS_LIST の増減を差分対象に含める

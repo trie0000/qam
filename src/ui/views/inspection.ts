@@ -269,6 +269,7 @@ export interface InspectionViewOpts {
   asof: string;             // 表示中の取込日（空＝未取得）
   onFetch: () => void;
   onAsof: (date: string) => void;
+  onAddSchedule: () => void;
 }
 
 // ツールバー（取得・エクスポート）。取得中はボタンを止める。
@@ -285,7 +286,10 @@ function toolbarRow(o: InspectionViewOpts): HTMLElement {
     ? `取得日時 ${new Date(d.fetchedAt).toLocaleString('ja-JP')}`
     : '未取得（「Qualys から取得」を押してください）';
   // 取込日の切替（過去のスナップショットを後から確認する）。新しい順に並べる。
-  const items: (Node | string)[] = [fetchBtn, csvBtn, xlsxBtn];
+  // Qualys への書き込み。押しやすい位置に置きすぎないよう取得系の後ろへ。
+  const addBtn = el('button', { class: 'btn btn--sm', title: 'Qualys に新しいスケジュールを作成します', html: `${icon('calendar', 14)}<span>スケジュール登録</span>` });
+  addBtn.addEventListener('click', o.onAddSchedule);
+  const items: (Node | string)[] = [fetchBtn, csvBtn, xlsxBtn, addBtn];
   if (o.dates.length) {
     const sel = el('select', { class: 'in qam-insp-asof' }) as HTMLSelectElement;
     [...o.dates].reverse().forEach((date, i) => {

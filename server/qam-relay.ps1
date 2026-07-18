@@ -335,6 +335,53 @@ function Invoke-QualysLogout {
 # ユーザ登録: /msp/user.php?action=add を Basic 認証＋プロキシで GET。
 # fields は TS 側で組んだ user_role/business_unit/first_name/last_name/email/title/phone/
 # address1/city/country/asset_groups/send_email 等。空値は送らない。
+# スケジュール登録（作成のみ）。本文のフィールドを form-urlencoded で POST する。
+# 書き込み系なので送信先は 2 パスに限定する（任意 URL への POST は受け付けない）。
+function Invoke-QualysScheduleAdd { param($Body)
+    $base = ([string]$Body.base).TrimEnd('/')
+    if (-not $base) { return [ordered]@{ ok = $false; error = '接続先(POD)が未設定です' } }
+    $path = [string]$Body.path
+    $allowed = @('/api/2.0/fo/schedule/scan/', '/msp/scheduled_scans.php')
+    if ($allowed -notcontains $path) { return [ordered]@{ ok = $false; error = "許可されていない送信先です: $path" } }
+    $parts = New-Object System.Collections.ArrayList
+    if ($Body.fields) {
+        foreach ($p in $Body.fields.PSObject.Properties) {
+            if ($null -eq $p.Value -or [string]$p.Value -eq '') { continue }
+            [void]$parts.Add("{0}={1}" -f [Uri]::EscapeDataString([string]$p.Name), [Uri]::EscapeDataString([string]$p.Value))
+        }
+    }
+    $form = $parts -join '&'
+    $url = "$base$path"
+    $proxy = if ($Body.proxy) { $Body.proxy } else { $null }
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseCookies = $false
+    if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
+    $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(120)
+    try {
+        $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
+        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')  # FO v2 API で必須
+        if ($Body.user) {
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
+            $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
+        }
+        Add-QamLog "SCHEDADD start POST $url ($form)"
+        Write-Host "[qam] schedule-add POST $url" -ForegroundColor DarkCyan
+        $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
+        $resp = $client.PostAsync($url, $content).Result
+        $rc = $resp.Content
+        $bytes = if ($rc) { $rc.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
+        $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
+        $snippet = ($xml -replace '\s+', ' ').Trim()
+        if ($snippet.Length -gt 1500) { $snippet = $snippet.Substring(0, 1500) + ' …(truncated)' }
+        Write-Host "[qam] schedule-add -> HTTP $([int]$resp.StatusCode): $snippet" -ForegroundColor DarkCyan
+        Add-QamLog "SCHEDADD done HTTP $([int]$resp.StatusCode) $snippet"
+        # 成否判定は XML の中身で行うため、ここでは本文と status をそのまま返す。
+        return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; xml = $xml }
+    } finally { $client.Dispose(); $handler.Dispose() }
+}
+
 function Invoke-QualysUserAdd { param($Body)
     $base = ([string]$Body.base).TrimEnd('/')
     if (-not $base) { return [ordered]@{ ok = $false; error = '接続先(POD)が未設定です' } }
@@ -413,6 +460,11 @@ function Invoke-Route { param($Ctx)
         }
         '^/qam/qualys/logout$' {
             try { Send-Json $Ctx (Invoke-QualysLogout) }
+            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            return
+        }
+        '^/qam/qualys/schedule-add$' {
+            try { Send-Json $Ctx (Invoke-QualysScheduleAdd (Get-Body $req | ConvertFrom-Json)) }
             catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
             return
         }

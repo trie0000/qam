@@ -1,7 +1,8 @@
 // Qualys API ダウンロード: relay 経由でプロキシ取得し、Host の nextUrl ページングを辿って
 // 全件をマージ → 正規化スナップショットにする。XML アップロードと同じ正規化(parse)に合流。
 import { parseQualysXml } from './ingest/parse';
-import { fetchQualys, qualysUserAdd, type FetchResult } from './relay';
+import { fetchQualys, qualysUserAdd, qualysScheduleAdd, type FetchResult } from './relay';
+import { SCHEDULE_PATHS, scheduleParams, validateSchedule, type ScheduleInput } from './schedule';
 import type { QamEntity, QamInspectionRaw, QamRecords, QamSnapshot } from './types';
 
 export interface QualysCreds { base: string; user: string; pass: string; proxy: string }
@@ -223,6 +224,37 @@ export async function downloadInspection(
   const mapSchedules = await tryGet('マップのスケジュール', `${base}/msp/scheduled_scans.php?type=map`);
   if (!scans && !maps && !scanSchedules && !mapSchedules) throw new Error(warnings.join(' / ') || '取得に失敗しました');
   return { raw: { scans, maps, scanSchedules, mapSchedules, fetchedAt: new Date().toISOString() }, warnings };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// スケジュール登録（作成のみ）。SCAN=v2・MAP=v1 でパラメータ形式が違うが、
+// 送信は relay の form POST に統一する（組立と検証は schedule.ts）。
+// ──────────────────────────────────────────────────────────────────────────
+
+// 応答の成否判定。Qualys は HTTP 200 でも本文でエラーを返すので本文を見る。
+//   v2: <SIMPLE_RETURN>…<CODE>…</CODE><TEXT>…</TEXT>  ← CODE があればエラー
+//   v1: <GENERIC_RETURN><RETURN status="FAILED"><TEXT>…  ← status で判定
+// どちらでもない未知の形は、TEXT が取れればそれを、無ければ成功として扱う。
+export function scheduleResult(xml: string): { ok: boolean; message: string } {
+  const text = (xml.match(/<TEXT>([\s\S]*?)<\/TEXT>/i)?.[1] ?? '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const status = xml.match(/<RETURN[^>]*\bstatus="([^"]+)"/i)?.[1];
+  if (status) return { ok: /success/i.test(status), message: text || status };
+  if (/<CODE>/i.test(xml)) return { ok: false, message: text || 'Qualys がエラーを返しました' };
+  return { ok: true, message: text || '登録しました' };
+}
+
+export async function createSchedule(creds: QualysCreds, input: ScheduleInput): Promise<{ message: string }> {
+  const errors = validateSchedule(input);
+  if (errors.length) throw new Error(errors.join(' / '));
+  const res = await qualysScheduleAdd({
+    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, proxy: creds.proxy,
+    path: SCHEDULE_PATHS[input.kind], fields: scheduleParams(input),
+  });
+  if (res.error) throw new Error(res.error);
+  const r = scheduleResult(res.xml ?? '');
+  if (!r.ok) throw new Error(r.message);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${r.message}`); // 本文が読めない失敗
+  return { message: r.message };
 }
 
 // ──────────────────────────────────────────────────────────────────────────

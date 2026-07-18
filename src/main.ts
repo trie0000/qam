@@ -10,9 +10,11 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
-import { downloadEntity, downloadIps, downloadInspection, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { downloadEntity, downloadIps, downloadInspection, createSchedule, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
+import { openScheduleForm } from './ui/views/schedule-form';
+import { describeSchedule } from './schedule';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
@@ -703,7 +705,44 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
     data, busy: inspectionBusy, dates, asof,
     onFetch: () => { void runInspectionFetch(); },
     onAsof: (d) => { state.inspAsof = d; refresh(); },
+    onAddSchedule: () => { void openScheduleAdd(data); },
   }));
+}
+
+// スケジュール登録（Qualys への書き込み）。認証は取得と同じ経路、確認は要約モーダルで行う。
+async function openScheduleAdd(data: ReturnType<typeof computeInspection>): Promise<void> {
+  await ensureAuthor(); // 書き込み操作なので作業者を先に確定させる
+  const creds = await resolveQualysCreds();
+  if (!creds) return;
+  // 対象の候補は今表示している母集団から出す（AssetGroup タイトルとドメイン）。
+  const assetGroups = [...new Set(data.matrix.flatMap((r) => r.titles))].sort();
+  const domains = [...new Set(data.map.map((m) => m.key))].sort();
+  openScheduleForm({
+    today: dateOfStamp(stampNow()),
+    assetGroups,
+    domains,
+    confirm: (summary) => confirmModal('この内容で登録しますか？', summary, '登録する'),
+    submit: async (input) => {
+      const res = await createSchedule(creds, input);
+      recordOp('スケジュール登録', describeSchedule(input));
+      toast(`スケジュールを登録しました${res.message ? `: ${res.message}` : ''}`, 'ok');
+      return res.message;
+    },
+    onDone: () => { refresh(); },
+  });
+}
+
+// 接続先と認証情報を解決（未設定ならその場で入力を促す）。取得・登録で共有する。
+async function resolveQualysCreds(): Promise<{ base: string; user: string; pass: string; proxy: string } | null> {
+  const cfg = await getConfig();
+  const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+  if (!creds.base) { toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return null; }
+  if (!creds.user || !creds.pass) {
+    const got = await promptQualysCreds(creds.user, creds.pass);
+    if (!got) return null;
+    creds.user = got.user; creds.pass = got.pass;
+  }
+  return creds;
 }
 
 // 取得した生XMLを raw/<日付>/ に保存する（応答の中身を後から確認できるように。IPs in Subscription と同じ作法）。
@@ -726,14 +765,8 @@ async function saveInspectionRaw(raw: QamInspectionRaw): Promise<void> {
 async function runInspectionFetch(): Promise<void> {
   if (inspectionBusy) return;
   const cfg = await getConfig();
-  // アカウント・パスワードは個人設定(ブラウザ保持)。旧 env 設定があれば後方互換でフォールバック。
-  const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
-  if (!creds.base) { toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return; }
-  if (!creds.user || !creds.pass) {
-    const got = await promptQualysCreds(creds.user, creds.pass);
-    if (!got) return;
-    creds.user = got.user; creds.pass = got.pass;
-  }
+  const creds = await resolveQualysCreds();
+  if (!creds) return;
   inspectionBusy = true;
   setRelayBusy(true); // 取得中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
   await refresh();    // ボタンを「取得中…」表示に
@@ -1355,6 +1388,10 @@ function openHelp(): void {
           <b>対象×週マトリクス</b>（どの週に検査されたか）を表示します。</li>
       <li>「Qualys から取得」で最新状況を取得（母集団の AssetGroup は資産取込のものを使うため再取得不要）。
           CSV／Excel で出力できます。</li>
+      <li><b>スケジュール登録</b>：Qualys に SCAN／MAP のスケジュールを<b>新規作成</b>できます（作成のみ。
+          変更・削除は Qualys の画面で行ってください）。<b>本番への書き込み</b>なので、送信前に内容の要約を
+          確認する画面が出ます。既定は<b>「無効で作成」</b>で、Qualys 側で内容を確認してから有効化する運用を想定しています。
+          登録内容は操作履歴に残ります。</li>
       <li>取得結果は<b>取込日ごとに保存</b>されます（同じ日に取り直すと上書き）。ツールバーの
           <b>「取込日」</b>で過去の時点の状況を後から確認できます。そのときの AssetGroup 登録状況に
           合わせて判定されます。保存期間を過ぎたものは資産スナップショットと同様に自動削除されます。</li>
