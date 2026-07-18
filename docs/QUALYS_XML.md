@@ -144,9 +144,17 @@ DOCTYPE: `USER_LIST_OUTPUT`。`USER_LOGIN`/`USER_ID`/`CONTACT_INFO` 構造。パ
 
 ## 四半期検査で使う一覧（scan / map・実施済みとスケジュール）
 
-`src/inspection-parse.ts` のパーサはこの構造に合わせる。**要素名・属性名はサブスクリプションや API 版で
-揺れる**（同じ値が属性で返る版と子要素で返る版がある）ため、パーサは候補を順に探す実装にしている。
-実テナントで実際の応答を確認したら、確定した形をここに追記すること。
+`src/inspection-parse.ts` のパーサはこの構造に合わせる。公式ガイド/DTD リファレンスで確認済み。
+**重要: マップ系は v2 API に存在しない**。`/api/2.0/fo/map/` も `/api/2.0/fo/schedule/map/` も 404 になる
+（v2 の "Map" はオプションプロファイル設定、"Map Report" はレポート生成の種別を指す別物）。
+マップは **v1(MSP) API** から取る。要素名が版で揺れる箇所があるためパーサは候補を順に探す実装にしている。
+
+| 用途 | エンドポイント | 方式 |
+|---|---|---|
+| 実施済みスキャン | `/api/2.0/fo/scan/?action=list` | v2・GET |
+| スケジュール済みスキャン | `/api/2.0/fo/schedule/scan/?action=list` | v2・GET |
+| **実施済みマップ** | **`/msp/map_report_list.php`** | v1・GET |
+| **スケジュール済みマップ** | **`/msp/scheduled_scans.php?type=map`** | v1・GET |
 
 ### 実施済みスキャン — `/api/2.0/fo/scan/?action=list`
 
@@ -168,20 +176,26 @@ DOCTYPE: `USER_LIST_OUTPUT`。`USER_LOGIN`/`USER_ID`/`CONTACT_INFO` 構造。パ
 重要: **`ASSET_GROUP_TITLE_LIST` は AssetGroup 指定で起動したスキャンにだけ入る**。IP 直指定で
 起動したスキャンは AG が特定できない（運用ルールが「SCAN は AssetGroup 指定」なので整合する）。
 
-### 実施済みマップ — `/api/2.0/fo/map/?action=list`
+### 実施済みマップ — `/msp/map_report_list.php`（v1）
 
-属性形式（`MAP_REPORT` の `ref`/`date`/`domain`/`status`）で返る版と、子要素形式の版がある。
-パーサは両対応。
+DTD: `map_report_lists.dtd`。**`ref`/`date`/`domain`/`status` は `MAP_REPORT` の属性**。
+パラメータは `last={yes|no}`（既定 no＝全件）と `domain={target}` のみで、**日付範囲での絞り込みは不可**
+（四半期の判定は TS 側で行う）。`status` は QUEUED / RUNNING / FINISHED 等。
 
 ```xml
-<MAP_REPORT_LIST_OUTPUT><MAP_REPORT_LIST>
- <MAP_REPORT ref="map/1234567890.12345" date="2026-07-09T02:00:00Z" domain="example.com" status="finished">
+<MAP_REPORT_LIST user="acme_ab1" from="2026-01-01T00:00:00Z" to="2026-07-09T02:00:00Z">
+ <MAP_REPORT ref="map/1234567890.12345" date="2026-07-09T02:00:00Z" domain="example.com" status="FINISHED">
   <TITLE><![CDATA[Q2 map]]></TITLE>
+  <ASSET_GROUPS><ASSET_GROUP><ASSET_GROUP_TITLE>AB123</ASSET_GROUP_TITLE></ASSET_GROUP></ASSET_GROUPS>
  </MAP_REPORT>
-</MAP_REPORT_LIST></MAP_REPORT_LIST_OUTPUT>
+</MAP_REPORT_LIST>
 ```
 
-### スケジュール済み — `/api/2.0/fo/schedule/scan/?action=list` / `/schedule/map/?action=list`
+> **運用上の注意**: この API が返すのは**保存されたマップレポート**だけ。マップを `save_report=yes` 無しで
+> 実行した場合はレポートが保存されず、ここに出てこない＝「未対応」に見える。マップが実施済みなのに
+> 未対応と出る場合は、まずレポートが保存される運用になっているかを疑うこと。
+
+### スケジュール済みスキャン — `/api/2.0/fo/schedule/scan/?action=list`（v2）
 
 ```xml
 <SCHEDULE_SCAN_LIST_OUTPUT><RESPONSE><SCHEDULE_SCAN_LIST>
@@ -192,8 +206,24 @@ DOCTYPE: `USER_LIST_OUTPUT`。`USER_LOGIN`/`USER_ID`/`CONTACT_INFO` 構造。パ
  </SCAN>
 </SCHEDULE_SCAN_LIST></RESPONSE></SCHEDULE_SCAN_LIST_OUTPUT>
 ```
-map 側はルートが `SCHEDULE_MAP_LIST_OUTPUT`、要素が `<MAP>` で、対象は `<DOMAIN>`（または `TARGET`）。
-`ACTIVE` が無い版は「有効」とみなす。次回実行は `NEXTLAUNCH_UTC` 系の候補名を順に探す。
+
+### スケジュール済みマップ — `/msp/scheduled_scans.php?type=map`（v1）
+
+DTD: `scheduled_scans.dtd`。ルートは **`SCHEDULEDSCANS`**（アンダースコア無し）、
+**`active` は属性で "yes"/"no"**、対象は **`TARGETS`（カンマ区切り・ドメインと AssetGroup 名が混在しうる）**、
+`NEXTLAUNCH_UTC` は**タスク直下**。`type=scan`（既定）/`type=all` も指定可。
+
+```xml
+<SCHEDULEDSCANS>
+ <MAP active="yes" ref="11155">
+  <TITLE><![CDATA[Weekly Map]]></TITLE>
+  <TARGETS><![CDATA[example.com, sub.example.com]]></TARGETS>
+  <SCHEDULE><WEEKLY frequency_weeks="1"/><START_DATE_UTC>2026-07-01T22:00:00</START_DATE_UTC></SCHEDULE>
+  <NEXTLAUNCH_UTC>2026-09-05T02:00:00Z</NEXTLAUNCH_UTC>
+ </MAP>
+</SCHEDULEDSCANS>
+```
+注: `type=map` でもタスク要素が `<SCAN>` で返る場合があるため、パーサは `MAP`/`SCAN` の両方を見る。
 
 ## 正規化マッピング（XML → 内部レコード）
 

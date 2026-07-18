@@ -117,8 +117,9 @@ export function scanSchedHits(rows: ScanScheduleRow[]): SchedHit[] {
   for (const s of rows) for (const ag of s.assetGroups) out.push({ key: ag, nextLaunch: s.nextLaunch, active: s.active });
   return out;
 }
+// 1 タスクが複数ドメインを対象にできるので、ドメインごとのヒットに展開する。
 export const mapSchedHits = (rows: MapScheduleRow[]): SchedHit[] =>
-  rows.filter((m) => m.domain).map((m) => ({ key: m.domain, nextLaunch: m.nextLaunch, active: m.active }));
+  rows.flatMap((m) => m.domains.map((d) => ({ key: d, nextLaunch: m.nextLaunch, active: m.active })));
 
 const weekNoOf = (d: Date, q: Quarter): number | null => q.weeks.find((w) => d >= w.start && d <= w.end)?.no ?? null;
 

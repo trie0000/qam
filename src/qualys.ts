@@ -172,34 +172,42 @@ export type InspectionProgress = (label: string) => void;
 // Qualys の日時パラメータ形式 'YYYY-MM-DDTHH:MM:SSZ'（ミリ秒は付けない）。
 const qualysDateTime = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
 
+// 1本でも取れれば表示する（エンドポイントの有無は契約/版で差があるため、全滅時だけ例外）。
+export interface InspectionDownload { raw: QamInspectionRaw; warnings: string[] }
+
 export async function downloadInspection(
   creds: QualysCreds, quarterStart: Date, onProgress?: InspectionProgress,
-): Promise<QamInspectionRaw> {
+): Promise<InspectionDownload> {
   const base = creds.base.replace(/\/+$/, '');
+  const warnings: string[] = [];
   const get = async (url: string): Promise<string> => {
     const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
     if (!res.ok || !res.xml) {
-      throw new Error(`Qualys 取得失敗 (status ${res.status}): ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
+      throw new Error(`status ${res.status}: ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
     }
     return res.xml;
   };
-  // 絞り込みパラメータを受け付けない環境向けに、失敗したら絞り込み無しで取り直す
-  // （件数は増えるが、四半期の判定は TS 側で行うので結果は変わらない）。
-  const getOrPlain = async (url: string, plain: string): Promise<string> => {
-    try { return await get(url); } catch { return get(plain); }
+  // fallback は「絞り込みパラメータを受け付けない環境」向けの取り直し
+  // （件数は増えるが四半期の判定は TS 側で行うので結果は変わらない）。
+  const tryGet = async (label: string, url: string, fallback?: string): Promise<string> => {
+    onProgress?.(`${label}を取得中`);
+    try { return await get(url); } catch (e) {
+      if (fallback) { try { return await get(fallback); } catch { /* 下の警告へ */ } }
+      warnings.push(`${label}: ${(e as Error).message}`);
+      return '';
+    }
   };
   const after = encodeURIComponent(qualysDateTime(quarterStart));
   const scanUrl = `${base}/api/2.0/fo/scan/?action=list`;
-  const mapUrl = `${base}/api/2.0/fo/map/?action=list`;
-  onProgress?.('実施済みスキャンを取得中');
-  const scans = await getOrPlain(`${scanUrl}&state=Finished&launched_after_datetime=${after}`, scanUrl);
-  onProgress?.('実施済みマップを取得中');
-  const maps = await getOrPlain(`${mapUrl}&state=Finished`, mapUrl);
-  onProgress?.('スキャンのスケジュールを取得中');
-  const scanSchedules = await get(`${base}/api/2.0/fo/schedule/scan/?action=list`);
-  onProgress?.('マップのスケジュールを取得中');
-  const mapSchedules = await get(`${base}/api/2.0/fo/schedule/map/?action=list`);
-  return { scans, maps, scanSchedules, mapSchedules, fetchedAt: new Date().toISOString() };
+  const scans = await tryGet('実施済みスキャン', `${scanUrl}&state=Finished&launched_after_datetime=${after}`, scanUrl);
+  // マップは v1(MSP) にしか無い。v2 に /api/2.0/fo/map/ は存在せず 404 になる。
+  // map_report_list.php が返すのは「保存されたマップレポート」＝save_report 付きで実行されたマップのみ。
+  const maps = await tryGet('実施済みマップ', `${base}/msp/map_report_list.php`);
+  const scanSchedules = await tryGet('スキャンのスケジュール', `${base}/api/2.0/fo/schedule/scan/?action=list`);
+  // スケジュールされたマップも v1 側（type=map で一覧）。
+  const mapSchedules = await tryGet('マップのスケジュール', `${base}/msp/scheduled_scans.php?type=map`);
+  if (!scans && !maps && !scanSchedules && !mapSchedules) throw new Error(warnings.join(' / ') || '取得に失敗しました');
+  return { raw: { scans, maps, scanSchedules, mapSchedules, fetchedAt: new Date().toISOString() }, warnings };
 }
 
 // ──────────────────────────────────────────────────────────────────────────

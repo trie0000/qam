@@ -10,7 +10,8 @@ export interface ScanRun { ref: string; title: string; datetime: string; state: 
 export interface MapRun { ref: string; title: string; datetime: string; state: string; domain: string }
 // スケジュール 1 件。nextLaunch は次回実行予定（ISO）。
 export interface ScanScheduleRow { id: string; title: string; active: boolean; nextLaunch: string; assetGroups: string[] }
-export interface MapScheduleRow { id: string; title: string; active: boolean; nextLaunch: string; domain: string }
+// v1 のスケジュールマップは 1 タスクに複数ドメインを指定できる（TARGETS がカンマ区切り）。
+export interface MapScheduleRow { id: string; title: string; active: boolean; nextLaunch: string; domains: string[] }
 
 const txt = (n: Element | null): string => (n ? (n.textContent ?? '').trim() : '');
 
@@ -48,7 +49,7 @@ function assetGroupTitles(el: Element): string[] {
   return uniq([...titles, ...csvTitles]);
 }
 
-// ACTIVE=1 / active="1" / true を有効とみなす。値が無い場合は有効扱い（一覧に出ている＝有効が既定）。
+// ACTIVE=1 / active="yes"(v1) / true を有効とみなす。値が無い場合は有効扱い（一覧に出ている＝有効が既定）。
 function isActive(el: Element): boolean {
   const v = pick(el, ['active'], ['ACTIVE']).toLowerCase();
   if (!v) return true;
@@ -82,10 +83,13 @@ export function parseScanList(xml: string): ScanRun[] {
   }));
 }
 
-// 実施済みマップ一覧（/api/2.0/fo/map/?action=list）。MAP_REPORT は属性で返る版がある。
+// 実施済みマップ一覧（v1 /msp/map_report_list.php）。ref/date/domain/status は MAP_REPORT の属性。
+//   <MAP_REPORT_LIST><MAP_REPORT ref=".." date=".." domain=".." status="FINISHED"><TITLE/>…
+// v2 に相当エンドポイントは無い（/api/2.0/fo/map/ は 404）。
 export function parseMapList(xml: string): MapRun[] {
   const doc = parseXmlDocument(xml);
-  if (doc.documentElement.nodeName.startsWith('SCHEDULE_')) return [];
+  const root = doc.documentElement.nodeName;
+  if (root.startsWith('SCHEDULE') || root === 'SCHEDULEDSCANS') return []; // スケジュール応答を誤読しない
   return elements(doc, ['MAP_REPORT', 'MAP']).map((m) => ({
     ref: pick(m, ['ref'], ['REF']),
     title: pick(m, ['title'], ['TITLE']),
@@ -107,14 +111,18 @@ export function parseScanSchedules(xml: string): ScanScheduleRow[] {
   }));
 }
 
-// スケジュール済みマップ一覧（/api/2.0/fo/schedule/map/?action=list）。
+// スケジュール済みマップ一覧（v1 /msp/scheduled_scans.php?type=map）。
+//   <SCHEDULEDSCANS><MAP active="yes" ref="11155"><TITLE/><TARGETS>dom1, dom2</TARGETS>
+//     <SCHEDULE>…</SCHEDULE><NEXTLAUNCH_UTC>…</NEXTLAUNCH_UTC></MAP></SCHEDULEDSCANS>
+// v1 は type=map でもタスク要素が <SCAN> で返る場合があるため両方を見る。
+// TARGETS はカンマ区切りで、ドメインと AssetGroup 名が混在しうる（ドメイン照合なので非ドメインは素通り）。
 export function parseMapSchedules(xml: string): MapScheduleRow[] {
   const doc = parseXmlDocument(xml);
-  return elements(doc, ['MAP']).map((m) => ({
-    id: pick(m, ['id'], ['ID']),
+  return elements(doc, ['MAP', 'SCAN']).map((m) => ({
+    id: pick(m, ['id', 'ref'], ['ID', 'REF']),
     title: pick(m, ['title'], ['TITLE']),
     active: isActive(m),
     nextLaunch: nextLaunchOf(m),
-    domain: pick(m, ['domain'], ['DOMAIN', 'TARGET']),
+    domains: uniq(csv(pick(m, ['domain'], ['TARGETS', 'DOMAIN', 'TARGET']))),
   }));
 }

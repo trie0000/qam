@@ -194,13 +194,17 @@ describe('XML パーサ', () => {
     expect(isFinished('')).toBe(true); // 状態を返さない版は完了扱い
   });
 
-  it('マップ一覧は属性形式（domain/date）でも子要素形式でも読める', () => {
-    const attrXml = `<?xml version="1.0"?><MAP_REPORT_LIST_OUTPUT><MAP_REPORT_LIST>
-      <MAP_REPORT ref="map/1" date="2026-07-09T02:00:00Z" domain="a.example" status="finished"><TITLE>m</TITLE></MAP_REPORT>
-    </MAP_REPORT_LIST></MAP_REPORT_LIST_OUTPUT>`;
-    const elemXml = `<?xml version="1.0"?><MAP_REPORT_LIST_OUTPUT><MAP_REPORT_LIST>
+  // 実構造: /msp/map_report_list.php は MAP_REPORT の「属性」で ref/date/domain/status を返す
+  // （公式 DTD: map_report_lists.dtd）。子要素形式の版にも備えて両方を検証する。
+  it('マップレポート一覧（v1・属性形式）から ドメインと実施日 を読む', () => {
+    const attrXml = `<?xml version="1.0"?><MAP_REPORT_LIST user="u" from="2026-01-01T00:00:00Z" to="2026-07-09T02:00:00Z">
+      <MAP_REPORT ref="map/1" date="2026-07-09T02:00:00Z" domain="a.example" status="FINISHED">
+        <TITLE><![CDATA[Q2 map]]></TITLE>
+        <ASSET_GROUPS><ASSET_GROUP><ASSET_GROUP_TITLE>AB123</ASSET_GROUP_TITLE></ASSET_GROUP></ASSET_GROUPS>
+      </MAP_REPORT></MAP_REPORT_LIST>`;
+    const elemXml = `<?xml version="1.0"?><MAP_REPORT_LIST>
       <MAP_REPORT><REF>map/1</REF><DOMAIN>a.example</DOMAIN><DATETIME>2026-07-09T02:00:00Z</DATETIME><STATE>Finished</STATE></MAP_REPORT>
-    </MAP_REPORT_LIST></MAP_REPORT_LIST_OUTPUT>`;
+    </MAP_REPORT_LIST>`;
     for (const xml of [attrXml, elemXml]) {
       const runs = parseMapList(xml);
       expect(runs[0].domain).toBe('a.example');
@@ -208,7 +212,7 @@ describe('XML パーサ', () => {
     }
   });
 
-  it('スケジュール一覧から 次回実行予定 と 有効/無効 を読む', () => {
+  it('スケジュール済みスキャン（v2）から 次回実行予定 と 有効/無効 を読む', () => {
     const scanXml = `<?xml version="1.0"?><SCHEDULE_SCAN_LIST_OUTPUT><SCHEDULE_SCAN_LIST>
       <SCAN><ID>10</ID><ACTIVE>1</ACTIVE><TITLE>weekly</TITLE>
         <ASSET_GROUP_TITLE_LIST><ASSET_GROUP_TITLE>AB123</ASSET_GROUP_TITLE></ASSET_GROUP_TITLE_LIST>
@@ -221,17 +225,40 @@ describe('XML パーサ', () => {
     expect(hits).toHaveLength(2);
     expect(hits[0]).toMatchObject({ key: 'AB123', active: true });
     expect(hits[1].active).toBe(false);
+  });
 
-    const mapXml = `<?xml version="1.0"?><SCHEDULE_MAP_LIST_OUTPUT><SCHEDULE_MAP_LIST>
-      <MAP><ID>20</ID><ACTIVE>1</ACTIVE><DOMAIN>a.example</DOMAIN>
-        <SCHEDULE><NEXTLAUNCH_UTC>2026-09-05T02:00:00Z</NEXTLAUNCH_UTC></SCHEDULE></MAP>
-    </SCHEDULE_MAP_LIST></SCHEDULE_MAP_LIST_OUTPUT>`;
-    expect(mapSchedHits(parseMapSchedules(mapXml))[0]).toMatchObject({ key: 'a.example', active: true });
+  // 実構造: /msp/scheduled_scans.php?type=map は SCHEDULEDSCANS ルート、active="yes" 属性、
+  // 対象は TARGETS（カンマ区切り）、NEXTLAUNCH_UTC はタスク直下。
+  it('スケジュール済みマップ（v1）は TARGETS のカンマ区切りを展開し active="yes" を解する', () => {
+    const mapXml = `<?xml version="1.0"?><SCHEDULEDSCANS>
+      <MAP active="yes" ref="11155"><TITLE><![CDATA[Weekly Map]]></TITLE>
+        <TARGETS><![CDATA[a.example, b.example]]></TARGETS>
+        <SCHEDULE><WEEKLY frequency_weeks="1"/></SCHEDULE>
+        <NEXTLAUNCH_UTC>2026-09-05T02:00:00Z</NEXTLAUNCH_UTC></MAP>
+      <MAP active="no" ref="11156"><TARGETS><![CDATA[c.example]]></TARGETS>
+        <NEXTLAUNCH_UTC>2026-09-06T02:00:00Z</NEXTLAUNCH_UTC></MAP>
+    </SCHEDULEDSCANS>`;
+    const rows = parseMapSchedules(mapXml);
+    expect(rows[0].domains).toEqual(['a.example', 'b.example']);
+    const hits = mapSchedHits(rows);
+    expect(hits).toHaveLength(3); // 2ドメイン + 1ドメイン
+    expect(hits[0]).toMatchObject({ key: 'a.example', active: true });
+    expect(hits[2]).toMatchObject({ key: 'c.example', active: false });
+  });
+
+  it('v1 が MAP でなく SCAN 要素で返す場合もスケジュールマップとして読める', () => {
+    const xml = `<?xml version="1.0"?><SCHEDULEDSCANS>
+      <SCAN active="yes" ref="9"><TARGETS><![CDATA[a.example]]></TARGETS>
+        <NEXTLAUNCH_UTC>2026-09-05T02:00:00Z</NEXTLAUNCH_UTC></SCAN></SCHEDULEDSCANS>`;
+    expect(mapSchedHits(parseMapSchedules(xml))[0]).toMatchObject({ key: 'a.example', active: true });
   });
 
   it('スケジュール応答を実施一覧として読み違えない', () => {
     const schedXml = `<?xml version="1.0"?><SCHEDULE_SCAN_LIST_OUTPUT><SCHEDULE_SCAN_LIST>
       <SCAN><ID>10</ID></SCAN></SCHEDULE_SCAN_LIST></SCHEDULE_SCAN_LIST_OUTPUT>`;
     expect(parseScanList(schedXml)).toHaveLength(0);
+    const v1Sched = `<?xml version="1.0"?><SCHEDULEDSCANS>
+      <MAP active="yes" ref="1"><TARGETS>a.example</TARGETS></MAP></SCHEDULEDSCANS>`;
+    expect(parseMapList(v1Sched)).toHaveLength(0);
   });
 });

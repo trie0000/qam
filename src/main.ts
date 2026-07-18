@@ -712,10 +712,12 @@ async function runInspectionFetch(): Promise<void> {
   await refresh();    // ボタンを「取得中…」表示に
   try {
     const q = quarterOf(new Date(), cfg.fiscalStartMonth || 4);
-    const raw = await downloadInspection(creds, q.start);
+    const { raw, warnings } = await downloadInspection(creds, q.start);
     await writeInspection(backend, raw);
-    recordOp('四半期検査 取得', `${q.label} の実施済み/スケジュールを取得`);
-    toast('四半期検査の状況を取得しました', 'ok');
+    recordOp('四半期検査 取得', `${q.label} の実施済み/スケジュールを取得${warnings.length ? `（一部失敗: ${warnings.length} 件）` : ''}`);
+    // 一部のエンドポイントが取れなくても表示はする。取れなかったものは理由を出す（黙って0件にしない）。
+    if (warnings.length) toast(`一部を取得できませんでした — ${warnings.join(' / ')}`, 'error');
+    else toast('四半期検査の状況を取得しました', 'ok');
   } catch (e) {
     toast('取得に失敗しました: ' + (e as Error).message, 'error');
   } finally {
