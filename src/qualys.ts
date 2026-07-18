@@ -2,7 +2,7 @@
 // 全件をマージ → 正規化スナップショットにする。XML アップロードと同じ正規化(parse)に合流。
 import { parseQualysXml } from './ingest/parse';
 import { fetchQualys, qualysUserAdd, type FetchResult } from './relay';
-import type { QamEntity, QamRecords, QamSnapshot } from './types';
+import type { QamEntity, QamInspectionRaw, QamRecords, QamSnapshot } from './types';
 
 export interface QualysCreds { base: string; user: string; pass: string; proxy: string }
 
@@ -161,6 +161,45 @@ export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProg
     onProgress?.({ page: rawPages.length, records: Object.keys(records).length });
   }
   return { snapshot: { entity: kind, datetime, records }, raw: rawPages.join('\n<!-- page -->\n'), pages: rawPages.length };
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// 四半期検査（SCAN/MAP の実施済み・スケジュール）の取得。
+// relay は単スレッドなので順次取得する（並列にすると取りこぼす）。
+// ──────────────────────────────────────────────────────────────────────────
+export type InspectionProgress = (label: string) => void;
+
+// Qualys の日時パラメータ形式 'YYYY-MM-DDTHH:MM:SSZ'（ミリ秒は付けない）。
+const qualysDateTime = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+export async function downloadInspection(
+  creds: QualysCreds, quarterStart: Date, onProgress?: InspectionProgress,
+): Promise<QamInspectionRaw> {
+  const base = creds.base.replace(/\/+$/, '');
+  const get = async (url: string): Promise<string> => {
+    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
+    if (!res.ok || !res.xml) {
+      throw new Error(`Qualys 取得失敗 (status ${res.status}): ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
+    }
+    return res.xml;
+  };
+  // 絞り込みパラメータを受け付けない環境向けに、失敗したら絞り込み無しで取り直す
+  // （件数は増えるが、四半期の判定は TS 側で行うので結果は変わらない）。
+  const getOrPlain = async (url: string, plain: string): Promise<string> => {
+    try { return await get(url); } catch { return get(plain); }
+  };
+  const after = encodeURIComponent(qualysDateTime(quarterStart));
+  const scanUrl = `${base}/api/2.0/fo/scan/?action=list`;
+  const mapUrl = `${base}/api/2.0/fo/map/?action=list`;
+  onProgress?.('実施済みスキャンを取得中');
+  const scans = await getOrPlain(`${scanUrl}&state=Finished&launched_after_datetime=${after}`, scanUrl);
+  onProgress?.('実施済みマップを取得中');
+  const maps = await getOrPlain(`${mapUrl}&state=Finished`, mapUrl);
+  onProgress?.('スキャンのスケジュールを取得中');
+  const scanSchedules = await get(`${base}/api/2.0/fo/schedule/scan/?action=list`);
+  onProgress?.('マップのスケジュールを取得中');
+  const mapSchedules = await get(`${base}/api/2.0/fo/schedule/map/?action=list`);
+  return { scans, maps, scanSchedules, mapSchedules, fetchedAt: new Date().toISOString() };
 }
 
 // ──────────────────────────────────────────────────────────────────────────

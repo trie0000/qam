@@ -2,7 +2,7 @@
 // スナップショットは「取込日時(stamp)」ごとに保持（同日複数回の取込を別ポイントとして残す）。
 //   stamp = 'YYYY-MM-DDTHH-mm-ss'（ファイル名/キー/辞書順ソート可）。
 // 実ファイル IO は FileBackend（relay 実装 or テストのインメモリ）に委譲する。
-import type { QamComment, QamEntity, QamEvent, QamRecords, QamSnapshot } from './types';
+import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecords, QamSnapshot } from './types';
 import { compareSnapshots, countByChange, shrinkGuard } from './diff';
 
 export interface FileBackend {
@@ -17,6 +17,7 @@ const snapPath = (e: QamEntity, stamp: string) => `snapshots/${e}/${stamp}.json`
 const histPath = (e: QamEntity) => `history/${e}.jsonl`;
 const COMMENTS = 'comments/comments.jsonl';
 const RUNS = 'runs.jsonl';
+const INSPECTION = 'inspection/latest.json';
 
 export const dateOfStamp = (stamp: string): string => stamp.slice(0, 10);
 
@@ -110,6 +111,7 @@ export async function resetData(b: FileBackend, opts: ResetOptions): Promise<voi
     for (const e of ENTITIES) for (const s of await getSnapshotStamps(b, e)) await b.remove(snapPath(e, s));
     await b.remove(RUNS);
     await b.remove('licenses.jsonl'); // ライセンス数推移サンプルも資産データの一部として消去
+    await b.remove(INSPECTION);       // 四半期検査のキャッシュ（Qualys から再取得できる派生データ）
     for (const d of await b.list('raw')) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) await b.remove(`raw/${d}`);
   }
   if (opts.history) for (const e of ENTITIES) await b.remove(histPath(e));
@@ -132,6 +134,16 @@ export async function readLicenses(b: FileBackend): Promise<QamLicenseSample[]> 
     map.set(r.ts, { ts: r.ts, ips: Math.max(cur?.ips ?? 0, r.ips ?? 0), scanned: r.scanned ?? r.count ?? cur?.scanned ?? 0 });
   }
   return [...map.values()];
+}
+
+// --- 四半期検査: Qualys 応答の生XMLを 1 セットだけ保持（最新で上書き） ---
+// 履歴を積む必要は無い（実施日時は応答XML自体に入っており、週次内訳はそこから再構成できる）。
+export const writeInspection = (b: FileBackend, raw: QamInspectionRaw): Promise<void> =>
+  b.write(INSPECTION, JSON.stringify(raw));
+export async function readInspection(b: FileBackend): Promise<QamInspectionRaw | null> {
+  const raw = await b.read(INSPECTION);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as QamInspectionRaw; } catch { return null; } // 壊れていたら未取得扱い
 }
 
 // --- 操作履歴（監査ログ）: 登録/削除/変更などの操作を 作業者・日時つきで記録 ---

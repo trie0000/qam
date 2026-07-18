@@ -10,11 +10,13 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
-import { downloadEntity, downloadIps, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { downloadEntity, downloadIps, downloadInspection, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
+import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, readInspection, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamRecord, QamRecords } from './types';
@@ -28,7 +30,7 @@ function recordOp(action: string, detail: string, entity?: QamEntity): void {
 const GUARD_RATIO = 0.5;
 
 const state = {
-  mode: 'assets' as 'assets' | 'history' | 'ops' | 'licenses',
+  mode: 'assets' as 'assets' | 'history' | 'ops' | 'licenses' | 'inspection',
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
@@ -153,7 +155,7 @@ function renderLeft(): void {
   clear(left);
   left.append(el('div', { class: 'qam-navhead' }, ['ビュー']));
   const nav = el('div', { class: 'qam-nav' });
-  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
+  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['inspection', '四半期検査', 'check'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
   for (const [m, label, ic] of modes) {
     const b = el('button', { 'aria-current': String(state.mode === m), html: `${icon(ic, 16)}<span>${label}</span>` });
     b.addEventListener('click', () => { state.mode = m; state.selected.clear(); refresh(); });
@@ -179,13 +181,14 @@ async function refresh(): Promise<void> {
   }
   // subbar
   const subbar = el('div', { class: 'qam-subbar' });
-  const titles = { assets: '資産一覧', history: '変更履歴', ops: '操作履歴', licenses: 'ライセンス数推移' } as const;
+  const titles = { assets: '資産一覧', history: '変更履歴', ops: '操作履歴', licenses: 'ライセンス数推移', inspection: '四半期検査' } as const;
   const title = el('span', { class: 'qam-title' }, [titles[state.mode]]);
   const count = el('span', { class: 'qam-count' });
   subbar.append(title, count, el('span', { class: 'qam-spacer' }));
   // toolbar
   const toolbar = el('div', { class: 'qam-toolbar' });
-  if (state.mode !== 'licenses') {
+  // 検索/全文表示は表ビュー用。ダッシュボード型（推移・四半期検査）では出さない。
+  if (state.mode !== 'licenses' && state.mode !== 'inspection') {
     const search = el('div', { class: 'qam-search', html: icon('search', 14) });
     const sIn = el('input', { type: 'text', placeholder: '検索（ID / 名前 / IP / FQDN）', value: state.q }) as HTMLInputElement;
     onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
@@ -210,13 +213,15 @@ async function refresh(): Promise<void> {
   }
 
   const filterBar = el('div', { class: 'qam-filterbar' });
-  const tableHost = el('div', { style: 'min-height:0;overflow:' + (state.mode === 'licenses' ? 'auto' : 'hidden') });
+  const scrollable = state.mode === 'licenses' || state.mode === 'inspection'; // 縦に積むダッシュボードはビュー全体をスクロール
+  const tableHost = el('div', { style: 'min-height:0;overflow:' + (scrollable ? 'auto' : 'hidden') });
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
   main.append(tabs, subbar, toolbar, filterBar, tableHost);
 
   if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'history') await renderHistory(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'licenses') await renderLicenses(count, tableHost);
+  else if (state.mode === 'inspection') await renderInspection(count, tableHost);
   else await renderOps(subbar, count, toolbar, filterBar, tableHost);
 }
 
@@ -672,6 +677,54 @@ async function renderLicenses(count: HTMLElement, host: HTMLElement): Promise<vo
   redraw();
 }
 
+// ---- 四半期検査ビュー ----
+// 母集団は最新の AssetGroup スナップショット（再取得しない）。実施済み/スケジュールは
+// inspection/latest.json のキャッシュを使い、「Qualys から取得」で更新する。
+let inspectionBusy = false;
+
+async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<void> {
+  clear(leftCalHost);
+  const [cfg, stamps, raw] = await Promise.all([getConfig(), getSnapshotStamps(backend, 'group'), readInspection(backend)]);
+  const stamp = resolveAsof(stamps);
+  const snap = stamp ? await readSnapshot(backend, 'group', stamp) : null;
+  const pattern = cfg.inspectionAgPattern || DEFAULT_AG_PATTERN;
+  const data = computeInspection(snap?.records ?? {}, raw, cfg.fiscalStartMonth || 4, pattern, new Date());
+  count.textContent = `${data.quarter.label}／SCAN ${data.scan.length} 件・MAP ${data.map.length} 件`;
+  clear(host);
+  if (!data.scan.length && !data.map.length) { host.append(inspectionEmpty(pattern)); return; }
+  host.append(renderInspectionView({ data, busy: inspectionBusy, onFetch: () => { void runInspectionFetch(); } }));
+}
+
+// Qualys から 実施済み/スケジュールの scan・map を取得してキャッシュし、再描画する。
+async function runInspectionFetch(): Promise<void> {
+  if (inspectionBusy) return;
+  const cfg = await getConfig();
+  // アカウント・パスワードは個人設定(ブラウザ保持)。旧 env 設定があれば後方互換でフォールバック。
+  const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+  if (!creds.base) { toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return; }
+  if (!creds.user || !creds.pass) {
+    const got = await promptQualysCreds(creds.user, creds.pass);
+    if (!got) return;
+    creds.user = got.user; creds.pass = got.pass;
+  }
+  inspectionBusy = true;
+  setRelayBusy(true); // 取得中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
+  await refresh();    // ボタンを「取得中…」表示に
+  try {
+    const q = quarterOf(new Date(), cfg.fiscalStartMonth || 4);
+    const raw = await downloadInspection(creds, q.start);
+    await writeInspection(backend, raw);
+    recordOp('四半期検査 取得', `${q.label} の実施済み/スケジュールを取得`);
+    toast('四半期検査の状況を取得しました', 'ok');
+  } catch (e) {
+    toast('取得に失敗しました: ' + (e as Error).message, 'error');
+  } finally {
+    inspectionBusy = false;
+    setRelayBusy(false);
+    await refresh();
+  }
+}
+
 // 直近の IPs in Subscription 応答XML（raw/<日付>/ips-*.xml の最新）を読む。無ければ null。
 async function latestIpsXml(): Promise<string | null> {
   const dates = (await backend.list('raw')).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
@@ -1090,6 +1143,8 @@ async function openSettings(): Promise<void> {
   const bkRetention = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.backupRetentionDays ?? 7) }) as HTMLInputElement;
   const userBu = el('input', { class: 'in', value: cfg.userBusinessUnit || 'Unassigned', placeholder: 'Unassigned' }) as HTMLInputElement;
   const userCountry = el('input', { class: 'in', value: cfg.userCountry || '', placeholder: '例: Japan' }) as HTMLInputElement;
+  const fiscalMonth = el('input', { class: 'in', type: 'number', min: '1', max: '12', value: String(cfg.fiscalStartMonth || 4) }) as HTMLInputElement;
+  const inspPattern = el('input', { class: 'in', value: cfg.inspectionAgPattern || DEFAULT_AG_PATTERN, placeholder: DEFAULT_AG_PATTERN }) as HTMLInputElement;
   const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
   const author = el('input', { class: 'in', value: localStorage.getItem(LS.author) || '', placeholder: '例: 山田' }) as HTMLInputElement;
   const theme = el('select', { class: 'in' }) as HTMLSelectElement;
@@ -1171,7 +1226,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象 AssetGroup パターン', inspPattern, `四半期検査の対象にする AssetGroup タイトルの正規表現（大文字小文字は無視）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`)] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
@@ -1192,7 +1247,7 @@ async function openSettings(): Promise<void> {
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
-        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim() });
+        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
         if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
@@ -1220,7 +1275,7 @@ function openHelp(): void {
     <h3>最初の設定（右上の ⚙ 設定）</h3>
     <ul>
       <li><b>個人設定</b>：記入者名（操作履歴・メモの作業者）、Qualys アカウント／パスワード、テーマ、文字サイズ。</li>
-      <li><b>共通設定</b>：Qualys 接続先 POD、プロキシ URL、保存期間（日）、ライセンス上限。</li>
+      <li><b>共通設定</b>：Qualys 接続先 POD、プロキシ URL、保存期間（日）、ライセンス上限、四半期検査の年度開始月・対象 AssetGroup パターン。</li>
       <li><b>開発者</b>：データのリセット（資産/履歴/メモを種類選択）、登録情報のリセット、ビルド情報。</li>
     </ul>
     <p>※ Qualys 認証情報・記入者名は各自のブラウザに保存され共有されません。更新作業の直前に記入者名が未設定なら入力を促します。</p>
@@ -1251,6 +1306,19 @@ function openHelp(): void {
       <li><b>行をクリック</b>すると、追加／削除／変更した資産の情報（プロパティ）を表示します。</li>
       <li>追加IP／削除IP・追加DNS／削除DNS・追加FQDN／削除FQDN 列で増減を確認できます。</li>
       <li>不要な履歴は選択して削除できます。</li>
+    </ul>
+
+    <h3>四半期検査</h3>
+    <ul>
+      <li>「四半期に一度は SCAN / MAP 検査を実施する」ルールに対して、<b>現四半期の充足状況</b>を確認します。</li>
+      <li>対象は AssetGroup タイトルが<b>対象パターン</b>（共通設定）に一致するもの。SCAN は AssetGroup 単位、
+          <b>MAP はその AG に登録されたドメイン単位</b>で判定します。<b>ドメイン未登録の AG は MAP 対象外</b>です。</li>
+      <li>四半期内に完了実施あり＝<b>検査済み</b>／実施は無いが四半期内に実行予定あり＝<b>スケジュール済み</b>／
+          どちらも無い＝<b>未対応</b>。</li>
+      <li><b>未対応の AssetGroup</b>、<b>週次サマリ</b>（その週の実施件数と累計カバレッジ）、
+          <b>対象×週マトリクス</b>（どの週に検査されたか）を表示します。</li>
+      <li>「Qualys から取得」で最新状況を取得（母集団の AssetGroup は資産取込のものを使うため再取得不要）。
+          CSV／Excel で出力できます。</li>
     </ul>
 
     <h3>ライセンス数推移</h3>

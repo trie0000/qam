@@ -142,6 +142,59 @@ DOCTYPE: `USER_LIST_OUTPUT`。`USER_LOGIN`/`USER_ID`/`CONTACT_INFO` 構造。パ
 注: DATETIME 無しのため取込日時(stamp)は取込時のローカル時刻にフォールバック。
 追跡: USER_LOGIN, NAME(姓 名), EMAIL, TITLE, COMPANY, USER_STATUS, USER_ROLE。info: LAST_LOGIN_DATE（差分対象外）。キー=USER_ID。
 
+## 四半期検査で使う一覧（scan / map・実施済みとスケジュール）
+
+`src/inspection-parse.ts` のパーサはこの構造に合わせる。**要素名・属性名はサブスクリプションや API 版で
+揺れる**（同じ値が属性で返る版と子要素で返る版がある）ため、パーサは候補を順に探す実装にしている。
+実テナントで実際の応答を確認したら、確定した形をここに追記すること。
+
+### 実施済みスキャン — `/api/2.0/fo/scan/?action=list`
+
+`state=Finished` と `launched_after_datetime=<四半期開始>` で絞り込む（受け付けない環境では
+絞り込み無しで取り直し、四半期判定は TS 側で行う）。
+
+```xml
+<SCAN_LIST_OUTPUT><RESPONSE><SCAN_LIST>
+ <SCAN>
+  <REF>scan/1234567890.12345</REF>
+  <TITLE><![CDATA[Q2 scan]]></TITLE>
+  <LAUNCH_DATETIME>2026-07-09T02:00:00Z</LAUNCH_DATETIME>
+  <STATE>Finished</STATE>
+  <TARGET>10.0.0.1-10.0.0.254</TARGET>
+  <ASSET_GROUP_TITLE_LIST><ASSET_GROUP_TITLE>AB123</ASSET_GROUP_TITLE></ASSET_GROUP_TITLE_LIST>
+ </SCAN>
+</SCAN_LIST></RESPONSE></SCAN_LIST_OUTPUT>
+```
+重要: **`ASSET_GROUP_TITLE_LIST` は AssetGroup 指定で起動したスキャンにだけ入る**。IP 直指定で
+起動したスキャンは AG が特定できない（運用ルールが「SCAN は AssetGroup 指定」なので整合する）。
+
+### 実施済みマップ — `/api/2.0/fo/map/?action=list`
+
+属性形式（`MAP_REPORT` の `ref`/`date`/`domain`/`status`）で返る版と、子要素形式の版がある。
+パーサは両対応。
+
+```xml
+<MAP_REPORT_LIST_OUTPUT><MAP_REPORT_LIST>
+ <MAP_REPORT ref="map/1234567890.12345" date="2026-07-09T02:00:00Z" domain="example.com" status="finished">
+  <TITLE><![CDATA[Q2 map]]></TITLE>
+ </MAP_REPORT>
+</MAP_REPORT_LIST></MAP_REPORT_LIST_OUTPUT>
+```
+
+### スケジュール済み — `/api/2.0/fo/schedule/scan/?action=list` / `/schedule/map/?action=list`
+
+```xml
+<SCHEDULE_SCAN_LIST_OUTPUT><RESPONSE><SCHEDULE_SCAN_LIST>
+ <SCAN>
+  <ID>10</ID><ACTIVE>1</ACTIVE><TITLE><![CDATA[weekly]]></TITLE>
+  <ASSET_GROUP_TITLE_LIST><ASSET_GROUP_TITLE>AB123</ASSET_GROUP_TITLE></ASSET_GROUP_TITLE_LIST>
+  <SCHEDULE><NEXTLAUNCH_UTC>2026-09-01T02:00:00Z</NEXTLAUNCH_UTC></SCHEDULE>
+ </SCAN>
+</SCHEDULE_SCAN_LIST></RESPONSE></SCHEDULE_SCAN_LIST_OUTPUT>
+```
+map 側はルートが `SCHEDULE_MAP_LIST_OUTPUT`、要素が `<MAP>` で、対象は `<DOMAIN>`（または `TARGET`）。
+`ACTIVE` が無い版は「有効」とみなす。次回実行は `NEXTLAUNCH_UTC` 系の候補名を順に探す。
+
 ## 正規化マッピング（XML → 内部レコード）
 
 | 内部 | AssetGroup | Host | Domain |

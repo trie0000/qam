@@ -202,6 +202,22 @@ qam/
 - [ ] 秘密情報・外部組織の固有名をコード/コミットに書かない
 - [ ] getComputedStyle で実ピクセル確認してから「完了」と言う（§0）
 
+## 7.5 四半期検査（SCAN/MAP の四半期充足チェック）
+
+「四半期に一度は SCAN / MAP 検査を実施する」運用ルールの充足を可視化する。判定ロジックは
+`src/inspection.ts`（純粋関数・vitest 対象）、XML パースは `src/inspection-parse.ts`、
+描画は `src/ui/views/inspection.ts`（ライセンス推移と同じダッシュボード型のカスタム DOM）。
+
+- **母集団**: 最新の AssetGroup スナップショットからタイトルが対象パターン
+  （既定 `^[A-Z]{2}[0-9]{3,4}D?$`・設定で変更可）に一致する AG。**再取得はしない**。
+- **MAP 対象**: 上記 AG の `set.DOMAIN_LIST` に登録されたドメイン。**空の AG は MAP 対象外**。
+- **判定**: 四半期内に完了実施あり → 検査済み / 四半期内に次回実行予定がある有効スケジュールあり →
+  スケジュール済み / どちらも無い → 未対応。四半期は年度開始月（既定 4）基準。
+- **取得**: `qualys.ts downloadInspection` が scan・map の実施済み/スケジュール 4 本を**順次**取得
+  （relay は単スレッドのため並列にしない）。結果の生 XML は `inspection/latest.json` に 1 セットだけ保持
+  （週次内訳は応答 XML の実施日時から再構成できるので履歴を積む必要が無い）。
+- **設定**: `fiscalStartMonth` / `inspectionAgPattern` を relay `/qam/config`（env）へ永続化。
+
 ## 8. 確定事項（2026-06-13）
 
 1. **AssetGroup のメンバ差分**: IPS（IP+範囲）と DNS_LIST の増減を差分対象に含める

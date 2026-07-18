@@ -177,19 +177,26 @@ function readUserQps(u: Element): QamRecord {
   return r;
 }
 
-export function parseQualysXml(xml: string, entity?: QamEntity): QamSnapshot {
-  // 先頭の BOM と空白/改行を除去（XML 宣言 <?xml は必ず先頭。先頭に空白/改行があると
-  // それだけで parsererror になる＝Qualys/Windows 由来ファイルでよくある）。
+// XML 文字列 → Document。先頭の BOM と空白/改行を除去（XML 宣言 <?xml は必ず先頭。先頭に
+// 空白/改行があるとそれだけで parsererror になる＝Qualys/Windows 由来ファイルでよくある）。
+// 一覧 XML 以外（scan/map 一覧・スケジュール一覧）のパーサからも共有する。
+export function parseXmlDocument(xml: string): Document {
   const cleaned = xml.replace(/^﻿/, '').replace(/^\s+/, '');
   const doc = new DOMParser().parseFromString(cleaned, 'application/xml');
   const root = doc.documentElement;
   if (!root) throw new Error('XML を解析できませんでした（空ファイル？）');
-  const rootName = root.nodeName;
   const pe = doc.getElementsByTagName('parsererror')[0];
-  if (rootName.toLowerCase() === 'parsererror' || pe) {
-    const detail = ((pe ? pe.textContent : rootName) || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (root.nodeName.toLowerCase() === 'parsererror' || pe) {
+    const detail = ((pe ? pe.textContent : root.nodeName) || '').replace(/\s+/g, ' ').trim().slice(0, 160);
     throw new Error('XML を解析できませんでした: ' + detail);
   }
+  return doc;
+}
+
+export function parseQualysXml(xml: string, entity?: QamEntity): QamSnapshot {
+  const doc = parseXmlDocument(xml);
+  const root = doc.documentElement;
+  const rootName = root.nodeName;
   // Qualys はエラーを HTTP 200 + <SIMPLE_RETURN> で返すことがある（認証/権限エラー等）。
   // 0 件として黙って取り込むと「反映されない」になるので、本文を出して中断する。
   if (rootName === 'SIMPLE_RETURN') {

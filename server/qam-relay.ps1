@@ -482,6 +482,8 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'backupRetentionDays') { Set-QamEnvValue $EnvFile 'QAM_BACKUP_RETENTION_DAYS' ([int]$b.backupRetentionDays) }
                 if ($b.PSObject.Properties.Name -contains 'userBusinessUnit') { Set-QamEnvValue $EnvFile 'QAM_USER_BUSINESS_UNIT' $b.userBusinessUnit }
                 if ($b.PSObject.Properties.Name -contains 'userCountry') { Set-QamEnvValue $EnvFile 'QAM_USER_COUNTRY' $b.userCountry }
+                if ($b.PSObject.Properties.Name -contains 'fiscalStartMonth') { Set-QamEnvValue $EnvFile 'QAM_FISCAL_START_MONTH' ([int]$b.fiscalStartMonth) }
+                if ($b.PSObject.Properties.Name -contains 'inspectionAgPattern') { Set-QamEnvValue $EnvFile 'QAM_INSPECTION_AG_PATTERN' $b.inspectionAgPattern }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -500,6 +502,8 @@ function Invoke-Route { param($Ctx)
                 backupRetentionDays = if ($null -ne $env:QAM_BACKUP_RETENTION_DAYS -and $env:QAM_BACKUP_RETENTION_DAYS -ne '') { [int]$env:QAM_BACKUP_RETENTION_DAYS } else { 7 }
                 userBusinessUnit = if ($env:QAM_USER_BUSINESS_UNIT) { $env:QAM_USER_BUSINESS_UNIT } else { 'Unassigned' }
                 userCountry = $env:QAM_USER_COUNTRY
+                fiscalStartMonth = if ($null -ne $env:QAM_FISCAL_START_MONTH -and $env:QAM_FISCAL_START_MONTH -ne '') { [int]$env:QAM_FISCAL_START_MONTH } else { 4 }
+                inspectionAgPattern = $env:QAM_INSPECTION_AG_PATTERN
             }; return
         }
         '^/qam/backup$' {

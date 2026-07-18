@@ -43,6 +43,16 @@ export interface QamEvent {
   propsOld?: { k: string; v: string }[];
 }
 
+// 四半期検査ビューが使う Qualys 応答の生 XML（取得時点のキャッシュ）。
+// 実施済み/スケジュールの scan・map を 1 セットで保持し、再取得なしで再描画できるようにする。
+export interface QamInspectionRaw {
+  scans: string;
+  maps: string;
+  scanSchedules: string;
+  mapSchedules: string;
+  fetchedAt: string; // ISO
+}
+
 // 資産単位の作業履歴コメント。
 export interface QamComment {
   ts: string;
