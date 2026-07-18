@@ -1,7 +1,7 @@
 // 資産一覧 / 変更履歴 の列定義（共通テーブル §25 用）。
 import { el, esc, clear } from './dom';
 import { openModal } from './modal';
-import { fmtStamp } from '../config';
+import { fmtStamp, settenId } from '../config';
 import type { Column } from './table';
 import type { QamComment, QamEntity, QamEvent, QamRecord } from '../types';
 
@@ -29,8 +29,8 @@ export function fmtJst(iso: string): string {
   return `${j.getUTCFullYear()}-${p(j.getUTCMonth() + 1)}-${p(j.getUTCDate())} ${p(j.getUTCHours())}:${p(j.getUTCMinutes())}:${p(j.getUTCSeconds())} JST`;
 }
 
-// 接続点ID: AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出す（形式ルールは設けない）。
-export const settenId = (title: string): string => (title || '').split(' ')[0];
+// 接続点ID の切り出しは config.ts に移動（四半期検査の対象判定でも使うため）。従来の import 先を保つ。
+export { settenId };
 
 // その資産の最新コメント本文（無ければ空）。フィルタ・並べ替え・エクスポートの照合に使う。
 const latestText = (api: CommentApi, id: string): string => {

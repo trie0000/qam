@@ -24,6 +24,10 @@ export const ENTITIES: { key: QamEntity; label: string }[] = [
   { key: 'user', label: 'User' },
 ];
 
+// 接続点ID: AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出す（形式ルールは設けない）。
+// 例: 'AB123 東京拠点ルータ' → 'AB123'。一覧の列表示と四半期検査の対象判定で共有する。
+export const settenId = (title: string): string => (title || '').split(' ')[0];
+
 export const today = (): string => new Date().toISOString().slice(0, 10);
 
 // 取込日時スタンプ（ローカル時刻・ファイル名/キー/辞書順ソート可）: 'YYYY-MM-DDTHH-mm-ss'

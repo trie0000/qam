@@ -201,25 +201,46 @@ describe('取得内訳（診断）', () => {
     expect(d.scan[0].status).toBe('pending');
   });
 
-  it('パターン不一致で対象外になったAGを母集団の内訳として返す', () => {
+  it('拠点名付きタイトルでも接続点IDを切り出して対象にする', () => {
     const recs = records(
-      group('IJ500'), group('IJ9999'),        // 完全一致するので対象
-      group('AB1234D 東京拠点'),               // 末尾に拠点名 → $ 一致せず対象外
-      group('共通グループ'), group('Prod'),
+      group('AB1234D 東京拠点'),   // ID=AB1234D → 対象
+      group('CD567 大阪'),         // ID=CD567   → 対象
+      group('IJ500'),              // タイトル全体がID → 対象
+      group('共通グループ'),        // ID=共通グループ → 対象外
+      group('Prod'),               // ID=Prod → 対象外
     );
     const d = computeInspection(recs, null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
     expect(d.sources.agTotal).toBe(5);
-    expect(d.sources.agMatched).toBe(2);
-    expect(d.scan.map((r) => r.key)).toEqual(['IJ500', 'IJ9999']);
-    expect(d.sources.agSkipped).toEqual(['AB1234D 東京拠点', 'Prod', '共通グループ']);
-    expect(d.pattern).toBe(DEFAULT_AG_PATTERN);
+    expect(d.sources.agMatched).toBe(3);
+    // 一覧は AssetGroup タイトルではなく接続点ID で並ぶ
+    expect(d.scan.map((r) => r.key)).toEqual(['AB1234D', 'CD567', 'IJ500']);
+    // 元のタイトルは参考として保持する
+    expect(d.scan[0].titles).toEqual(['AB1234D 東京拠点']);
+    // 対象外は「タイトル（ID: 抽出値）」で理由が分かる形にする
+    expect(d.sources.agSkipped).toEqual(['Prod（ID: Prod）', '共通グループ（ID: 共通グループ）']);
   });
 
-  it('末尾の $ を外した前方一致パターンなら拠点名付きも対象になる', () => {
-    const recs = records(group('AB1234D 東京拠点'), group('共通グループ'));
-    const d = computeInspection(recs, null, 4, '^[A-Z]{2}[0-9]{3,4}D?', new Date(2026, 6, 18));
-    expect(d.sources.agMatched).toBe(1);
-    expect(d.scan[0].key).toBe('AB1234D 東京拠点');
+  it('同一の接続点IDを持つ複数AssetGroupは1件に束ねる', () => {
+    const recs = records(group('AB123 東京'), group('AB123 東京(予備)'));
+    const d = computeInspection(recs, null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.scan).toHaveLength(1);
+    expect(d.scan[0].key).toBe('AB123');
+    expect(d.scan[0].titles).toEqual(['AB123 東京', 'AB123 東京(予備)']);
+  });
+
+  it('スキャン応答のAssetGroupタイトルも接続点IDへ揃えて突合する', () => {
+    // Qualys は「AB1234D 東京拠点」というタイトルで返すが、対象キーは接続点ID なので一致させる
+    const scans = `<?xml version="1.0"?><SCAN_LIST_OUTPUT><RESPONSE><SCAN_LIST>
+      <SCAN><LAUNCH_DATETIME>2026-07-09T02:00:00Z</LAUNCH_DATETIME><STATUS><STATE>Finished</STATE></STATUS>
+        <ASSET_GROUP_TITLE_LIST><ASSET_GROUP_TITLE>AB1234D 東京拠点</ASSET_GROUP_TITLE></ASSET_GROUP_TITLE_LIST>
+      </SCAN></SCAN_LIST></RESPONSE></SCAN_LIST_OUTPUT>`;
+    const d = computeInspection(
+      records(group('AB1234D 東京拠点')),
+      { scans, maps: '', scanSchedules: '', mapSchedules: '', fetchedAt: '2026-07-18T00:00:00Z' },
+      4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18),
+    );
+    expect(d.scan[0].status).toBe('done');
+    expect(d.sources.unmatchedScanAgs).toEqual([]);
   });
 
   it('未取得(raw=null)でも算出でき、件数は0になる', () => {

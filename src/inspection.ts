@@ -1,12 +1,15 @@
 // 四半期 SCAN/MAP 検査コンプライアンス判定（純粋ロジック・UI/IO を持たない）。
 //
 // ルール:
-//   - SCAN は AssetGroup 指定で実施。対象母集団は AG タイトルがパターンに一致するもの。
+//   - SCAN は AssetGroup 指定で実施。対象母集団は AG タイトルから切り出した
+//     **接続点ID**（settenId = タイトル先頭〜最初の半角スペース）がパターンに一致するもの。
+//     一覧も接続点ID 単位で出す（AssetGroup タイトルは参考表示）。
 //   - MAP はドメイン指定で実施。対象は上記 AG に登録された DOMAIN_LIST のドメイン。
 //     ドメイン未登録の AG は MAP 対象外。
 //   - 「検査済み」= 現四半期内に完了した実施がある。
 //   - 「スケジュール済み」= 現四半期内に次回実行予定があるアクティブなスケジュールがある。
 //   - どちらも無ければ「未対応」。
+import { settenId } from './config';
 import type { QamInspectionRaw, QamRecords } from './types';
 import type { MapRun, MapScheduleRow, ScanRun, ScanScheduleRow } from './inspection-parse';
 import { parseMapList, parseMapSchedules, parseScanList, parseScanSchedules } from './inspection-parse';
@@ -17,8 +20,10 @@ export type InspStatus = 'done' | 'scheduled' | 'pending';
 export interface QuarterWeek { no: number; start: Date; end: Date; label: string }
 export interface Quarter { fy: number; q: number; label: string; start: Date; end: Date; weeks: QuarterWeek[] }
 
-// 検査対象 1 件。scan は key=AG タイトル、map は key=ドメイン（ags=そのドメインを登録している AG）。
-export interface InspTarget { kind: InspKind; key: string; ags: string[] }
+// 検査対象 1 件。
+//   scan: key=接続点ID / ags=[接続点ID] / titles=元の AssetGroup タイトル
+//   map : key=ドメイン / ags=そのドメインを登録している接続点ID / titles=その AssetGroup タイトル
+export interface InspTarget { kind: InspKind; key: string; ags: string[]; titles: string[] }
 export interface InspRow extends InspTarget { status: InspStatus; doneAt: string; weekNo: number | null; nextLaunch: string }
 
 export interface RunHit { key: string; datetime: string }
@@ -76,42 +81,54 @@ export function quarterOf(now: Date, fiscalStartMonth = 4): Quarter {
   return { fy, q, label: `${fy}年度 Q${q}`, start, end, weeks: weeksOf(start, end) };
 }
 
-// AssetGroup スナップショットから SCAN 対象 AG と MAP 対象ドメインを導出。
+// AssetGroup スナップショットから SCAN 対象（接続点ID）と MAP 対象ドメインを導出。
+// パターンは AG タイトルそのものではなく、切り出した接続点ID に対して適用する。
 // DOMAIN_LIST が空の AG は MAP 対象に出さない（＝MAP 対象外）。
-// skipped にはパターン不一致で対象外になったタイトルを残す（「なぜ出ないのか」を UI で示すため）。
+// skipped には対象外になった「タイトル（抽出ID）」を残す（「なぜ出ないのか」を UI で示すため）。
 export interface BuiltTargets { scan: InspTarget[]; map: InspTarget[]; total: number; skipped: string[] }
 export function buildTargets(records: QamRecords, pattern: RegExp): BuiltTargets {
-  const scan: InspTarget[] = [];
   const skipped: string[] = [];
-  const domainAgs = new Map<string, string[]>();
+  const byId = new Map<string, InspTarget>();          // 接続点ID → SCAN 対象（同一IDの複数AGは束ねる）
+  const domains = new Map<string, InspTarget>();       // ドメイン → MAP 対象
   let total = 0;
+  const push = (t: InspTarget, ag: string, title: string): void => {
+    if (!t.ags.includes(ag)) t.ags.push(ag);
+    if (!t.titles.includes(title)) t.titles.push(title);
+  };
   for (const r of Object.values(records)) {
     const title = (r.scalar.TITLE || r.name || '').trim();
     if (!title) continue;
     total++;
-    if (!pattern.test(title)) { skipped.push(title); continue; }
-    scan.push({ kind: 'scan', key: title, ags: [title] });
+    const id = settenId(title);
+    if (!id || !pattern.test(id)) { skipped.push(`${title}（ID: ${id || '—'}）`); continue; }
+    const cur = byId.get(id) ?? { kind: 'scan' as const, key: id, ags: [id], titles: [] };
+    push(cur, id, title);
+    byId.set(id, cur);
     for (const raw of r.set.DOMAIN_LIST ?? []) {
       const dom = norm(raw);
       if (!dom) continue;
-      const ags = domainAgs.get(dom) ?? [];
-      if (!ags.includes(title)) ags.push(title);
-      domainAgs.set(dom, ags);
+      const d = domains.get(dom) ?? { kind: 'map' as const, key: dom, ags: [], titles: [] };
+      push(d, id, title);
+      domains.set(dom, d);
     }
   }
-  scan.sort((a, b) => a.key.localeCompare(b.key));
-  const map: InspTarget[] = [...domainAgs.entries()]
-    .map(([key, ags]) => ({ kind: 'map' as const, key, ags: ags.sort() }))
-    .sort((a, b) => a.key.localeCompare(b.key));
-  return { scan, map, total, skipped: skipped.sort() };
+  const sortTarget = (t: InspTarget): InspTarget => ({ ...t, ags: [...t.ags].sort(), titles: [...t.titles].sort() });
+  const byKey = (a: InspTarget, b: InspTarget): number => a.key.localeCompare(b.key);
+  return {
+    scan: [...byId.values()].map(sortTarget).sort(byKey),
+    map: [...domains.values()].map(sortTarget).sort(byKey),
+    total,
+    skipped: skipped.sort(),
+  };
 }
 
 // 実施・スケジュールを「対象キー → ヒット」の形へ正規化する。
+// Qualys が返すのは AssetGroup タイトルなので、対象と突き合わせる前に接続点ID へ揃える。
 export function scanRunHits(runs: ScanRun[]): RunHit[] {
   const out: RunHit[] = [];
   for (const r of runs) {
     if (!isFinished(r.state)) continue;
-    for (const ag of r.assetGroups) out.push({ key: ag, datetime: r.datetime });
+    for (const ag of r.assetGroups) out.push({ key: settenId(ag.trim()), datetime: r.datetime });
   }
   return out;
 }
@@ -120,7 +137,7 @@ export const mapRunHits = (runs: MapRun[]): RunHit[] =>
 
 export function scanSchedHits(rows: ScanScheduleRow[]): SchedHit[] {
   const out: SchedHit[] = [];
-  for (const s of rows) for (const ag of s.assetGroups) out.push({ key: ag, nextLaunch: s.nextLaunch, active: s.active });
+  for (const s of rows) for (const ag of s.assetGroups) out.push({ key: settenId(ag.trim()), nextLaunch: s.nextLaunch, active: s.active });
   return out;
 }
 // 1 タスクが複数ドメインを対象にできるので、ドメインごとのヒットに展開する。

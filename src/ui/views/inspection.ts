@@ -56,7 +56,7 @@ function statCard(title: string, rows: InspRow[]): HTMLElement {
 // 未対応 AssetGroup の一覧。SCAN 未実施か、登録ドメインに未対応 MAP がある AG を挙げる。
 function pendingSection(d: InspectionData): HTMLElement {
   if (!d.pending.length) {
-    return section('未対応の AssetGroup', '', el('p', { class: 'qam-insp-ok' }, ['未対応はありません。']));
+    return section('未対応の接続点', '', el('p', { class: 'qam-insp-ok' }, ['未対応はありません。']));
   }
   const rows = d.pending.map((p) => [
     p.ag,
@@ -64,9 +64,9 @@ function pendingSection(d: InspectionData): HTMLElement {
     p.mapPendingDomains.length ? p.mapPendingDomains.join(', ') : '—',
   ]);
   return section(
-    '未対応の AssetGroup',
-    '現四半期に実施も予定も無いもの。MAP 列は未対応のドメイン（ドメイン未登録の AG は MAP 対象外）。',
-    table(['AssetGroup', 'SCAN', '未対応の MAP ドメイン'], rows, 'qam-insp-pending'),
+    '未対応の接続点',
+    '現四半期に実施も予定も無いもの。MAP 列は未対応のドメイン（ドメイン未登録の接続点は MAP 対象外）。',
+    table(['接続点ID', 'SCAN', '未対応の MAP ドメイン'], rows, 'qam-insp-pending'),
   );
 }
 
@@ -91,18 +91,19 @@ function weeklySection(d: InspectionData): HTMLElement {
 // 対象×週マトリクス: 各対象がどの週に実施されたか。未対応は行ごと色分け。
 function matrixSection(d: InspectionData): HTMLElement {
   const all = [...d.scan, ...d.map];
-  const headers = ['種別', '対象', '所属 AssetGroup', '状態', '実施日 / 予定日', ...d.weeks.map((w) => `第${w.no}週`)];
+  const headers = ['種別', '接続点ID / ドメイン', 'AssetGroup タイトル', '状態', '実施日 / 予定日', ...d.weeks.map((w) => `第${w.no}週`)];
   const rows = all.map((r) => [
     kindLabel(r),
-    r.key,
-    r.kind === 'map' ? r.ags.join(', ') : '—',
+    r.kind === 'map' ? r.key : r.key,
+    // SCAN は元の AssetGroup タイトル、MAP は「接続点ID: タイトル」で所属を示す。
+    r.kind === 'map' ? `${r.ags.join(', ')}${r.titles.length ? ` — ${r.titles.join(', ')}` : ''}` : r.titles.join(', '),
     badge(r.status),
     fmtDate(r.doneAt || r.nextLaunch),
     ...d.weeks.map((w) => (r.weekNo === w.no ? el('span', { class: 'qam-insp-dot', title: '実施' }) : el('span', { class: 'qam-insp-muted' }, ['']))),
   ]);
   return section(
     '対象 × 週 マトリクス',
-    '各 AssetGroup / ドメインが、どの週に検査されたか。実施週にマークが付く。',
+    '各 接続点ID / ドメインが、どの週に検査されたか。実施週にマークが付く。',
     table(headers, rows, 'qam-insp-matrix'),
   );
 }
@@ -113,7 +114,8 @@ function populationSection(d: InspectionData): HTMLElement {
   const s = d.sources;
   const body = el('div', { class: 'qam-insp-src' }, [
     el('p', { class: 'qam-insp-sec-note' }, [
-      `AssetGroup 全 ${s.agTotal} 件のうち ${s.agMatched} 件が対象パターン ${d.pattern} に一致（対象外 ${s.agSkipped.length} 件）。`,
+      `AssetGroup 全 ${s.agTotal} 件 → 接続点ID ${s.agMatched} 件が対象（対象外 ${s.agSkipped.length} 件）。`
+      + `接続点ID は AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出し、パターン ${d.pattern} で判定します。`,
     ]),
   ]);
   if (!s.agTotal) {
@@ -125,12 +127,11 @@ function populationSection(d: InspectionData): HTMLElement {
   if (s.agSkipped.length) {
     body.append(
       el('p', { class: 'qam-insp-warn' }, [
-        `対象外になった AssetGroup（${s.agSkipped.length} 件）: ${s.agSkipped.join(', ')}`,
+        `対象外（${s.agSkipped.length} 件）: ${s.agSkipped.join(' / ')}`,
       ]),
       el('p', { class: 'qam-insp-sec-note' }, [
-        'パターンは「タイトル全体」に対する完全一致です（^ と $ で囲まれているため、'
-        + 'タイトルに拠点名などが付いていると一致しません）。前方一致にしたい場合は末尾の $ を外し、'
-        + '一部だけを対象にしたい場合は接頭辞を限定してください。共通設定の「四半期検査: 対象 AssetGroup パターン」で変更できます。',
+        'かっこ内が切り出した接続点ID です。ID が想定と違う場合はタイトルの区切り（半角スペース）を、'
+        + 'ID は正しいのに対象外になる場合はパターンを、共通設定の「四半期検査: 対象 AssetGroup パターン」で調整してください。',
       ]),
     );
   }
@@ -155,9 +156,9 @@ function sourcesSection(d: InspectionData): HTMLElement {
   ]);
   if (s.unmatchedScanAgs.length) {
     body.append(el('p', { class: 'qam-insp-warn' }, [
-      `対象に含まれない AssetGroup が実施済みスキャンに ${s.unmatchedScanAgs.length} 件ありました: ${s.unmatchedScanAgs.join(', ')}`,
+      `対象に含まれない接続点ID が実施済みスキャンに ${s.unmatchedScanAgs.length} 件ありました: ${s.unmatchedScanAgs.join(', ')}`,
     ]), el('p', { class: 'qam-insp-sec-note' }, [
-      '実際に検査されている AssetGroup が対象パターンに一致していない可能性があります。共通設定の「四半期検査: 対象 AssetGroup パターン」を実態に合わせてください。',
+      '検査は実施されているが、その接続点が対象母集団に入っていない状態です（AssetGroup 未取込か、パターン不一致）。',
     ]));
   }
   if (s.unmatchedMapDomains.length) {
@@ -179,9 +180,9 @@ function sourcesSection(d: InspectionData): HTMLElement {
 function sheets(d: InspectionData): Sheet[] {
   const target: Sheet = {
     name: '検査状況',
-    headers: ['種別', '対象', '所属AssetGroup', '状態', '実施日', '予定日', '実施週'],
+    headers: ['種別', '接続点ID/ドメイン', '関係する接続点ID', 'AssetGroupタイトル', '状態', '実施日', '予定日', '実施週'],
     rows: [...d.scan, ...d.map].map((r) => [
-      kindLabel(r), r.key, r.kind === 'map' ? r.ags.join(' / ') : '',
+      kindLabel(r), r.key, r.kind === 'map' ? r.ags.join(' / ') : r.key, r.titles.join(' / '),
       STATUS_LABEL[r.status], fmtDate(r.doneAt), fmtDate(r.nextLaunch), r.weekNo ? `第${r.weekNo}週` : '',
     ]),
   };
@@ -192,8 +193,8 @@ function sheets(d: InspectionData): Sheet[] {
       String(w.scanDone), String(w.scanCum), String(w.mapDone), String(w.mapCum)]),
   };
   const pending: Sheet = {
-    name: '未対応AssetGroup',
-    headers: ['AssetGroup', 'SCAN未対応', '未対応MAPドメイン'],
+    name: '未対応接続点',
+    headers: ['接続点ID', 'SCAN未対応', '未対応MAPドメイン'],
     rows: d.pending.map((p) => [p.ag, p.scanPending ? '未対応' : '', p.mapPendingDomains.join(' / ')]),
   };
   return [target, weekly, pending];
