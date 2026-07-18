@@ -56,13 +56,14 @@ export async function fetchQualys(body: Record<string, unknown>): Promise<FetchR
 
 // Qualys ユーザ登録（/msp/user.php?action=add）。relay が Basic 認証＋プロキシで叩く。
 export interface UserAddResult { ok: boolean; login?: string; error?: string; status?: number }
-export const qualysUserAdd = (body: { base: string; user: string; pass: string; proxy: string; fields: Record<string, string> }): Promise<UserAddResult> =>
+export const qualysUserAdd = (body: { base: string; user: string; pass: string; proxy: string; author?: string; fields: Record<string, string> }): Promise<UserAddResult> =>
   postJson('/qam/qualys/user-add', body);
 
 // スケジュール登録（作成）。relay が form-urlencoded で POST し、応答XMLをそのまま返す。
 export interface ScheduleAddResult { ok: boolean; status?: number; xml?: string; error?: string }
+// author は監査ログ（api-audit.log）に残すため。認証情報はログに出さない。
 export const qualysScheduleAdd = (body: {
-  base: string; user: string; pass: string; proxy: string; path: string; fields: Record<string, string>;
+  base: string; user: string; pass: string; proxy: string; path: string; author: string; fields: Record<string, string>;
 }): Promise<ScheduleAddResult> => postJson('/qam/qualys/schedule-add', body);
 
 export interface SessionResult { ok: boolean; status?: number; error?: string }
@@ -71,7 +72,9 @@ export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/
 
 // fiscalStartMonth: 年度開始月(1-12・既定4)。四半期の区切りに使う。
 // inspectionAgPattern: 四半期検査の対象 AssetGroup を選ぶ正規表現（既定は接続点ID形式）。
-export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; backupIntervalMin: number; backupRetentionDays: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string }
+// scanOptionProfile / mapOptionProfile: 検査登録時に既定で適用するオプションプロファイル（種別ごと）。
+// scannerAppliance: 既定スキャナー（既定 External）。scheduleTimeZone: 既定タイムゾーン（既定 JP）。
+export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; backupIntervalMin: number; backupRetentionDays: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string }
 export const getConfig = (): Promise<RelayConfig> => fetch(`${RELAY}/qam/config`).then((r) => r.json());
 export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfig> => {
   const r = await fetch(`${RELAY}/qam/config`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });

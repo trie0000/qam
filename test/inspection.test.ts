@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_AG_PATTERN, agPattern, quarterOf, buildTargets, classify, countStatus, weeklySummary,
-  pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished, computeInspection, buildMatrix,
+  pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished, computeInspection, buildMatrix, buildEntries,
 } from '../src/inspection';
 import { parseScanList, parseMapList, parseScanSchedules, parseMapSchedules, parseMapTargets } from '../src/inspection-parse';
 import { qualysErrorText } from '../src/qualys';
@@ -559,5 +559,46 @@ describe('SCAN 対象条件（IP未登録の扱い）', () => {
     const d = computeInspection(records(group('AB123 東京', ['a.example'], [])), null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
     expect(d.matrix[0]).toMatchObject({ ag: 'AB123', scanStatus: null, mapStatus: 'pending' });
     expect(d.sources.agScanExcluded).toEqual(['AB123 東京（ID: AB123）']);
+  });
+});
+
+describe('検査一覧（実行履歴・予約済み）', () => {
+  it('実行履歴と予約済みを1つの一覧にまとめ、新しい順に並べる', () => {
+    const entries = buildEntries(
+      [{ ref: 'scan/1', title: 'run scan', datetime: '2026-07-09T02:00:00Z', state: 'Finished', assetGroups: ['AB123 東京'] }],
+      [{ ref: 'map/1', title: 'run map', datetime: '2026-07-02T02:00:00Z', state: 'FINISHED', domain: 'a.example' }],
+      [{ id: '10', title: 'sched scan', active: true, nextLaunch: '2026-09-01T02:00:00Z', assetGroups: ['CD456 大阪'] }],
+      [{ id: '20', title: 'sched map', active: false, nextLaunch: '2026-08-01T02:00:00Z', domains: ['b.example'], assetGroups: ['EF789 名古屋'] }],
+    );
+    expect(entries.map((e) => e.title)).toEqual(['sched scan', 'sched map', 'run scan', 'run map']); // 日時の降順
+    expect(entries.map((e) => e.category)).toEqual(['schedule', 'schedule', 'run', 'run']);
+  });
+
+  it('接続点IDを対象から切り出し、予約は有効/無効を状態に出す', () => {
+    const entries = buildEntries(
+      [{ ref: 'scan/1', title: 't', datetime: '2026-07-09T02:00:00Z', state: 'Finished', assetGroups: ['AB123 東京', 'CD456 大阪'] }],
+      [], [],
+      [{ id: '20', title: 'm', active: false, nextLaunch: '2026-08-01T02:00:00Z', domains: ['b.example'], assetGroups: ['EF789 名古屋'] }],
+    );
+    const run = entries.find((e) => e.category === 'run')!;
+    expect(run.setten).toBe('AB123, CD456');
+    expect(run.target).toBe('AB123 東京, CD456 大阪');
+    const sched = entries.find((e) => e.category === 'schedule')!;
+    expect(sched).toMatchObject({ kind: 'map', state: '無効', target: 'b.example', setten: 'EF789' });
+  });
+
+  it('computeInspection の結果に一覧が含まれる', () => {
+    const scans = `<?xml version="1.0"?><SCAN_LIST_OUTPUT><RESPONSE><SCAN_LIST>
+      <SCAN><REF>scan/1</REF><TITLE>t</TITLE><LAUNCH_DATETIME>2026-07-09T02:00:00Z</LAUNCH_DATETIME>
+        <STATUS><STATE>Finished</STATE></STATUS>
+        <ASSET_GROUP_TITLE_LIST><ASSET_GROUP_TITLE>AB123 東京</ASSET_GROUP_TITLE></ASSET_GROUP_TITLE_LIST>
+      </SCAN></SCAN_LIST></RESPONSE></SCAN_LIST_OUTPUT>`;
+    const d = computeInspection(
+      records(group('AB123 東京')),
+      { scans, maps: '', scanSchedules: '', mapSchedules: '', fetchedAt: '2026-07-18T00:00:00Z' },
+      4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18),
+    );
+    expect(d.entries).toHaveLength(1);
+    expect(d.entries[0]).toMatchObject({ category: 'run', kind: 'scan', setten: 'AB123', state: 'Finished' });
   });
 });

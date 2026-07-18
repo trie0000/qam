@@ -257,6 +257,53 @@ export function weeklySummary(scan: InspRow[], map: InspRow[], q: Quarter): Week
   });
 }
 
+// 検査一覧の 1 行。実行履歴（実施済み）と予約済み（スケジュール）を同じ表に並べる。
+//   category: 'run'=実行履歴 / 'schedule'=予約済み
+//   datetime: run=実施日時 / schedule=次回実行予定
+export interface InspEntry {
+  kind: InspKind;
+  category: 'run' | 'schedule';
+  title: string;
+  target: string;   // AssetGroup タイトルまたはドメイン
+  setten: string;   // 対象から導いた接続点ID（scan のみ。map は空）
+  datetime: string;
+  state: string;    // run=Finished 等 / schedule=有効・無効
+  ref: string;
+}
+
+export function buildEntries(
+  scanRuns: ScanRun[], mapRuns: MapRun[], scanScheds: ScanScheduleRow[], mapScheds: MapScheduleRow[],
+): InspEntry[] {
+  const out: InspEntry[] = [];
+  const ags = (list: string[]): string => list.join(', ');
+  for (const r of scanRuns) {
+    out.push({
+      kind: 'scan', category: 'run', title: r.title, target: ags(r.assetGroups),
+      setten: r.assetGroups.map((a) => settenId(a.trim())).filter(Boolean).join(', '),
+      datetime: r.datetime, state: r.state || '—', ref: r.ref,
+    });
+  }
+  for (const m of mapRuns) {
+    out.push({ kind: 'map', category: 'run', title: m.title, target: m.domain, setten: '', datetime: m.datetime, state: m.state || '—', ref: m.ref });
+  }
+  for (const s of scanScheds) {
+    out.push({
+      kind: 'scan', category: 'schedule', title: s.title, target: ags(s.assetGroups),
+      setten: s.assetGroups.map((a) => settenId(a.trim())).filter(Boolean).join(', '),
+      datetime: s.nextLaunch, state: s.active ? '有効' : '無効', ref: s.id,
+    });
+  }
+  for (const m of mapScheds) {
+    out.push({
+      kind: 'map', category: 'schedule', title: m.title, target: m.domains.join(', '),
+      setten: m.assetGroups.map((a) => settenId(a.trim())).filter(Boolean).join(', '),
+      datetime: m.nextLaunch, state: m.active ? '有効' : '無効', ref: m.id,
+    });
+  }
+  // 新しい順（日時が読めないものは末尾）。
+  return out.sort((a, b) => (b.datetime || '').localeCompare(a.datetime || ''));
+}
+
 // 対象×週マトリクスの 1 行（接続点単位で SCAN と MAP を併記する統合行）。
 // MAP は接続点配下の全ドメインを集約: 1つでも未対応なら未対応 / 残りが予約のみなら予約 / 全部済なら検査済み。
 export interface MatrixRow {
@@ -341,6 +388,7 @@ export interface InspectionData {
   map: InspRow[];
   weeks: WeekSummary[];
   matrix: MatrixRow[];
+  entries: InspEntry[];   // 実行履歴＋予約済みの一覧
   pending: PendingAg[];
   fetchedAt: string;
   pattern: string; // 適用した対象パターン（UI で提示して調整できるように）
@@ -385,6 +433,7 @@ export function computeInspection(
     quarter: q, scan, map,
     weeks: weeklySummary(scan, map, q),
     matrix: buildMatrix(scan, map),
+    entries: buildEntries(scanRunRows, mapRunRows, scanSchedRows, mapSchedRows),
     pending: pendingAgs(scan, map),
     fetchedAt: raw?.fetchedAt ?? '',
     pattern: patternSrc || DEFAULT_AG_PATTERN,

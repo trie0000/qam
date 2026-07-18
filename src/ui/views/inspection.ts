@@ -7,12 +7,17 @@ import { el } from '../dom';
 import { icon } from '../../icons';
 import { renderTable, type Column } from '../table';
 import { exportCsv, exportXlsxBook, type Sheet } from '../../export';
-import { countStatus, type InspectionData, type InspRow, type InspStatus, type MatrixRow, type WeekSummary } from '../../inspection';
+import { countStatus, type InspectionData, type InspEntry, type InspRow, type InspStatus, type MatrixRow, type WeekSummary } from '../../inspection';
 
 const STATUS_LABEL: Record<InspStatus, string> = { done: '検査済み', scheduled: 'スケジュール済み', pending: '未対応' };
 const STATUS_CLASS: Record<InspStatus, string> = { done: 'is-done', scheduled: 'is-sched', pending: 'is-pending' };
 
 const fmtDate = (iso: string): string => (iso ? new Date(iso).toLocaleDateString('ja-JP') : '');
+const fmtDateTime = (iso: string): string => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso : d.toLocaleString('ja-JP');
+};
 const kindLabel = (r: InspRow): string => (r.kind === 'scan' ? 'SCAN' : 'MAP');
 
 // 見出し付きのセクション枠。
@@ -131,6 +136,37 @@ function matrixSection(d: InspectionData): HTMLElement {
     '対象 × 週 マトリクス',
     'S=SCAN / M=MAP。緑が実施済み、橙が予約（その週に実行予定）。週の見出しはその週の開始日。列名クリックで並べ替え・絞り込み。',
     commonTable('inspection.matrix', cols, d.matrix, (r: MatrixRow) => r.ag, 'qam-insp-tbl--fill'),
+  );
+}
+
+// 検査一覧: 実行履歴と予約済みを 1 つの表に並べる。「区分」列で絞り込めば片方だけ見られる。
+function entriesSection(d: InspectionData): HTMLElement {
+  const cat = (e: InspEntry): string => (e.category === 'run' ? '実行履歴' : '予約済み');
+  const cols: Column[] = [
+    {
+      id: 'category', label: '区分', width: 110,
+      render: (e: InspEntry) => `<span class="qam-insp-badge ${e.category === 'run' ? 'is-done' : 'is-sched'}">${cat(e)}</span>`,
+      sortVal: cat,
+    },
+    { id: 'kind', label: '種別', mono: true, width: 80, render: (e: InspEntry) => (e.kind === 'scan' ? 'SCAN' : 'MAP') },
+    {
+      id: 'datetime', label: '実施日時 / 次回予定', mono: true, width: 190,
+      render: (e: InspEntry) => fmtDateTime(e.datetime),
+      sortVal: (e: InspEntry) => e.datetime || '',
+    },
+    { id: 'state', label: '状態', width: 110, render: (e: InspEntry) => e.state },
+    { id: 'setten', label: '接続点ID', mono: true, width: 140, render: (e: InspEntry) => e.setten || '—' },
+    { id: 'target', label: '対象', render: (e: InspEntry) => e.target || '—' },
+    { id: 'title', label: 'タイトル', render: (e: InspEntry) => e.title || '—' },
+    { id: 'ref', label: '参照', mono: true, width: 160, render: (e: InspEntry) => e.ref || '—' },
+  ];
+  const runs = d.entries.filter((e) => e.category === 'run').length;
+  const scheds = d.entries.length - runs;
+  return section(
+    '検査一覧（実行履歴・予約済み）',
+    `取得した応答そのままの一覧。実行履歴 ${runs} 件 / 予約済み ${scheds} 件。`
+    + '「区分」列で実行履歴だけ・予約済みだけに絞り込めます。',
+    commonTable('inspection.entries', cols, d.entries, (e: InspEntry) => `${e.category}:${e.kind}:${e.ref}:${e.datetime}`, 'qam-insp-tbl--fill'),
   );
 }
 
@@ -287,7 +323,7 @@ function toolbarRow(o: InspectionViewOpts): HTMLElement {
     : '未取得（「Qualys から取得」を押してください）';
   // 取込日の切替（過去のスナップショットを後から確認する）。新しい順に並べる。
   // Qualys への書き込み。押しやすい位置に置きすぎないよう取得系の後ろへ。
-  const addBtn = el('button', { class: 'btn btn--sm', title: 'Qualys に新しいスケジュールを作成します', html: `${icon('calendar', 14)}<span>スケジュール登録</span>` });
+  const addBtn = el('button', { class: 'btn btn--sm', title: 'Qualys に新しい検査スケジュールを登録します', html: `${icon('calendar', 14)}<span>新規検査登録</span>` });
   addBtn.addEventListener('click', o.onAddSchedule);
   const items: (Node | string)[] = [fetchBtn, csvBtn, xlsxBtn, addBtn];
   if (o.dates.length) {
@@ -319,7 +355,7 @@ export function renderInspectionView(o: InspectionViewOpts): HTMLElement {
   // 未対応の一覧はマトリクスの SCAN/MAP 列で絞り込めるので独立セクションは置かない。
   return el('div', { class: 'qam-insp' }, [
     head, toolbarRow(o), cards,
-    weeklySection(d), matrixSection(d),
+    weeklySection(d), matrixSection(d), entriesSection(d),
     populationSection(d), sourcesSection(d),
   ]);
 }

@@ -69,6 +69,7 @@ if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path
 # プロバイダ接頭辞や「パス形式非対応」例外を招く。env の値をそのまま素のパスとして使う（末尾区切りのみ除去）。
 $DataFull = ([string]$DataDir).TrimEnd('\', '/')
 $script:LogFile = Join-Path $DataFull 'relay.log'
+$script:AuditFile = Join-Path $DataFull 'api-audit.log'  # 更新系APIの監査ログ（実行者・API・パラメータ）
 $script:QamStop = $false
 # Qualys セッション（login で取得し fetch で使い回し、logout で破棄）。
 $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null
@@ -85,6 +86,17 @@ function Set-Cors { param($Resp)
 # コンソールに出しつつ relay.log にも追記（コンソールを見れない時の証跡）。
 function Add-QamLog { param([string]$Text)
     try { Add-Content -LiteralPath $script:LogFile -Value ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Text) -Encoding UTF8 } catch { }
+}
+
+# 更新系 API（Qualys への書き込み）の監査ログ。専用ファイルに「実行者・発行API・パラメータ・結果」を残す。
+# 参照系は対象外。認証情報は絶対に書かない（$Fields に user/pass は含めない前提で呼ぶこと）。
+function Add-QamAudit {
+    param([string]$Author, [string]$Method, [string]$Url, [string]$Fields, [string]$Result)
+    $line = "{0}`tauthor={1}`t{2} {3}`tparams={4}`tresult={5}" -f `
+        (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `
+        $(if ($Author) { $Author } else { '(未設定)' }), $Method, $Url, $Fields, $Result
+    try { Add-Content -LiteralPath $script:AuditFile -Value $line -Encoding UTF8 } catch { }
+    Write-Host "[qam] AUDIT $line" -ForegroundColor Yellow
 }
 function Send-Bytes { param($Ctx, [byte[]]$Bytes, [string]$Type, [int]$Status = 200)
     $r = $Ctx.Response; Set-Cors $r; $r.StatusCode = $Status; $r.ContentType = $Type
@@ -367,6 +379,7 @@ function Invoke-QualysScheduleAdd { param($Body)
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         Add-QamLog "SCHEDADD start POST $url ($form)"
+        Add-QamAudit $Body.author 'POST' $url $form 'start'
         Write-Host "[qam] schedule-add POST $url" -ForegroundColor DarkCyan
         $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
         $resp = $client.PostAsync($url, $content).Result
@@ -377,6 +390,7 @@ function Invoke-QualysScheduleAdd { param($Body)
         if ($snippet.Length -gt 1500) { $snippet = $snippet.Substring(0, 1500) + ' …(truncated)' }
         Write-Host "[qam] schedule-add -> HTTP $([int]$resp.StatusCode): $snippet" -ForegroundColor DarkCyan
         Add-QamLog "SCHEDADD done HTTP $([int]$resp.StatusCode) $snippet"
+        Add-QamAudit $Body.author 'POST' $url $form ("HTTP $([int]$resp.StatusCode) $snippet")
         # 成否判定は XML の中身で行うため、ここでは本文と status をそのまま返す。
         return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode; xml = $xml }
     } finally { $client.Dispose(); $handler.Dispose() }
@@ -411,6 +425,7 @@ function Invoke-QualysUserAdd { param($Body)
         # パスワードは出さず、ログイン名以外のフィールドだけログに残す。
         $logFields = if ($Body.fields) { ($Body.fields.PSObject.Properties | ForEach-Object { "$($_.Name)=$($_.Value)" }) -join ', ' } else { '' }
         Add-QamLog "USERADD start $base/msp/user.php ($logFields)"
+        Add-QamAudit $Body.author 'GET' "$base/msp/user.php" $logFields 'start'
         $resp = $client.GetAsync($url).Result
         $content = $resp.Content
         $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
@@ -536,6 +551,10 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'userCountry') { Set-QamEnvValue $EnvFile 'QAM_USER_COUNTRY' $b.userCountry }
                 if ($b.PSObject.Properties.Name -contains 'fiscalStartMonth') { Set-QamEnvValue $EnvFile 'QAM_FISCAL_START_MONTH' ([int]$b.fiscalStartMonth) }
                 if ($b.PSObject.Properties.Name -contains 'inspectionAgPattern') { Set-QamEnvValue $EnvFile 'QAM_INSPECTION_AG_PATTERN' $b.inspectionAgPattern }
+                if ($b.PSObject.Properties.Name -contains 'scanOptionProfile') { Set-QamEnvValue $EnvFile 'QAM_SCAN_OPTION_PROFILE' $b.scanOptionProfile }
+                if ($b.PSObject.Properties.Name -contains 'mapOptionProfile') { Set-QamEnvValue $EnvFile 'QAM_MAP_OPTION_PROFILE' $b.mapOptionProfile }
+                if ($b.PSObject.Properties.Name -contains 'scannerAppliance') { Set-QamEnvValue $EnvFile 'QAM_SCANNER_APPLIANCE' $b.scannerAppliance }
+                if ($b.PSObject.Properties.Name -contains 'scheduleTimeZone') { Set-QamEnvValue $EnvFile 'QAM_SCHEDULE_TIME_ZONE' $b.scheduleTimeZone }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -556,6 +575,10 @@ function Invoke-Route { param($Ctx)
                 userCountry = $env:QAM_USER_COUNTRY
                 fiscalStartMonth = if ($null -ne $env:QAM_FISCAL_START_MONTH -and $env:QAM_FISCAL_START_MONTH -ne '') { [int]$env:QAM_FISCAL_START_MONTH } else { 4 }
                 inspectionAgPattern = $env:QAM_INSPECTION_AG_PATTERN
+                scanOptionProfile = $env:QAM_SCAN_OPTION_PROFILE
+                mapOptionProfile = $env:QAM_MAP_OPTION_PROFILE
+                scannerAppliance = if ($env:QAM_SCANNER_APPLIANCE) { $env:QAM_SCANNER_APPLIANCE } else { 'External' }
+                scheduleTimeZone = if ($env:QAM_SCHEDULE_TIME_ZONE) { $env:QAM_SCHEDULE_TIME_ZONE } else { 'JP' }
             }; return
         }
         '^/qam/backup$' {

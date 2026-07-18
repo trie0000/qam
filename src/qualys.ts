@@ -243,12 +243,12 @@ export function scheduleResult(xml: string): { ok: boolean; message: string } {
   return { ok: true, message: text || '登録しました' };
 }
 
-export async function createSchedule(creds: QualysCreds, input: ScheduleInput): Promise<{ message: string }> {
+export async function createSchedule(creds: QualysCreds, input: ScheduleInput, author: string): Promise<{ message: string }> {
   const errors = validateSchedule(input);
   if (errors.length) throw new Error(errors.join(' / '));
   const res = await qualysScheduleAdd({
     base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, proxy: creds.proxy,
-    path: SCHEDULE_PATHS[input.kind], fields: scheduleParams(input),
+    path: SCHEDULE_PATHS[input.kind], author, fields: scheduleParams(input),
   });
   if (res.error) throw new Error(res.error);
   const r = scheduleResult(res.xml ?? '');

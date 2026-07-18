@@ -7,10 +7,19 @@ import {
   type Occurrence, type ScheduleInput, type ScheduleKind, type Weekday,
 } from '../../schedule';
 
+// 共通設定から渡す既定値。オプションプロファイルは種別ごとに違うので両方受け取る。
+export interface ScheduleDefaults {
+  scanOptionProfile: string;
+  mapOptionProfile: string;
+  scannerAppliance: string;   // 既定 External
+  timeZoneCode: string;       // 既定 JP
+}
+
 export interface ScheduleFormOpts {
   today: string;                       // 開始日の既定値（YYYY-MM-DD）
   assetGroups: string[];               // SCAN 対象の候補（AssetGroup タイトル）
   domains: string[];                   // MAP 対象の候補（ドメイン）
+  defaults: ScheduleDefaults;
   confirm: (summary: string) => Promise<boolean>;
   submit: (input: ScheduleInput) => Promise<string>;   // 成功時のメッセージを返す
   onDone: () => void;
@@ -44,8 +53,8 @@ export function openScheduleForm(o: ScheduleFormOpts): void {
   active.append(el('option', { value: 'no' }, ['無効で作成（Qualys で確認してから有効化）']), el('option', { value: 'yes' }, ['有効で作成（次回実行予定に入る）']));
   const scanTarget = targetInput('qam-sched-ag', o.assetGroups);
   const mapTarget = targetInput('qam-sched-dom', o.domains);
-  const optionProfile = el('input', { class: 'in', placeholder: '未入力ならアカウント既定のプロファイル' }) as HTMLInputElement;
-  const scanner = el('input', { class: 'in', placeholder: '未入力なら既定スキャナー（例: external）' }) as HTMLInputElement;
+  const optionProfile = el('input', { class: 'in', value: o.defaults.scanOptionProfile, placeholder: '未入力ならアカウント既定のプロファイル' }) as HTMLInputElement;
+  const scanner = el('input', { class: 'in', value: o.defaults.scannerAppliance, placeholder: '未入力なら既定スキャナー（例: External）' }) as HTMLInputElement;
 
   const occurrence = el('select', { class: 'in' }) as HTMLSelectElement;
   occurrence.append(el('option', { value: 'daily' }, ['毎日']), el('option', { value: 'weekly' }, ['毎週']), el('option', { value: 'monthly' }, ['毎月']));
@@ -64,7 +73,7 @@ export function openScheduleForm(o: ScheduleFormOpts): void {
   const startDate = el('input', { class: 'in', type: 'date', value: o.today }) as HTMLInputElement;
   const startHour = numInput(2, 0, 23);
   const startMinute = numInput(0, 0, 59);
-  const tz = el('input', { class: 'in', value: 'JP' }) as HTMLInputElement;
+  const tz = el('input', { class: 'in', value: o.defaults.timeZoneCode }) as HTMLInputElement;
   const dst = el('input', { type: 'checkbox' }) as HTMLInputElement;
 
   // 周期・種別に応じて出し入れする行。
@@ -89,7 +98,14 @@ export function openScheduleForm(o: ScheduleFormOpts): void {
     show(rowMonthly, oc === 'monthly');
     show(rowDayOfMonth, oc === 'monthly');
   }
-  kind.addEventListener('change', syncRows);
+  // 種別に応じて既定のオプションプロファイルを差し替える。
+  // 利用者が自分で書き換えた値は上書きしない（既定値のままのときだけ入れ替える）。
+  kind.addEventListener('change', () => {
+    const from = kind.value === 'scan' ? o.defaults.mapOptionProfile : o.defaults.scanOptionProfile;
+    const to = kind.value === 'scan' ? o.defaults.scanOptionProfile : o.defaults.mapOptionProfile;
+    if (optionProfile.value === from) optionProfile.value = to;
+    syncRows();
+  });
   occurrence.addEventListener('change', syncRows);
 
   const err = el('div', { class: 'qam-sched-err', hidden: true });
