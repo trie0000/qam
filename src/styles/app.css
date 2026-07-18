@@ -411,8 +411,15 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-insp-tblwrap { display: flex; flex-direction: column; gap: var(--s-2); }
 .qam-insp-tblbar { display: flex; justify-content: flex-end; }
 .qam-insp-tbl { border: 1px solid var(--line); border-radius: var(--r-2); }
-/* 表の左右パディングは枠内では不要（枠線に沿わせる） */
-.qam-insp-tbl .qam-tablewrap { padding: 0; overflow: visible; }
+/* 枠線に沿わせつつ、横にはみ出す表はここでスクロールさせる（overflow:visible にすると
+   横スクロールできなくなり右側の週が見えなくなる）。 */
+.qam-insp-tbl .qam-tablewrap { padding: 0; overflow: auto; }
+/* 週列が多いマトリクスは表示領域内に収め、横スクロールバーを画面内に出す
+   （表の末尾までスクロールしないとバーに届かない、を避ける）。 */
+.qam-insp-tbl--fill { height: calc(100vh - 260px); min-height: 360px; }
+/* 列名が切れないよう、四半期検査の表だけセル左右の余白を詰める。 */
+.qam-insp-tbl .qam-table th, .qam-insp-tbl .qam-table td {
+  padding-left: var(--s-3); padding-right: var(--s-3); }
 /* 週セルのマーク: S=SCAN / M=MAP。実施=ok、予約=warn。 */
 .qam-insp-mk { display: inline-block; min-width: 16px; text-align: center; font-weight: 700;
   font-family: var(--font-mono); font-size: var(--fs-md); line-height: 1.2; margin-right: 3px; }

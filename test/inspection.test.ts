@@ -5,6 +5,8 @@ import {
 } from '../src/inspection';
 import { parseScanList, parseMapList, parseScanSchedules, parseMapSchedules, parseMapTargets } from '../src/inspection-parse';
 import { qualysErrorText } from '../src/qualys';
+import { markText } from '../src/ui/views/inspection';
+import type { MatrixRow } from '../src/inspection';
 import type { QamRecord, QamRecords } from '../src/types';
 
 // AssetGroup スナップショットの最小レコードを作る。
@@ -500,5 +502,22 @@ describe('週次サマリ（実施/予約/累計）と統合マトリクス', ()
       { key: 'b.example', datetime: '2026-07-03T02:00:00Z' },
     ], [], q);
     expect(buildMatrix(scan, allDone)[0].mapStatus).toBe('done');
+  });
+});
+
+describe('週セルの表記（絞り込みの値リストに出る）', () => {
+  const row = (o: Partial<MatrixRow>): MatrixRow => ({
+    ag: 'AB123', titles: [], domains: [], scanStatus: null, mapStatus: null,
+    scanDoneWeek: null, scanSchedWeek: null, mapDoneWeeks: [], mapSchedWeeks: [], ...o,
+  });
+
+  it('0/1 ではなく S / M と予約を区別できる表記を返す', () => {
+    expect(markText(row({ scanDoneWeek: 1 }), 1)).toBe('S');
+    expect(markText(row({ scanSchedWeek: 1 }), 1)).toBe('S(予約)');
+    expect(markText(row({ mapDoneWeeks: [1] }), 1)).toBe('M');
+    expect(markText(row({ mapSchedWeeks: [1] }), 1)).toBe('M(予約)');
+    expect(markText(row({ scanDoneWeek: 1, mapDoneWeeks: [1] }), 1)).toBe('S M');
+    expect(markText(row({ scanDoneWeek: 1, mapSchedWeeks: [1] }), 1)).toBe('S M(予約)');
+    expect(markText(row({ scanDoneWeek: 2 }), 1)).toBe(''); // 別の週には出さない
   });
 });

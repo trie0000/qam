@@ -1,7 +1,8 @@
 // 四半期検査ビュー: 現四半期の SCAN/MAP 充足状況と週次の振り返り。
 // 達成率カード → 週次サマリ → 対象×週マトリクス → 対象母集団 → 取得内訳 の順に縦へ積む。
-// 一覧は共通テーブル(renderTable)を高さ未指定で置き、ページ全体でスクロールさせる
-// （内部スクロールの入れ子を作らない）。診断系の小さな表だけ素の table を使う。
+// 一覧は共通テーブル(renderTable)。週次サマリは高さ未指定でページの流れに置く。
+// マトリクスは週列が多く横スクロールが要るため、表示領域内に収まる高さを与えて
+// 横スクロールバーが画面内に出るようにする。診断系の小さな表だけ素の table を使う。
 import { el } from '../dom';
 import { icon } from '../../icons';
 import { renderTable, type Column } from '../table';
@@ -56,10 +57,10 @@ function statCard(title: string, rows: InspRow[]): HTMLElement {
 // 高さは固定せずページの流れに置く（内部スクロールの入れ子を作らない）。renderTable の
 // height:100% は高さ未指定の親の下では auto に解決され、全行がそのまま並ぶ。
 const selections = { weekly: new Set<string>(), matrix: new Set<string>() };
-function commonTable(viewId: string, columns: Column[], rows: unknown[], getKey: (r: any) => string): HTMLElement {
+function commonTable(viewId: string, columns: Column[], rows: unknown[], getKey: (r: any) => string, cls = ''): HTMLElement {
   const selected = viewId.endsWith('weekly') ? selections.weekly : selections.matrix;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
-  const host = el('div', { class: 'qam-insp-tbl' }, [
+  const host = el('div', { class: `qam-insp-tbl ${cls}`.trim() }, [
     renderTable({ viewId, columns, rows, getKey, selected, columnRef }),
   ]);
   const colBtn = el('button', { class: 'btn btn--sm', title: '表示する列を選択', html: `${icon('settings', 14)}<span>列表示</span>` });
@@ -90,13 +91,23 @@ function weeklySection(d: InspectionData): HTMLElement {
 // 週列の見出しは実際の日付（その週の開始日）。「第N週」より短く、いつの週かが直接わかる。
 const weekHead = (w: WeekSummary): string => w.period.split('〜')[0];
 
-// 週セルのマーク（S=SCAN / M=MAP、実施は緑・予約は橙）。cellText でタグは落ちるので絞り込み・出力もできる。
-const marks = (r: MatrixRow, no: number): string => {
+// 週セルの内容。表示は色付きマーク、並べ替え・絞り込み・出力にはテキストを使う。
+// sortVal は列名クリックの値リストにもなるので、0/1 ではなく意味のある表記を返す。
+export const markText = (r: MatrixRow, no: number): string => {
   const out: string[] = [];
-  if (r.scanDoneWeek === no) out.push('<span class="qam-insp-mk is-done">S</span>');
-  else if (r.scanSchedWeek === no) out.push('<span class="qam-insp-mk is-sched">S</span>');
-  if (r.mapDoneWeeks.includes(no)) out.push('<span class="qam-insp-mk is-done">M</span>');
-  else if (r.mapSchedWeeks.includes(no)) out.push('<span class="qam-insp-mk is-sched">M</span>');
+  if (r.scanDoneWeek === no) out.push('S');
+  else if (r.scanSchedWeek === no) out.push('S(予約)');
+  if (r.mapDoneWeeks.includes(no)) out.push('M');
+  else if (r.mapSchedWeeks.includes(no)) out.push('M(予約)');
+  return out.join(' ');
+};
+const marks = (r: MatrixRow, no: number): string => {
+  const mk = (t: string, done: boolean): string => `<span class="qam-insp-mk ${done ? 'is-done' : 'is-sched'}">${t}</span>`;
+  const out: string[] = [];
+  if (r.scanDoneWeek === no) out.push(mk('S', true));
+  else if (r.scanSchedWeek === no) out.push(mk('S', false));
+  if (r.mapDoneWeeks.includes(no)) out.push(mk('M', true));
+  else if (r.mapSchedWeeks.includes(no)) out.push(mk('M', false));
   return out.join('');
 };
 
@@ -111,15 +122,15 @@ function matrixSection(d: InspectionData): HTMLElement {
     { id: 'map', label: 'MAP', render: (r: MatrixRow) => st(r.mapStatus), sortVal: (r: MatrixRow) => stText(r.mapStatus) },
     { id: 'domains', label: 'ドメイン', render: (r: MatrixRow) => (r.domains.length ? r.domains.join(', ') : '—') },
     ...d.weeks.map((w): Column => ({
-      id: `w${w.no}`, label: weekHead(w), mono: true, width: 64,
+      id: `w${w.no}`, label: weekHead(w), mono: true, width: 80,
       render: (r: MatrixRow) => marks(r, w.no) || '',
-      sortVal: (r: MatrixRow) => (marks(r, w.no) ? '1' : '0'),
+      sortVal: (r: MatrixRow) => markText(r, w.no), // 絞り込みの値リストにそのまま出る
     })),
   ];
   return section(
     '対象 × 週 マトリクス',
     'S=SCAN / M=MAP。緑が実施済み、橙が予約（その週に実行予定）。週の見出しはその週の開始日。列名クリックで並べ替え・絞り込み。',
-    commonTable('inspection.matrix', cols, d.matrix, (r: MatrixRow) => r.ag),
+    commonTable('inspection.matrix', cols, d.matrix, (r: MatrixRow) => r.ag, 'qam-insp-tbl--fill'),
   );
 }
 
@@ -228,11 +239,7 @@ function sheets(d: InspectionData): Sheet[] {
       r.scanStatus ? STATUS_LABEL[r.scanStatus] : '対象外',
       r.mapStatus ? STATUS_LABEL[r.mapStatus] : '対象外',
       r.domains.join(' / '),
-      ...d.weeks.map((w) => {
-        const s = r.scanDoneWeek === w.no ? 'S' : (r.scanSchedWeek === w.no ? 'S(予約)' : '');
-        const m = r.mapDoneWeeks.includes(w.no) ? 'M' : (r.mapSchedWeeks.includes(w.no) ? 'M(予約)' : '');
-        return [s, m].filter(Boolean).join(' ');
-      }),
+      ...d.weeks.map((w) => markText(r, w.no)),
     ]),
   };
   const pending: Sheet = {
