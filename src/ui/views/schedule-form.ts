@@ -1,17 +1,14 @@
-// 簡易検査（検査登録）フォーム。1 回の登録で次を作る（種別で増減する）:
-//   AssetGroup「申請番号(仮)」作成 → ドメイン登録 → SCAN/MAP スケジュール登録
-// 左ペインの独立ビューにインラインで置く（モーダルではない）ので、
-// 本体（node）と送信処理（submit）を返す形にしてある。
+// 簡易検査（検査登録）フォーム。1 回の登録で次を作る（資産種別・検査種別で増減する）:
+//   AssetGroup「申請番号(仮)」作成 → （MAP のとき）ドメイン登録 → SCAN/MAP スケジュール登録
+// 検査は「検査予定日に1回だけ」実行する運用のため、繰り返し（周期）の設定は持たない。
+// 左ペインの独立ビューにインラインで置くので、本体（node）と送信処理（submit）を返す。
 // 本番 Qualys への書き込みなので、送信前に「何が作られるか」を必ず確認させる。
 // 命名・パラメータ組立・検証は provision.ts / schedule.ts（純粋関数）に委ねる。
 import { el } from '../dom';
+import { defaultScheduleInput, validateSchedule, type ScheduleInput } from '../../schedule';
 import {
-  WEEKDAYS, WEEKDAY_LABEL, defaultScheduleInput, validateSchedule,
-  type Occurrence, type ScheduleInput, type Weekday,
-} from '../../schedule';
-import {
-  DEFAULT_REGIONS, emptyIpEntry, planProvision, validateProvision, describeProvision,
-  type InspectKind, type IpEntry, type ProvisionInput, type RegionOption,
+  DEFAULT_REGIONS, planProvision, validateProvision, describeProvision,
+  type AssetType, type InspectKind, type IpEntry, type ProvisionInput, type RegionOption,
 } from '../../provision';
 
 export interface ScheduleDefaults {
@@ -68,8 +65,8 @@ function ipRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { no
   };
 }
 
-// DNS 名の入力行（複数）。
-function dnsRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { node: HTMLElement; read: () => string } {
+// FQDN の入力行（動的・複数）。
+function fqdnRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { node: HTMLElement; read: () => string } {
   const input = el('input', { class: 'in', placeholder: 'host1.example.jp（www. は付けない）' }) as HTMLInputElement;
   const del = el('button', { class: 'btn btn--sm', type: 'button' }, ['削除']);
   const node = el('div', { class: 'qam-prov-row' }, [input, del]);
@@ -78,10 +75,18 @@ function dnsRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { n
   return { node, read: () => input.value };
 }
 
+// 検査予定日(YYYY-MM-DD) → タイトル用 YYYYMMDD。
+const ymd = (iso: string): string => (iso || '').replace(/-/g, '');
+
 export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement; submit: () => Promise<boolean> } {
   const regions = o.regions.length ? o.regions : DEFAULT_REGIONS;
 
-  // ---- 払い出し（AssetGroup / ドメイン）----
+  // ---- 資産種別・払い出し（AssetGroup / ドメイン）----
+  const assetType = el('select', { class: 'in' }) as HTMLSelectElement;
+  assetType.append(
+    el('option', { value: 'static' }, ['静的（IP 資産）']),
+    el('option', { value: 'dynamic' }, ['動的（FQDN 指定）']),
+  );
   const appNo = el('input', { class: 'in', placeholder: '例: EXT-2026-001' }) as HTMLInputElement;
   const region = el('select', { class: 'in' }) as HTMLSelectElement;
   regions.forEach((r) => region.append(el('option', { value: r.code }, [`${r.label}（${r.code}）`])));
@@ -93,139 +98,132 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   );
 
   const ipRows: { node: HTMLElement; read: () => IpEntry }[] = [];
-  const dnsRows: { node: HTMLElement; read: () => string }[] = [];
+  const fqdnRows: { node: HTMLElement; read: () => string }[] = [];
   const ipList = el('div', { class: 'qam-prov-list' });
-  const dnsList = el('div', { class: 'qam-prov-list' });
+  const fqdnList = el('div', { class: 'qam-prov-list' });
   const preview = el('div', { class: 'qam-prov-preview' });
 
   const addIp = (): void => {
     const r = ipRow(refreshPreview, (n) => { const i = ipRows.findIndex((x) => x.node === n); if (i >= 0) { ipRows.splice(i, 1); n.remove(); refreshPreview(); } });
     ipRows.push(r); ipList.append(r.node); refreshPreview();
   };
-  const addDns = (): void => {
-    const r = dnsRow(refreshPreview, (n) => { const i = dnsRows.findIndex((x) => x.node === n); if (i >= 0) { dnsRows.splice(i, 1); n.remove(); refreshPreview(); } });
-    dnsRows.push(r); dnsList.append(r.node); refreshPreview();
+  const addFqdn = (): void => {
+    const r = fqdnRow(refreshPreview, (n) => { const i = fqdnRows.findIndex((x) => x.node === n); if (i >= 0) { fqdnRows.splice(i, 1); n.remove(); refreshPreview(); } });
+    fqdnRows.push(r); fqdnList.append(r.node); refreshPreview();
   };
   const addIpBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['＋ IP を追加']);
-  const addDnsBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['＋ DNS を追加']);
+  const addFqdnBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['＋ FQDN を追加']);
   addIpBtn.addEventListener('click', addIp);
-  addDnsBtn.addEventListener('click', addDns);
+  addFqdnBtn.addEventListener('click', addFqdn);
 
-  // ---- スケジュール（周期・開始日時）----
-  const title = el('input', { class: 'in', placeholder: '未入力なら AssetGroup 名を使います' }) as HTMLInputElement;
+  // ---- スケジュール（1回のみ: 検査予定日と開始時刻だけ）----
+  const title = el('input', { class: 'in', placeholder: 'AssetGroup名_YYYYMMDD が自動で入ります' }) as HTMLInputElement;
   const active = el('select', { class: 'in' }) as HTMLSelectElement;
-  active.append(el('option', { value: 'no' }, ['無効で作成（Qualys で確認してから有効化）']), el('option', { value: 'yes' }, ['有効で作成（次回実行予定に入る）']));
+  active.append(el('option', { value: 'no' }, ['無効で作成（Qualys で確認してから有効化）']), el('option', { value: 'yes' }, ['有効で作成（検査予定日に実行される）']));
   const scanOpt = el('input', { class: 'in', value: o.defaults.scanOptionProfile, placeholder: '未入力ならアカウント既定' }) as HTMLInputElement;
   const mapOpt = el('input', { class: 'in', value: o.defaults.mapOptionProfile, placeholder: '未入力ならアカウント既定' }) as HTMLInputElement;
   const scanner = el('input', { class: 'in', value: o.defaults.scannerAppliance }) as HTMLInputElement;
-  const occurrence = el('select', { class: 'in' }) as HTMLSelectElement;
-  occurrence.append(el('option', { value: 'daily' }, ['毎日']), el('option', { value: 'weekly' }, ['毎週']), el('option', { value: 'monthly' }, ['毎月']));
-  occurrence.value = 'weekly';
-  const freqDays = numInput(1, 1, 365);
-  const freqWeeks = numInput(1, 1, 52);
-  const freqMonths = numInput(1, 1, 12);
-  const dayOfMonth = numInput(1, 1, 31);
-  const wdBoxes = WEEKDAYS.map((w) => {
-    const cb = el('input', { type: 'checkbox', value: w }) as HTMLInputElement;
-    cb.checked = w === 'sunday';
-    return { w, cb, node: el('label', { class: 'qam-sched-wd' }, [cb, el('span', {}, [WEEKDAY_LABEL[w]])]) };
-  });
   const startDate = el('input', { class: 'in', type: 'date', value: o.today }) as HTMLInputElement;
   const startHour = numInput(2, 0, 23);
   const startMinute = numInput(0, 0, 59);
-  const tz = el('input', { class: 'in', value: o.defaults.timeZoneCode }) as HTMLInputElement;
-  const dst = el('input', { type: 'checkbox' }) as HTMLInputElement;
 
-  const rowDaily = field('間隔（日）', freqDays, '1〜365。');
-  const rowWeekly = field('間隔（週）', freqWeeks, '1〜52。');
-  const rowWeekdays = field('実行する曜日', el('div', { class: 'qam-sched-wdrow' }, wdBoxes.map((b) => b.node)));
-  const rowMonthly = field('間隔（月）', freqMonths, '1〜12。');
-  const rowDayOfMonth = field('実行日', dayOfMonth, '1〜31。');
+  const rowKind = field('検査種別', kind, 'MAP と SCAN の両方／MAP 単体／SCAN 単体。');
   const rowRegion = field('地域区分', region, 'ドメイン名の末尾に付く地域コードです。');
+  const rowIp = field('検査資産情報（IP）', el('div', {}, [ipList, addIpBtn]),
+    '「単体」は IP か CIDR、「レンジ」は開始〜終了。行を追加して複数指定できます。AssetGroup の IP_SET に登録されます。');
+  const rowFqdn = field('検査資産情報（FQDN）', el('div', {}, [fqdnList, addFqdnBtn]),
+    '行を追加して複数指定できます。AssetGroup の DNS_LIST に登録されます。');
   const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt);
   const rowMapOpt = field('MAP のオプションプロファイル', mapOpt);
 
   const readProvision = (): ProvisionInput => ({
     applicationNo: appNo.value,
     regionCode: region.value,
+    assetType: assetType.value as AssetType,
     kind: kind.value as InspectKind,
     ips: ipRows.map((r) => r.read()),
-    dnsNames: dnsRows.map((r) => r.read()),
+    dnsNames: fqdnRows.map((r) => r.read()),
   });
+
+  // スケジュールタイトルの既定値: AssetGroup 名 + "_" + 検査予定日(YYYYMMDD)。
+  // 申請番号・予定日に追従するが、利用者が手で書き換えた値は上書きしない。
+  let titleAuto = '';
+  const syncTitle = (): void => {
+    const plan = planProvision(readProvision());
+    const next = plan.title && ymd(startDate.value) ? `${plan.title}_${ymd(startDate.value)}` : '';
+    if (title.value === titleAuto) title.value = next;
+    titleAuto = next;
+  };
 
   // 作られるものを常に見せる（送信して初めて分かる、を避ける）。
   function refreshPreview(): void {
     const p = planProvision(readProvision());
     const rows: string[] = [`AssetGroup: ${p.title || '（申請番号を入力）'}`];
     if (p.withMap) rows.push(`ドメイン: ${p.domain || '（申請番号と地域が必要）'}`);
-    rows.push(`IP: ${p.ips.length ? p.ips.join(', ') : '（なし）'}`);
-    rows.push(`DNS: ${p.dnsNames.length ? p.dnsNames.join(', ') : '（なし）'}`);
+    if (assetType.value === 'static') rows.push(`IP: ${p.ips.length ? p.ips.join(', ') : '（なし）'}`);
+    else rows.push(`FQDN: ${p.dnsNames.length ? p.dnsNames.join(', ') : '（なし）'}`);
     preview.textContent = rows.join('　/　');
   }
 
   const show = (node: HTMLElement, on: boolean): void => { node.hidden = !on; };
   function syncRows(): void {
-    const k = kind.value as InspectKind;
-    show(rowRegion, k !== 'scan');
-    show(rowScanOpt, k !== 'map');
-    show(rowMapOpt, k !== 'scan');
-    const oc = occurrence.value as Occurrence;
-    show(rowDaily, oc === 'daily');
-    show(rowWeekly, oc === 'weekly');
-    show(rowWeekdays, oc === 'weekly');
-    show(rowMonthly, oc === 'monthly');
-    show(rowDayOfMonth, oc === 'monthly');
+    const isDyn = assetType.value === 'dynamic';
+    const p = planProvision(readProvision());
+    // 動的は SCAN 固定なので検査種別・地域は出さない。検査資産情報は IP↔FQDN を入れ替える。
+    show(rowKind, !isDyn);
+    show(rowRegion, p.withMap);
+    show(rowIp, !isDyn);
+    show(rowFqdn, isDyn);
+    show(rowScanOpt, p.withScan);
+    show(rowMapOpt, p.withMap);
     refreshPreview();
+    syncTitle();
   }
+  assetType.addEventListener('change', syncRows);
   kind.addEventListener('change', syncRows);
-  occurrence.addEventListener('change', syncRows);
   region.addEventListener('change', refreshPreview);
-  appNo.addEventListener('input', refreshPreview);
+  appNo.addEventListener('input', () => { refreshPreview(); syncTitle(); });
+  startDate.addEventListener('change', syncTitle);
+  startDate.addEventListener('input', syncTitle);
 
   const err = el('div', { class: 'qam-sched-err', hidden: true });
   const body = el('div', {}, [
     el('div', { class: 'qam-insp-sec-note' }, [
-      'AssetGroup とドメインを作成し、続けて検査スケジュールを登録します。作成後の変更・削除は Qualys の画面で行ってください。',
+      'AssetGroup（とドメイン）を作成し、続けて検査スケジュールを登録します。検査は検査予定日に1回だけ実行されます。作成後の変更・削除は Qualys の画面で行ってください。',
     ]),
+    field('資産種別', assetType, '静的=IP 資産（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は登録しません）。'),
     field('外部接続申請番号', appNo, 'AssetGroup 名は「申請番号(仮)」、ドメイン名は「小文字の申請番号.地域コード」になります。'),
-    field('検査種別', kind),
+    rowKind,
     rowRegion,
-    field('SCAN 対象 IP', el('div', {}, [ipList, addIpBtn]), '「単体」は IP か CIDR、「レンジ」は開始〜終了。行を追加して複数指定できます。'),
-    field('SCAN 対象 DNS', el('div', {}, [dnsList, addDnsBtn]), '行を追加して複数指定できます。'),
+    rowIp,
+    rowFqdn,
     field('作成される内容', preview),
-    field('スケジュールのタイトル（任意）', title),
-    field('周期', occurrence),
-    rowDaily, rowWeekly, rowWeekdays, rowMonthly, rowDayOfMonth,
-    field('開始日', startDate),
+    field('スケジュールのタイトル', title, '既定は「AssetGroup名_検査予定日(YYYYMMDD)」。書き換えるとその値を使います。'),
+    field('検査予定日', startDate, 'この日に1回だけ実行されます（繰り返しはありません）。'),
     field('開始時刻（時／分）', el('div', { class: 'qam-sched-time' }, [startHour, startMinute])),
-    field('タイムゾーンコード', tz),
-    field('夏時間を考慮する', dst),
     field('スキャナー', scanner),
     rowScanOpt, rowMapOpt,
     field('作成時の状態', active),
     err,
   ]);
-  addIp(); addDns();
+  addIp(); addFqdn();
   syncRows();
 
   // 共通のスケジュール項目を組み立て、種別ごとに対象とプロファイルだけ差し替える。
+  // タイムゾーンは共通設定の既定値を使う（画面では設定しない）。
   const readSchedule = (k: 'scan' | 'map', p: ProvisionInput): ScheduleInput => {
     const plan = planProvision(p);
     return {
       ...defaultScheduleInput(k, startDate.value),
-      title: title.value.trim() || plan.title,
+      title: title.value.trim() || titleAuto,
       active: active.value === 'yes',
       targets: k === 'scan' ? [plan.title] : [plan.domain],
       optionProfile: k === 'scan' ? scanOpt.value : mapOpt.value,
       scannerName: scanner.value,
-      occurrence: occurrence.value as Occurrence,
-      frequencyDays: Number(freqDays.value), frequencyWeeks: Number(freqWeeks.value), frequencyMonths: Number(freqMonths.value),
-      weekdays: wdBoxes.filter((b) => b.cb.checked).map((b) => b.w as Weekday),
-      dayOfMonth: Number(dayOfMonth.value),
       startDate: startDate.value,
       startHour: Number(startHour.value), startMinute: Number(startMinute.value),
-      timeZoneCode: tz.value,
-      observeDst: dst.checked,
+      timeZoneCode: o.defaults.timeZoneCode,
+      observeDst: false,
     };
   };
 

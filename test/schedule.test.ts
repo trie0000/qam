@@ -7,10 +7,10 @@ import { scheduleResult } from '../src/qualys';
 
 const base = (o: Partial<ScheduleInput> = {}): ScheduleInput => ({
   ...defaultScheduleInput('scan', '2026-08-01'),
-  title: 'Q2 scan', targets: ['AB123 東京'], ...o,
+  title: 'AB123(仮)_20260801', targets: ['AB123(仮)'], ...o,
 });
 
-describe('入力検証', () => {
+describe('入力検証（1回のみ実行）', () => {
   it('既定値＋タイトルと対象があれば通る', () => {
     expect(validateSchedule(base())).toEqual([]);
   });
@@ -21,70 +21,52 @@ describe('入力検証', () => {
     expect(validateSchedule(base({ kind: 'map', targets: [] }))).toContain('対象のドメインを入力してください');
   });
 
-  it('周期ごとの範囲を検査する', () => {
-    expect(validateSchedule(base({ occurrence: 'daily', frequencyDays: 0 }))).toContain('日次の間隔は 1〜365 日で指定してください');
-    expect(validateSchedule(base({ occurrence: 'weekly', frequencyWeeks: 53 }))).toContain('週次の間隔は 1〜52 週で指定してください');
-    expect(validateSchedule(base({ occurrence: 'weekly', weekdays: [] }))).toContain('実行する曜日を1つ以上選んでください');
-    expect(validateSchedule(base({ occurrence: 'monthly', dayOfMonth: 32 }))).toContain('実行日は 1〜31 で指定してください');
-  });
-
-  it('開始日時とタイムゾーンを検査する', () => {
-    expect(validateSchedule(base({ startDate: '2026/08/01' }))).toContain('開始日を YYYY-MM-DD で指定してください');
+  it('検査予定日と開始時刻を検査する', () => {
+    expect(validateSchedule(base({ startDate: '2026/08/01' }))).toContain('検査予定日を YYYY-MM-DD で指定してください');
     expect(validateSchedule(base({ startHour: 24 }))).toContain('開始時は 0〜23 で指定してください');
     expect(validateSchedule(base({ startMinute: 60 }))).toContain('開始分は 0〜59 で指定してください');
     expect(validateSchedule(base({ timeZoneCode: '' }))).toContain('タイムゾーンコードを入力してください（例: JP）');
   });
 });
 
-describe('SCAN スケジュール（v2）のパラメータ', () => {
-  it('action=create・active は 0/1・曜日は小文字・対象は asset_groups', () => {
-    const p = buildScanScheduleParams(base({ active: true, weekdays: ['sunday', 'wednesday'], frequencyWeeks: 2 }));
+describe('SCAN スケジュール（v2・1回のみ）のパラメータ', () => {
+  it('daily×1回＋recurrence=1 で「1回実行したら無効化」を表現する', () => {
+    const p = buildScanScheduleParams(base({ active: true }));
     expect(p).toMatchObject({
-      action: 'create', scan_title: 'Q2 scan', active: '1',
-      asset_groups: 'AB123 東京',
-      occurrence: 'weekly', frequency_weeks: '2', weekdays: 'sunday,wednesday',
+      action: 'create', scan_title: 'AB123(仮)_20260801', active: '1',
+      asset_groups: 'AB123(仮)',
+      occurrence: 'daily', frequency_days: '1', recurrence: '1',
       start_date: '2026-08-01', start_hour: '2', start_minute: '0',
       time_zone_code: 'JP', observe_dst: 'no',
     });
+    // 繰り返し系の余計なキーを送らない
+    expect(p.weekdays).toBeUndefined();
+    expect(p.frequency_weeks).toBeUndefined();
+    expect(p.day_of_month).toBeUndefined();
   });
 
   it('無効で作成すると active=0', () => {
     expect(buildScanScheduleParams(base({ active: false })).active).toBe('0');
   });
 
-  it('日次・月次はそれぞれのキーだけを送る', () => {
-    const d = buildScanScheduleParams(base({ occurrence: 'daily', frequencyDays: 7 }));
-    expect(d).toMatchObject({ occurrence: 'daily', frequency_days: '7' });
-    expect(d.weekdays).toBeUndefined();
-    expect(d.frequency_weeks).toBeUndefined();
-
-    const m = buildScanScheduleParams(base({ occurrence: 'monthly', frequencyMonths: 3, dayOfMonth: 15 }));
-    expect(m).toMatchObject({ occurrence: 'monthly', frequency_months: '3', day_of_month: '15' });
-  });
-
   it('未入力の任意項目は送らない（空値で弾かれるのを避ける）', () => {
     const p = buildScanScheduleParams(base({ optionProfile: '', scannerName: '' }));
     expect(p.option_title).toBeUndefined();
     expect(p.iscanner_name).toBeUndefined();
-    const q = buildScanScheduleParams(base({ optionProfile: 'Initial Options', scannerName: 'scanner1' }));
-    expect(q).toMatchObject({ option_title: 'Initial Options', iscanner_name: 'scanner1' });
-  });
-
-  it('対象は複数をカンマ区切りにし、前後空白を落とす', () => {
-    const p = buildScanScheduleParams(base({ targets: [' AB123 東京 ', 'CD456 大阪', ' '] }));
-    expect(p.asset_groups).toBe('AB123 東京,CD456 大阪');
+    const q = buildScanScheduleParams(base({ optionProfile: 'Initial Options', scannerName: 'External' }));
+    expect(q).toMatchObject({ option_title: 'Initial Options', iscanner_name: 'External' });
   });
 });
 
-describe('MAP スケジュール（v1）のパラメータ', () => {
-  const map = (o: Partial<ScheduleInput> = {}) => base({ kind: 'map', targets: ['example.jp'], ...o });
+describe('MAP スケジュール（v1・1回のみ）のパラメータ', () => {
+  const map = (o: Partial<ScheduleInput> = {}) => base({ kind: 'map', targets: ['ext-2026-001.jp'], ...o });
 
-  it('add_task/type=map・active は yes/no・曜日は先頭大文字・対象は scan_target', () => {
-    const p = buildMapScheduleParams(map({ active: true, weekdays: ['sunday'] }));
+  it('add_task/type=map・active は yes/no・recurrence=1', () => {
+    const p = buildMapScheduleParams(map({ active: true }));
     expect(p).toMatchObject({
-      add_task: 'yes', type: 'map', scan_title: 'Q2 scan', active: 'yes',
-      scan_target: 'example.jp',
-      occurrence: 'weekly', frequency_weeks: '1', weekdays: 'Sunday',
+      add_task: 'yes', type: 'map', active: 'yes',
+      scan_target: 'ext-2026-001.jp',
+      occurrence: 'daily', frequency_days: '1', recurrence: '1',
       time_zone_code: 'JP',
     });
   });
@@ -98,10 +80,6 @@ describe('MAP スケジュール（v1）のパラメータ', () => {
     expect(p.option).toBe('Initial Options');
     expect(p.option_title).toBeUndefined();
   });
-
-  it('複数ドメインはカンマ区切り', () => {
-    expect(buildMapScheduleParams(map({ targets: ['a.example', 'b.example'] })).scan_target).toBe('a.example,b.example');
-  });
 });
 
 describe('送信先と要約', () => {
@@ -112,12 +90,11 @@ describe('送信先と要約', () => {
     expect(scheduleParams(base({ kind: 'map' })).add_task).toBe('yes');
   });
 
-  it('確認用の要約に 対象・周期・開始日時・有効無効 が入る', () => {
-    const s = describeSchedule(base({ active: false, weekdays: ['sunday'], startHour: 2, startMinute: 0 }));
-    expect(s).toContain('SCAN「Q2 scan」');
-    expect(s).toContain('AssetGroup: AB123 東京');
-    expect(s).toContain('1週ごと 日曜');
-    expect(s).toContain('2026-08-01 02:00 (JP)');
+  it('確認用の要約に 対象・1回のみ・日時・有効無効 が入る', () => {
+    const s = describeSchedule(base({ active: false }));
+    expect(s).toContain('SCAN「AB123(仮)_20260801」');
+    expect(s).toContain('AssetGroup: AB123(仮)');
+    expect(s).toContain('1回のみ（2026-08-01 02:00 JP）');
     expect(s).toContain('無効で作成');
   });
 });

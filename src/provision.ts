@@ -8,6 +8,9 @@
 //     IP は「単体（CIDR 含む）」と「レンジ（開始-終了）」を行ごとに切り替えて複数指定できる。
 
 export type InspectKind = 'scan' | 'map' | 'both';
+// 資産種別。静的=IP 資産（IP_SET に登録・SCAN/MAP を選べる）
+//           動的=FQDN 指定（DNS_LIST に登録・SCAN のみ。IP/レンジは登録しない）
+export type AssetType = 'static' | 'dynamic';
 export type IpMode = 'single' | 'range';
 
 export interface RegionOption { label: string; code: string }
@@ -99,11 +102,16 @@ export function domainName(applicationNo: string, regionCode: string): string {
 
 export interface ProvisionInput {
   applicationNo: string;   // 外部接続申請番号
-  regionCode: string;      // 地域コード
-  kind: InspectKind;       // scan のみ / map のみ / 両方
-  ips: IpEntry[];
-  dnsNames: string[];
+  regionCode: string;      // 地域コード（MAP を含むときのみ使用）
+  assetType: AssetType;    // 静的 / 動的(FQDN指定)
+  kind: InspectKind;       // 静的のとき: scan のみ / map のみ / 両方。動的は scan 固定
+  ips: IpEntry[];          // 静的の検査資産情報（動的では使わない）
+  dnsNames: string[];      // 動的の検査資産情報=FQDN（静的では使わない）
 }
+
+// 動的は MAP を実施できない（IP ネットブロックを持たない）ため、種別は常に scan として扱う。
+export const effectiveKind = (i: Pick<ProvisionInput, 'assetType' | 'kind'>): InspectKind =>
+  (i.assetType === 'dynamic' ? 'scan' : i.kind);
 
 export const needsScan = (k: InspectKind): boolean => k === 'scan' || k === 'both';
 export const needsMap = (k: InspectKind): boolean => k === 'map' || k === 'both';
@@ -118,13 +126,17 @@ export interface ProvisionPlan {
   withMap: boolean;
 }
 export function planProvision(i: ProvisionInput): ProvisionPlan {
+  const kind = effectiveKind(i);
+  const isDyn = i.assetType === 'dynamic';
   return {
     title: assetGroupTitle(i.applicationNo),
-    domain: domainName(i.applicationNo, i.regionCode),
-    ips: i.ips.filter(hasValue).map(ipEntryValue),
-    dnsNames: i.dnsNames.map((d) => d.trim()).filter(Boolean),
-    withScan: needsScan(i.kind),
-    withMap: needsMap(i.kind),
+    // 動的は MAP をしないのでドメインを払い出さない。
+    domain: isDyn ? '' : domainName(i.applicationNo, i.regionCode),
+    // 静的=IP のみ / 動的=FQDN のみ（もう一方の入力は捨てて、意図しない登録を防ぐ）。
+    ips: isDyn ? [] : i.ips.filter(hasValue).map(ipEntryValue),
+    dnsNames: isDyn ? i.dnsNames.map((d) => d.trim()).filter(Boolean) : [],
+    withScan: needsScan(kind),
+    withMap: !isDyn && needsMap(kind),
   };
 }
 
@@ -135,23 +147,25 @@ export function validateProvision(i: ProvisionInput): string[] {
   // Qualys の制約: AssetGroup 名は一意で、"All" は使用不可。
   if (no && assetGroupTitle(no).toLowerCase() === 'all') e.push('AssetGroup 名に "All" は使用できません');
   const p = planProvision(i);
-  if (no && !toDnsLabel(no)) {
-    e.push('申請番号に英数字が含まれていないため、ドメイン名を作れません（英数字とハイフンを含めてください）');
-  }
-  if (needsMap(i.kind)) {
+  if (p.withMap) {
+    if (no && !toDnsLabel(no)) {
+      e.push('申請番号に英数字が含まれていないため、ドメイン名を作れません（英数字とハイフンを含めてください）');
+    }
     if (!i.regionCode.trim()) e.push('地域区分を選んでください');
     if (p.domain && p.domain.length > 253) e.push('ドメイン名が長すぎます（253文字以内）');
   }
-  for (const row of i.ips) {
-    const err = ipEntryError(row);
-    if (err) e.push(err);
-  }
-  for (const d of p.dnsNames) {
-    // ドメイン名のみ（www. は付けない）という Qualys の指定に沿ってチェックする。
-    if (/^www\./i.test(d)) e.push(`DNS 名の先頭に "www." は付けないでください: ${d}`);
-  }
-  if (needsScan(i.kind) && !p.ips.length && !p.dnsNames.length) {
-    e.push('SCAN 対象の IP または DNS を1つ以上入力してください');
+  if (i.assetType === 'static') {
+    for (const row of i.ips) {
+      const err = ipEntryError(row);
+      if (err) e.push(err);
+    }
+    if (!p.ips.length) e.push('検査資産情報の IP を1つ以上入力してください');
+  } else {
+    if (!p.dnsNames.length) e.push('検査資産情報の FQDN を1つ以上入力してください');
+    for (const d of p.dnsNames) {
+      // ドメイン名のみ（www. は付けない）という Qualys の指定に沿ってチェックする。
+      if (/^www\./i.test(d)) e.push(`FQDN の先頭に "www." は付けないでください: ${d}`);
+    }
   }
   return e;
 }
@@ -170,9 +184,9 @@ export function buildAssetGroupParams(i: ProvisionInput): Record<string, string>
 // 確認モーダルに出す要約（何が作られるかを列挙する）。
 export function describeProvision(i: ProvisionInput): string[] {
   const p = planProvision(i);
-  const lines = [`AssetGroup「${p.title}」を作成`];
+  const lines = [`AssetGroup「${p.title}」を作成（${i.assetType === 'dynamic' ? '動的・FQDN指定' : '静的・IP資産'}）`];
   if (p.ips.length) lines.push(`　IP: ${p.ips.join(', ')}`);
-  if (p.dnsNames.length) lines.push(`　DNS: ${p.dnsNames.join(', ')}`);
+  if (p.dnsNames.length) lines.push(`　FQDN: ${p.dnsNames.join(', ')}`);
   if (p.withMap) lines.push(`ドメイン「${p.domain}」を登録`);
   if (p.withScan) lines.push(`SCAN スケジュールを登録（対象: ${p.title}）`);
   if (p.withMap) lines.push(`MAP スケジュールを登録（対象: ${p.domain}）`);
