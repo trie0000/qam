@@ -24,7 +24,10 @@ export interface Quarter { fy: number; q: number; label: string; start: Date; en
 //   scan: key=接続点ID / ags=[接続点ID] / titles=元の AssetGroup タイトル
 //   map : key=ドメイン / ags=そのドメインを登録している接続点ID / titles=その AssetGroup タイトル
 export interface InspTarget { kind: InspKind; key: string; ags: string[]; titles: string[] }
-export interface InspRow extends InspTarget { status: InspStatus; doneAt: string; weekNo: number | null; nextLaunch: string }
+// weekNo=実施週 / schedWeekNo=予約(次回実行)週。週次サマリで「実施」と「予約」を分けて数える。
+export interface InspRow extends InspTarget {
+  status: InspStatus; doneAt: string; weekNo: number | null; schedWeekNo: number | null; nextLaunch: string;
+}
 
 export interface RunHit { key: string; datetime: string }
 export interface SchedHit { key: string; nextLaunch: string; active: boolean }
@@ -176,10 +179,10 @@ export function classify(targets: InspTarget[], runs: RunHit[], scheds: SchedHit
   return targets.map((t) => {
     const k = norm(t.key);
     const hit = done.get(k);
-    if (hit) return { ...t, status: 'done' as const, doneAt: hit.toISOString(), weekNo: weekNoOf(hit, q), nextLaunch: '' };
+    if (hit) return { ...t, status: 'done' as const, doneAt: hit.toISOString(), weekNo: weekNoOf(hit, q), schedWeekNo: null, nextLaunch: '' };
     const next = sched.get(k);
-    if (next) return { ...t, status: 'scheduled' as const, doneAt: '', weekNo: null, nextLaunch: next.toISOString() };
-    return { ...t, status: 'pending' as const, doneAt: '', weekNo: null, nextLaunch: '' };
+    if (next) return { ...t, status: 'scheduled' as const, doneAt: '', weekNo: null, schedWeekNo: weekNoOf(next, q), nextLaunch: next.toISOString() };
+    return { ...t, status: 'pending' as const, doneAt: '', weekNo: null, schedWeekNo: null, nextLaunch: '' };
   });
 }
 
@@ -203,7 +206,7 @@ export function fillMapScheduleByAg(rows: InspRow[], agScheds: SchedHit[], q: Qu
       const d = byAg.get(norm(ag));
       if (d && (!best || d < best)) best = d;
     }
-    return best ? { ...r, status: 'scheduled' as const, nextLaunch: best.toISOString() } : r;
+    return best ? { ...r, status: 'scheduled' as const, schedWeekNo: weekNoOf(best, q), nextLaunch: best.toISOString() } : r;
   });
 }
 
@@ -214,17 +217,72 @@ export function countStatus(rows: InspRow[]): StatusCounts {
   return c;
 }
 
-// 週次サマリ: その週に実施された件数と、四半期開始からの累計。
-export interface WeekSummary { no: number; label: string; scanDone: number; mapDone: number; scanCum: number; mapCum: number }
+// 週次サマリ: その週の実施件数・予約件数と、四半期開始からの累計（実施＋予約）。
+export interface WeekSummary {
+  no: number; label: string; period: string;
+  scanDone: number; scanSched: number; scanCum: number;
+  mapDone: number; mapSched: number; mapCum: number;
+}
 export function weeklySummary(scan: InspRow[], map: InspRow[], q: Quarter): WeekSummary[] {
   let scanCum = 0;
   let mapCum = 0;
+  const count = (rows: InspRow[], field: 'weekNo' | 'schedWeekNo', no: number): number =>
+    rows.filter((r) => r[field] === no).length;
   return q.weeks.map((w) => {
-    const s = scan.filter((r) => r.weekNo === w.no).length;
-    const m = map.filter((r) => r.weekNo === w.no).length;
-    scanCum += s;
-    mapCum += m;
-    return { no: w.no, label: w.label, scanDone: s, mapDone: m, scanCum, mapCum };
+    const sd = count(scan, 'weekNo', w.no);
+    const ss = count(scan, 'schedWeekNo', w.no);
+    const md = count(map, 'weekNo', w.no);
+    const ms = count(map, 'schedWeekNo', w.no);
+    scanCum += sd + ss; // 累計は「実施＋予約」
+    mapCum += md + ms;
+    return {
+      no: w.no, label: w.label, period: w.label.replace(/^第\d+週 \((.*)\)$/, '$1'),
+      scanDone: sd, scanSched: ss, scanCum, mapDone: md, mapSched: ms, mapCum,
+    };
+  });
+}
+
+// 対象×週マトリクスの 1 行（接続点単位で SCAN と MAP を併記する統合行）。
+// MAP は接続点配下の全ドメインを集約: 1つでも未対応なら未対応 / 残りが予約のみなら予約 / 全部済なら検査済み。
+export interface MatrixRow {
+  ag: string;                 // 接続点ID
+  titles: string[];           // AssetGroup タイトル
+  domains: string[];          // MAP 対象ドメイン（空 = MAP 対象外）
+  scanStatus: InspStatus | null;   // null = SCAN 対象に無い（通常は起こらない）
+  mapStatus: InspStatus | null;    // null = MAP 対象外
+  scanDoneWeek: number | null;
+  scanSchedWeek: number | null;
+  mapDoneWeeks: number[];
+  mapSchedWeeks: number[];
+}
+
+function aggregateMapStatus(rows: InspRow[]): InspStatus | null {
+  if (!rows.length) return null;
+  if (rows.some((r) => r.status === 'pending')) return 'pending';
+  if (rows.some((r) => r.status === 'scheduled')) return 'scheduled';
+  return 'done';
+}
+
+export function buildMatrix(scan: InspRow[], map: InspRow[]): MatrixRow[] {
+  const mapByAg = new Map<string, InspRow[]>();
+  for (const m of map) for (const ag of m.ags) mapByAg.set(ag, [...(mapByAg.get(ag) ?? []), m]);
+  const ags = new Set<string>([...scan.map((s) => s.key), ...mapByAg.keys()]);
+  const weeks = (rows: InspRow[], field: 'weekNo' | 'schedWeekNo'): number[] =>
+    [...new Set(rows.map((r) => r[field]).filter((n): n is number => n != null))].sort((a, b) => a - b);
+  return [...ags].sort((a, b) => a.localeCompare(b)).map((ag) => {
+    const s = scan.find((r) => r.key === ag) ?? null;
+    const ms = mapByAg.get(ag) ?? [];
+    return {
+      ag,
+      titles: s ? s.titles : [...new Set(ms.flatMap((m) => m.titles))].sort(),
+      domains: ms.map((m) => m.key).sort(),
+      scanStatus: s ? s.status : null,
+      mapStatus: aggregateMapStatus(ms),
+      scanDoneWeek: s?.weekNo ?? null,
+      scanSchedWeek: s?.schedWeekNo ?? null,
+      mapDoneWeeks: weeks(ms, 'weekNo'),
+      mapSchedWeeks: weeks(ms, 'schedWeekNo'),
+    };
   });
 }
 
@@ -265,6 +323,7 @@ export interface InspectionData {
   scan: InspRow[];
   map: InspRow[];
   weeks: WeekSummary[];
+  matrix: MatrixRow[];
   pending: PendingAg[];
   fetchedAt: string;
   pattern: string; // 適用した対象パターン（UI で提示して調整できるように）
@@ -308,6 +367,7 @@ export function computeInspection(
   return {
     quarter: q, scan, map,
     weeks: weeklySummary(scan, map, q),
+    matrix: buildMatrix(scan, map),
     pending: pendingAgs(scan, map),
     fetchedAt: raw?.fetchedAt ?? '',
     pattern: patternSrc || DEFAULT_AG_PATTERN,

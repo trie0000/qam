@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_AG_PATTERN, agPattern, quarterOf, buildTargets, classify, countStatus, weeklySummary,
-  pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished, computeInspection,
+  pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished, computeInspection, buildMatrix,
 } from '../src/inspection';
 import { parseScanList, parseMapList, parseScanSchedules, parseMapSchedules, parseMapTargets } from '../src/inspection-parse';
 import { qualysErrorText } from '../src/qualys';
@@ -445,5 +445,60 @@ describe('スケジュールマップ（実応答フォーマット）', () => {
     );
     expect(d.map[0].key).toBe('other.example');
     expect(d.map[0].status).toBe('scheduled'); // 接続点 AB123 にマップ予定があるので補完
+  });
+});
+
+describe('週次サマリ（実施/予約/累計）と統合マトリクス', () => {
+  const q = quarterOf(new Date(2026, 6, 18), 4); // Q2: 7/1〜9/30
+
+  // AB123: SCAN実施(第1週) / a.example MAP予約(第3週)
+  // CD456: SCAN予約(第2週) / ドメイン無し = MAP対象外
+  const build = () => {
+    const recs = records(group('AB123 東京', ['a.example']), group('CD456 大阪'));
+    const t = buildTargets(recs, agPattern(DEFAULT_AG_PATTERN));
+    const scan = classify(t.scan,
+      [{ key: 'AB123', datetime: '2026-07-02T02:00:00Z' }],
+      [{ key: 'CD456', nextLaunch: '2026-07-09T02:00:00Z', active: true }], q);
+    const map = classify(t.map, [], [{ key: 'a.example', nextLaunch: '2026-07-16T02:00:00Z', active: true }], q);
+    return { scan, map };
+  };
+
+  it('週ごとに実施と予約を分けて数え、累計は実施＋予約で積む', () => {
+    const { scan, map } = build();
+    const w = weeklySummary(scan, map, q);
+    expect(w[0]).toMatchObject({ no: 1, scanDone: 1, scanSched: 0, scanCum: 1, mapDone: 0, mapSched: 0, mapCum: 0 });
+    expect(w[1]).toMatchObject({ no: 2, scanDone: 0, scanSched: 1, scanCum: 2 }); // 予約も累計に入る
+    expect(w[2]).toMatchObject({ no: 3, mapSched: 1, mapCum: 1 });
+    expect(w[3]).toMatchObject({ scanCum: 2, mapCum: 1 }); // 変化が無くても累計は維持
+    expect(w[0].period).toBe('7/1〜7/7');
+  });
+
+  it('マトリクスは接続点ごとに1行へ統合し、SCANとMAPを併記する', () => {
+    const { scan, map } = build();
+    const m = buildMatrix(scan, map);
+    expect(m.map((r) => r.ag)).toEqual(['AB123', 'CD456']);
+
+    const ab = m[0];
+    expect(ab).toMatchObject({ scanStatus: 'done', mapStatus: 'scheduled', scanDoneWeek: 1, scanSchedWeek: null });
+    expect(ab.mapSchedWeeks).toEqual([3]);
+    expect(ab.domains).toEqual(['a.example']);
+    expect(ab.titles).toEqual(['AB123 東京']);
+
+    const cd = m[1];
+    expect(cd).toMatchObject({ scanStatus: 'scheduled', mapStatus: null, scanSchedWeek: 2 }); // MAP対象外
+    expect(cd.domains).toEqual([]);
+  });
+
+  it('MAPは配下ドメインを集約する（1つでも未対応なら未対応）', () => {
+    const recs = records(group('AB123 東京', ['a.example', 'b.example']));
+    const t = buildTargets(recs, agPattern(DEFAULT_AG_PATTERN));
+    const scan = classify(t.scan, [], [], q);
+    const map = classify(t.map, [{ key: 'a.example', datetime: '2026-07-02T02:00:00Z' }], [], q);
+    expect(buildMatrix(scan, map)[0].mapStatus).toBe('pending'); // b.example が未対応
+    const allDone = classify(t.map, [
+      { key: 'a.example', datetime: '2026-07-02T02:00:00Z' },
+      { key: 'b.example', datetime: '2026-07-03T02:00:00Z' },
+    ], [], q);
+    expect(buildMatrix(scan, allDone)[0].mapStatus).toBe('done');
   });
 });
