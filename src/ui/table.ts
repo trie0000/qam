@@ -347,6 +347,9 @@ export function renderTable(opts: TableOpts): HTMLElement {
     const vc = vcols();
     const [start, end] = windowRange();
     lastStart = start;
+    // データ行を一旦すべて外すと表の幅が縮み、ブラウザが横スクロール位置を切り詰める
+    // （＝縦スクロールしただけで表が右へ戻る）。入れ替えの前後で scrollLeft を保持する。
+    const keepX = wrap.scrollLeft;
     // spacer は内側 div に高さを持たせる（fixed-layout の td 直接 height は無視されることがある）。
     (topSpacer!.firstElementChild as HTMLElement).style.height = `${start * rowH}px`;
     (botSpacer!.firstElementChild as HTMLElement).style.height = `${(winRows.length - end) * rowH}px`;
@@ -356,6 +359,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
     const frag = document.createDocumentFragment();
     for (let i = start; i < end; i++) frag.append(buildRow(winRows[i], vc));
     tbodyEl.insertBefore(frag, botSpacer);
+    if (wrap.scrollLeft !== keepX) wrap.scrollLeft = keepX;
   }
 
   function renderBody(): void {
