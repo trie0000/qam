@@ -17,7 +17,9 @@ const snapPath = (e: QamEntity, stamp: string) => `snapshots/${e}/${stamp}.json`
 const histPath = (e: QamEntity) => `history/${e}.jsonl`;
 const COMMENTS = 'comments/comments.jsonl';
 const RUNS = 'runs.jsonl';
-const INSPECTION = 'inspection/latest.json';
+const INSPECTION_DIR = 'inspection';
+const inspPath = (date: string) => `${INSPECTION_DIR}/${date}.json`;
+const INSPECTION_LEGACY = `${INSPECTION_DIR}/latest.json`; // 日次化する前の単一ファイル
 
 export const dateOfStamp = (stamp: string): string => stamp.slice(0, 10);
 
@@ -111,7 +113,9 @@ export async function resetData(b: FileBackend, opts: ResetOptions): Promise<voi
     for (const e of ENTITIES) for (const s of await getSnapshotStamps(b, e)) await b.remove(snapPath(e, s));
     await b.remove(RUNS);
     await b.remove('licenses.jsonl'); // ライセンス数推移サンプルも資産データの一部として消去
-    await b.remove(INSPECTION);       // 四半期検査のキャッシュ（Qualys から再取得できる派生データ）
+    // 四半期検査のスナップショット（Qualys から再取得できる派生データ）
+    for (const d of await getInspectionDates(b)) await b.remove(inspPath(d));
+    await b.remove(INSPECTION_LEGACY);
     for (const d of await b.list('raw')) if (/^\d{4}-\d{2}-\d{2}$/.test(d)) await b.remove(`raw/${d}`);
   }
   if (opts.history) for (const e of ENTITIES) await b.remove(histPath(e));
@@ -136,14 +140,29 @@ export async function readLicenses(b: FileBackend): Promise<QamLicenseSample[]> 
   return [...map.values()];
 }
 
-// --- 四半期検査: Qualys 応答の生XMLを 1 セットだけ保持（最新で上書き） ---
-// 履歴を積む必要は無い（実施日時は応答XML自体に入っており、週次内訳はそこから再構成できる）。
-export const writeInspection = (b: FileBackend, raw: QamInspectionRaw): Promise<void> =>
-  b.write(INSPECTION, JSON.stringify(raw));
-export async function readInspection(b: FileBackend): Promise<QamInspectionRaw | null> {
-  const raw = await b.read(INSPECTION);
+// --- 四半期検査: Qualys 応答の生XMLを「取込日ごと」に保持（後から指定日の状況を見られる） ---
+// 同じ日に取り直したら上書き（日単位）。生XMLを持つので、対象パターンや年度開始月を
+// 変えたときも過去分を含めて判定し直せる。保存期間を過ぎたものは prune で剪定する。
+export const writeInspection = (b: FileBackend, date: string, raw: QamInspectionRaw): Promise<void> =>
+  b.write(inspPath(date), JSON.stringify(raw));
+
+// 取込日の一覧（昇順）。日付形式のファイルだけを見る（旧 latest.json は無視）。
+export async function getInspectionDates(b: FileBackend): Promise<string[]> {
+  const names = await b.list(INSPECTION_DIR);
+  return names.filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).map((n) => n.slice(0, -5)).sort();
+}
+
+export async function readInspectionAt(b: FileBackend, date: string): Promise<QamInspectionRaw | null> {
+  const raw = await b.read(inspPath(date));
   if (!raw) return null;
   try { return JSON.parse(raw) as QamInspectionRaw; } catch { return null; } // 壊れていたら未取得扱い
+}
+
+// 日次化する前に保存された latest.json（あれば読む）。次回取得で日付付きに移行する。
+export async function readInspectionLegacy(b: FileBackend): Promise<QamInspectionRaw | null> {
+  const raw = await b.read(INSPECTION_LEGACY);
+  if (!raw) return null;
+  try { return JSON.parse(raw) as QamInspectionRaw; } catch { return null; }
 }
 
 // --- 操作履歴（監査ログ）: 登録/削除/変更などの操作を 作業者・日時つきで記録 ---
@@ -222,6 +241,10 @@ export async function prune(b: FileBackend, retentionDays: number, refDate: stri
   }
   for (const d of await b.list('raw')) {
     if (/^\d{4}-\d{2}-\d{2}$/.test(d) && d < cutoff) { await b.remove(`raw/${d}`); removed.push(`raw/${d}`); }
+  }
+  // 四半期検査の日次スナップショットも保存期間に従って剪定する（生XMLで嵩張るため）。
+  for (const d of await getInspectionDates(b)) {
+    if (d < cutoff) { await b.remove(inspPath(d)); removed.push(`inspection/${d}`); }
   }
   return removed;
 }

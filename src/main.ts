@@ -16,7 +16,7 @@ import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, readInspection, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords } from './types';
@@ -41,6 +41,7 @@ const state = {
   selected: new Set<string>(),
   wrap: false,
   licenseHidden: new Set<number>(), // ライセンス推移グラフで非表示にした年度
+  inspAsof: '',                     // 四半期検査で表示する取込日（空＝最新）
 };
 
 // Unique Hosts Scanned（Qualys）= 実際にスキャン済み（最終スキャン日時あり）の一意ホスト数。host 一覧から算出。
@@ -684,8 +685,12 @@ let inspectionBusy = false;
 
 async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
-  const [cfg, stamps, raw] = await Promise.all([getConfig(), getSnapshotStamps(backend, 'group'), readInspection(backend)]);
-  const stamp = resolveAsof(stamps);
+  const [cfg, stamps, dates] = await Promise.all([getConfig(), getSnapshotStamps(backend, 'group'), getInspectionDates(backend)]);
+  // 表示する取込日（未指定＝最新）。指定日以前で最大の日付を採る（資産一覧の as-of と同じ考え方）。
+  const asof = resolveAsof(dates, state.inspAsof) ?? '';
+  const raw = asof ? await readInspectionAt(backend, asof) : await readInspectionLegacy(backend);
+  // 母集団の AssetGroup も、その取込日以前で最大のスナップショットに合わせる（当時の登録状況で判定）。
+  const stamp = resolveAsof(stamps, asof ? `${asof}T99` : undefined);
   const snap = stamp ? await readSnapshot(backend, 'group', stamp) : null;
   const pattern = cfg.inspectionAgPattern || DEFAULT_AG_PATTERN;
   const data = computeInspection(snap?.records ?? {}, raw, cfg.fiscalStartMonth || 4, pattern, new Date());
@@ -694,7 +699,11 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   // AssetGroup が 1 件も無いときだけ空表示。パターン不一致で 0 件のときは本体を出す
   // （「対象母集団」セクションが、どの AssetGroup がなぜ対象外かを示すため）。
   if (!data.sources.agTotal) { host.append(inspectionEmpty(pattern)); return; }
-  host.append(renderInspectionView({ data, busy: inspectionBusy, onFetch: () => { void runInspectionFetch(); } }));
+  host.append(renderInspectionView({
+    data, busy: inspectionBusy, dates, asof,
+    onFetch: () => { void runInspectionFetch(); },
+    onAsof: (d) => { state.inspAsof = d; refresh(); },
+  }));
 }
 
 // 取得した生XMLを raw/<日付>/ に保存する（応答の中身を後から確認できるように。IPs in Subscription と同じ作法）。
@@ -731,8 +740,10 @@ async function runInspectionFetch(): Promise<void> {
   try {
     const q = quarterOf(new Date(), cfg.fiscalStartMonth || 4);
     const { raw, warnings } = await downloadInspection(creds, q.start);
-    await writeInspection(backend, raw);
-    await saveInspectionRaw(raw); // 応答XMLを raw/<日付>/ に保存（原因調査用）
+    const today = dateOfStamp(stampNow());
+    await writeInspection(backend, today, raw); // 取込日ごとに保持（同日再取得は上書き）
+    await saveInspectionRaw(raw);               // 応答XMLを raw/<日付>/ に保存（原因調査用）
+    state.inspAsof = '';                        // 取得直後は最新を表示する
     recordOp('四半期検査 取得', `${q.label} の実施済み/スケジュールを取得${warnings.length ? `（一部失敗: ${warnings.length} 件）` : ''}`);
     // 一部のエンドポイントが取れなくても表示はする。取れなかったものは理由を出す（黙って0件にしない）。
     if (warnings.length) toast(`一部を取得できませんでした — ${warnings.join(' / ')}`, 'error');
@@ -1344,6 +1355,9 @@ function openHelp(): void {
           <b>対象×週マトリクス</b>（どの週に検査されたか）を表示します。</li>
       <li>「Qualys から取得」で最新状況を取得（母集団の AssetGroup は資産取込のものを使うため再取得不要）。
           CSV／Excel で出力できます。</li>
+      <li>取得結果は<b>取込日ごとに保存</b>されます（同じ日に取り直すと上書き）。ツールバーの
+          <b>「取込日」</b>で過去の時点の状況を後から確認できます。そのときの AssetGroup 登録状況に
+          合わせて判定されます。保存期間を過ぎたものは資産スナップショットと同様に自動削除されます。</li>
     </ul>
 
     <h3>ライセンス数推移</h3>

@@ -4,6 +4,7 @@ import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
   prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, importHistory,
   backupSlot, listBackups, hasBackup, pruneBackups,
+  writeInspection, getInspectionDates, readInspectionAt, readInspectionLegacy,
 } from '../src/store';
 import type { QamEvent } from '../src/types';
 
@@ -226,5 +227,46 @@ describe('backup（slot計算・zip一覧・保管剪定）', () => {
     expect(removed).toEqual(['2026-06-01T08-00-00']);
     expect(await listBackups(b)).toEqual(['2026-06-17T08-00-00']);
     expect(await b.read('backups/2026-06-01T08-00-00.zip')).toBeNull();
+  });
+});
+
+describe('四半期検査の日次スナップショット', () => {
+  const raw = (tag: string) => ({ scans: tag, maps: '', scanSchedules: '', mapSchedules: '', fetchedAt: `${tag}T00:00:00Z` });
+
+  it('取込日ごとに保存し、同じ日は上書きする', async () => {
+    const b = new MemBackend();
+    await writeInspection(b, '2026-07-01', raw('a'));
+    await writeInspection(b, '2026-07-08', raw('b'));
+    await writeInspection(b, '2026-07-08', raw('b2')); // 同日再取得
+    expect(await getInspectionDates(b)).toEqual(['2026-07-01', '2026-07-08']);
+    expect((await readInspectionAt(b, '2026-07-08'))!.scans).toBe('b2');
+    expect((await readInspectionAt(b, '2026-07-01'))!.scans).toBe('a');
+    expect(await readInspectionAt(b, '2026-06-01')).toBeNull(); // 無い日は null
+  });
+
+  it('日付形式でないファイル（旧 latest.json）は一覧に混ぜない', async () => {
+    const b = new MemBackend();
+    await b.write('inspection/latest.json', JSON.stringify(raw('legacy')));
+    await writeInspection(b, '2026-07-01', raw('a'));
+    expect(await getInspectionDates(b)).toEqual(['2026-07-01']);
+    expect((await readInspectionLegacy(b))!.scans).toBe('legacy'); // 移行用に読めはする
+  });
+
+  it('resolveAsof で指定日以前の最新スナップショットを選べる', async () => {
+    const b = new MemBackend();
+    for (const d of ['2026-07-01', '2026-07-08', '2026-07-15']) await writeInspection(b, d, raw(d));
+    const dates = await getInspectionDates(b);
+    expect(resolveAsof(dates)).toBe('2026-07-15');              // 未指定＝最新
+    expect(resolveAsof(dates, '2026-07-10')).toBe('2026-07-08'); // 指定日以前で最大
+    expect(resolveAsof(dates, '2026-06-30')).toBeNull();         // それ以前は無し
+  });
+
+  it('保存期間を過ぎた日次スナップショットは剪定される', async () => {
+    const b = new MemBackend();
+    await writeInspection(b, '2026-05-01', raw('old'));
+    await writeInspection(b, '2026-07-15', raw('new'));
+    const removed = await prune(b, 30, '2026-07-18');
+    expect(removed).toContain('inspection/2026-05-01');
+    expect(await getInspectionDates(b)).toEqual(['2026-07-15']);
   });
 });

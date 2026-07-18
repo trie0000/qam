@@ -265,7 +265,10 @@ function sheets(d: InspectionData): Sheet[] {
 export interface InspectionViewOpts {
   data: InspectionData;
   busy: boolean;
+  dates: string[];          // 取込日の一覧（昇順）
+  asof: string;             // 表示中の取込日（空＝未取得）
   onFetch: () => void;
+  onAsof: (date: string) => void;
 }
 
 // ツールバー（取得・エクスポート）。取得中はボタンを止める。
@@ -279,12 +282,21 @@ function toolbarRow(o: InspectionViewOpts): HTMLElement {
   const xlsxBtn = el('button', { class: 'btn btn--sm', html: `${icon('download', 14)}<span>Excel</span>` });
   xlsxBtn.addEventListener('click', () => exportXlsxBook(sheets(d), `${stamp}.xlsx`));
   const fetched = d.fetchedAt
-    ? `最終取得 ${new Date(d.fetchedAt).toLocaleString('ja-JP')}`
+    ? `取得日時 ${new Date(d.fetchedAt).toLocaleString('ja-JP')}`
     : '未取得（「Qualys から取得」を押してください）';
-  return el('div', { class: 'qam-insp-toolbar' }, [
-    fetchBtn, csvBtn, xlsxBtn,
-    el('span', { class: 'qam-insp-fetched' }, [fetched]),
-  ]);
+  // 取込日の切替（過去のスナップショットを後から確認する）。新しい順に並べる。
+  const items: (Node | string)[] = [fetchBtn, csvBtn, xlsxBtn];
+  if (o.dates.length) {
+    const sel = el('select', { class: 'in qam-insp-asof' }) as HTMLSelectElement;
+    [...o.dates].reverse().forEach((date, i) => {
+      sel.append(el('option', { value: date }, [i === 0 ? `${date}（最新）` : date]));
+    });
+    sel.value = o.asof || o.dates[o.dates.length - 1];
+    sel.addEventListener('change', () => o.onAsof(sel.value));
+    items.push(el('label', { class: 'qam-insp-asof-wrap' }, [el('span', {}, ['取込日']), sel]));
+  }
+  items.push(el('span', { class: 'qam-insp-fetched' }, [fetched]));
+  return el('div', { class: 'qam-insp-toolbar' }, items);
 }
 
 // ビュー本体を組み立てて返す。
