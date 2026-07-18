@@ -1,5 +1,7 @@
-// 四半期検査ビュー: 現四半期の SCAN/MAP 充足状況・未対応 AssetGroup・週次の振り返り。
-// ライセンス数推移ビューと同じ「カスタム DOM のダッシュボード」型（縦に積むため仮想スクロール表は使わない）。
+// 四半期検査ビュー: 現四半期の SCAN/MAP 充足状況と週次の振り返り。
+// 達成率カード → 週次サマリ → 対象×週マトリクス → 対象母集団 → 取得内訳 の順に縦へ積む。
+// 一覧は共通テーブル(renderTable)を高さ未指定で置き、ページ全体でスクロールさせる
+// （内部スクロールの入れ子を作らない）。診断系の小さな表だけ素の table を使う。
 import { el } from '../dom';
 import { icon } from '../../icons';
 import { renderTable, type Column } from '../table';
@@ -28,10 +30,6 @@ function table(headers: string[], rows: (string | Node)[][], cls = ''): HTMLElem
   return el('div', { class: 'qam-insp-tablewrap' }, [el('table', { class: `qam-insp-table ${cls}`.trim() }, [thead, tbody])]);
 }
 
-// 状態バッジ。
-const badge = (s: InspStatus): HTMLElement =>
-  el('span', { class: `qam-insp-badge ${STATUS_CLASS[s]}` }, [STATUS_LABEL[s]]);
-
 // 済/予定/未対応 のカウントカード。
 function statCard(title: string, rows: InspRow[]): HTMLElement {
   const c = countStatus(rows);
@@ -54,30 +52,14 @@ function statCard(title: string, rows: InspRow[]): HTMLElement {
   ]);
 }
 
-// 未対応 AssetGroup の一覧。SCAN 未実施か、登録ドメインに未対応 MAP がある AG を挙げる。
-function pendingSection(d: InspectionData): HTMLElement {
-  if (!d.pending.length) {
-    return section('未対応の接続点', '', el('p', { class: 'qam-insp-ok' }, ['未対応はありません。']));
-  }
-  const rows = d.pending.map((p) => [
-    p.ag,
-    p.scanPending ? badge('pending') : el('span', { class: 'qam-insp-muted' }, ['—']),
-    p.mapPendingDomains.length ? p.mapPendingDomains.join(', ') : '—',
-  ]);
-  return section(
-    '未対応の接続点',
-    '現四半期に実施も予定も無いもの。MAP 列は未対応のドメイン（ドメイン未登録の接続点は MAP 対象外）。',
-    table(['接続点ID', 'SCAN', '未対応の MAP ドメイン'], rows, 'qam-insp-pending'),
-  );
-}
-
 // 共通テーブルで一覧を出す（列名クリックで並べ替え・値で絞り込み。他のビューと同じ操作）。
-// renderTable は height:100% で親を埋めるので、高さを持つラッパに入れる。
+// 高さは固定せずページの流れに置く（内部スクロールの入れ子を作らない）。renderTable の
+// height:100% は高さ未指定の親の下では auto に解決され、全行がそのまま並ぶ。
 const selections = { weekly: new Set<string>(), matrix: new Set<string>() };
-function commonTable(viewId: string, columns: Column[], rows: unknown[], getKey: (r: any) => string, cls: string): HTMLElement {
+function commonTable(viewId: string, columns: Column[], rows: unknown[], getKey: (r: any) => string): HTMLElement {
   const selected = viewId.endsWith('weekly') ? selections.weekly : selections.matrix;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
-  const host = el('div', { class: `qam-insp-tbl ${cls}`.trim() }, [
+  const host = el('div', { class: 'qam-insp-tbl' }, [
     renderTable({ viewId, columns, rows, getKey, selected, columnRef }),
   ]);
   const colBtn = el('button', { class: 'btn btn--sm', title: '表示する列を選択', html: `${icon('settings', 14)}<span>列表示</span>` });
@@ -101,9 +83,12 @@ function weeklySection(d: InspectionData): HTMLElement {
   return section(
     '週次サマリ',
     '週ごとの実施件数・予約件数と、四半期開始からの累計（実施＋予約）。列名クリックで並べ替え・絞り込み。',
-    commonTable('inspection.weekly', cols, d.weeks, (w: WeekSummary) => String(w.no), ''),
+    commonTable('inspection.weekly', cols, d.weeks, (w: WeekSummary) => String(w.no)),
   );
 }
+
+// 週列の見出しは実際の日付（その週の開始日）。「第N週」より短く、いつの週かが直接わかる。
+const weekHead = (w: WeekSummary): string => w.period.split('〜')[0];
 
 // 週セルのマーク（S=SCAN / M=MAP、実施は緑・予約は橙）。cellText でタグは落ちるので絞り込み・出力もできる。
 const marks = (r: MatrixRow, no: number): string => {
@@ -126,15 +111,15 @@ function matrixSection(d: InspectionData): HTMLElement {
     { id: 'map', label: 'MAP', render: (r: MatrixRow) => st(r.mapStatus), sortVal: (r: MatrixRow) => stText(r.mapStatus) },
     { id: 'domains', label: 'ドメイン', render: (r: MatrixRow) => (r.domains.length ? r.domains.join(', ') : '—') },
     ...d.weeks.map((w): Column => ({
-      id: `w${w.no}`, label: `第${w.no}週`, mono: true,
+      id: `w${w.no}`, label: weekHead(w), mono: true, width: 64,
       render: (r: MatrixRow) => marks(r, w.no) || '',
       sortVal: (r: MatrixRow) => (marks(r, w.no) ? '1' : '0'),
     })),
   ];
   return section(
     '対象 × 週 マトリクス',
-    'S=SCAN / M=MAP。緑が実施済み、橙が予約（その週に実行予定）。列名クリックで並べ替え・絞り込み。',
-    commonTable('inspection.matrix', cols, d.matrix, (r: MatrixRow) => r.ag, 'qam-insp-tbl--tall'),
+    'S=SCAN / M=MAP。緑が実施済み、橙が予約（その週に実行予定）。週の見出しはその週の開始日。列名クリックで並べ替え・絞り込み。',
+    commonTable('inspection.matrix', cols, d.matrix, (r: MatrixRow) => r.ag),
   );
 }
 
@@ -295,11 +280,12 @@ export function renderInspectionView(o: InspectionViewOpts): HTMLElement {
     statCard('SCAN（AssetGroup 単位）', d.scan),
     statCard('MAP（ドメイン単位）', d.map),
   ]);
-  // 並び: 週次サマリ → 統合マトリクス → 達成率 → 未対応 → 母集団 → 取得内訳。
+  // 並び: 達成率カード → 週次サマリ → 統合マトリクス → 母集団 → 取得内訳。
+  // 未対応の一覧はマトリクスの SCAN/MAP 列で絞り込めるので独立セクションは置かない。
   return el('div', { class: 'qam-insp' }, [
-    head, toolbarRow(o),
+    head, toolbarRow(o), cards,
     weeklySection(d), matrixSection(d),
-    cards, pendingSection(d), populationSection(d), sourcesSection(d),
+    populationSection(d), sourcesSection(d),
   ]);
 }
 

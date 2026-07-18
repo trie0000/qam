@@ -9,6 +9,7 @@ export interface Column {
   label: string;
   mono?: boolean;
   sortable?: boolean;
+  width?: number;   // 既定の列幅(px)。保存済みの幅があればそちらが優先される。
   render: (row: any) => string | Node;
   sortVal?: (row: any) => string;
 }
@@ -115,7 +116,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
   wrap.append(table);
   section.append(bulk, wrap);
 
-  const widthOf = (c: Column) => st.widths[c.id] ?? (c.id === cols[0].id ? 220 : 160);
+  const widthOf = (c: Column) => st.widths[c.id] ?? c.width ?? (c.id === cols[0].id ? 220 : 160);
 
   function updateBulk(shown: number): void {
     clear(bulkInfo);

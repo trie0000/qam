@@ -407,13 +407,14 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-insp-src { display: flex; flex-direction: column; gap: var(--s-2); }
 .qam-insp-warn { font-size: var(--fs-sm); color: var(--warn); margin: 0; user-select: text; }
 
-/* 四半期検査: 共通テーブルを埋め込む枠（renderTable は height:100% で親を埋める） */
+/* 四半期検査: 共通テーブルはページの流れに置く（高さを固定せず内部スクロールを作らない） */
 .qam-insp-tblwrap { display: flex; flex-direction: column; gap: var(--s-2); }
 .qam-insp-tblbar { display: flex; justify-content: flex-end; }
-.qam-insp-tbl { height: 360px; border: 1px solid var(--line); border-radius: var(--r-2); overflow: hidden; }
-.qam-insp-tbl--tall { height: 560px; }
+.qam-insp-tbl { border: 1px solid var(--line); border-radius: var(--r-2); }
+/* 表の左右パディングは枠内では不要（枠線に沿わせる） */
+.qam-insp-tbl .qam-tablewrap { padding: 0; overflow: visible; }
 /* 週セルのマーク: S=SCAN / M=MAP。実施=ok、予約=warn。 */
-.qam-insp-mk { display: inline-block; min-width: 14px; text-align: center; font-weight: 600;
-  font-family: var(--font-mono); font-size: var(--fs-xs); margin-right: 2px; }
+.qam-insp-mk { display: inline-block; min-width: 16px; text-align: center; font-weight: 700;
+  font-family: var(--font-mono); font-size: var(--fs-md); line-height: 1.2; margin-right: 3px; }
 .qam-insp-mk.is-done { color: var(--ok); }
 .qam-insp-mk.is-sched { color: var(--warn); }
