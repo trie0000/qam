@@ -602,3 +602,35 @@ describe('検査一覧（実行履歴・予約済み）', () => {
     expect(d.entries[0]).toMatchObject({ category: 'run', kind: 'scan', setten: 'AB123', state: 'Finished' });
   });
 });
+
+describe('管理表（Qualys 未登録の予定）の合流', () => {
+  // 判定（四半期・マトリクス）に乗るのは接続点IDパターンに一致する対象だけ。
+  // 「申請番号(仮)」のような対象外タイトルでも、検査一覧には無条件で出る（下のテスト）。
+  const manual = {
+    scan: [{ id: 'manual-1', title: 'AB123 東京_20260801', active: true, nextLaunch: '2026-08-01T02:00:00', assetGroups: ['AB123 東京'], source: 'manual' as const }],
+    map: [{ id: 'manual-2', title: 'AB123 東京_20260801', active: true, nextLaunch: '2026-08-01T02:00:00', domains: ['ab123.jp'], assetGroups: ['AB123 東京'], source: 'manual' as const }],
+  };
+
+  it('管理表の予定はスケジュール済みとして判定に乗る', () => {
+    const d = computeInspection(
+      records(group('AB123 東京', ['ab123.jp'])), null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18), manual,
+    );
+    expect(d.scan[0].status).toBe('scheduled');
+    expect(d.map[0].status).toBe('scheduled');
+    expect(d.sources.scanSchedRows).toBe(1);
+    expect(d.sources.mapSchedRows).toBe(1);
+  });
+
+  it('検査一覧では状態が「管理表のみ」になり、対象外タイトル（申請番号(仮)）でも出る', () => {
+    const kari = {
+      scan: [{ id: 'manual-9', title: 'EXT-2026-001(仮)_20260801', active: true, nextLaunch: '2026-08-01T02:00:00', assetGroups: ['EXT-2026-001(仮)'], source: 'manual' as const }],
+      map: [] as typeof manual.map,
+    };
+    const d = computeInspection(records(group('AB123 東京')), null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18), kari);
+    const sched = d.entries.filter((e) => e.category === 'schedule');
+    expect(sched).toHaveLength(1);
+    expect(sched[0].state).toBe('管理表のみ');
+    expect(sched[0].ref).toBe('manual-9');
+    expect(sched[0].target).toBe('EXT-2026-001(仮)');
+  });
+});

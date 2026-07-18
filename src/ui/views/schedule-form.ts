@@ -21,12 +21,15 @@ export interface ScheduleDefaults {
 // 登録の実行結果（どこまで進んだかを画面に出す）。
 export interface ProvisionResult { steps: string[] }
 
+// 登録モード。qualys=Qualys へ実登録 / ledger=Qualys には登録せず QAM の管理表だけ更新。
+export type RegisterMode = 'qualys' | 'ledger';
+
 export interface InspectionFormOpts {
   today: string;
   defaults: ScheduleDefaults;
   regions: RegionOption[];
   confirm: (title: string, lines: string[]) => Promise<boolean>;
-  submit: (p: ProvisionInput, scan: ScheduleInput, map: ScheduleInput) => Promise<ProvisionResult>;
+  submit: (mode: RegisterMode, p: ProvisionInput, scan: ScheduleInput, map: ScheduleInput) => Promise<ProvisionResult>;
   onDone: () => void;
 }
 
@@ -81,6 +84,13 @@ const ymd = (iso: string): string => (iso || '').replace(/-/g, '');
 export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement; submit: () => Promise<boolean> } {
   const regions = o.regions.length ? o.regions : DEFAULT_REGIONS;
 
+  // ---- 登録モード ----
+  const regMode = el('select', { class: 'in' }) as HTMLSelectElement;
+  regMode.append(
+    el('option', { value: 'qualys' }, ['Qualys へ登録する']),
+    el('option', { value: 'ledger' }, ['管理表のみ更新（Qualys へは登録しない）']),
+  );
+
   // ---- 資産種別・払い出し（AssetGroup / ドメイン）----
   const assetType = el('select', { class: 'in' }) as HTMLSelectElement;
   assetType.append(
@@ -128,13 +138,23 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const startMinute = numInput(0, 0, 59);
 
   const rowKind = field('検査種別', kind, 'MAP と SCAN の両方／MAP 単体／SCAN 単体。');
+  const rowState = field('作成時の状態', active);
   const rowRegion = field('地域区分', region, 'ドメイン名の末尾に付く地域コードです。');
   const rowIp = field('検査資産情報（IP）', el('div', {}, [ipList, addIpBtn]),
     '「単体」は IP か CIDR、「レンジ」は開始〜終了。行を追加して複数指定できます。AssetGroup の IP_SET に登録されます。');
   const rowFqdn = field('検査資産情報（FQDN）', el('div', {}, [fqdnList, addFqdnBtn]),
     '行を追加して複数指定できます。AssetGroup の DNS_LIST に登録されます。');
-  const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt);
-  const rowMapOpt = field('MAP のオプションプロファイル', mapOpt);
+  const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, '共通設定の既定値が入っています。');
+  const rowMapOpt = field('MAP のオプションプロファイル', mapOpt, '共通設定の既定値が入っています。');
+  const rowScanner = field('スキャナー', scanner, '共通設定の既定値が入っています。');
+  // 通常は触らない項目なので折りたたんでおく（開いた状態は保持しない＝毎回閉じる）。
+  const optBody = el('div', { class: 'qam-prov-optbody', hidden: true }, [rowScanner, rowScanOpt, rowMapOpt]);
+  const optToggle = el('button', { class: 'btn btn--sm', type: 'button' }, ['オプション設定 ▸']);
+  optToggle.addEventListener('click', () => {
+    optBody.hidden = !optBody.hidden;
+    optToggle.textContent = optBody.hidden ? 'オプション設定 ▸' : 'オプション設定 ▾';
+  });
+  const optSection = el('div', { class: 'qam-prov-opt' }, [optToggle, optBody]);
 
   const readProvision = (): ProvisionInput => ({
     applicationNo: appNo.value,
@@ -174,11 +194,16 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     show(rowRegion, p.withMap);
     show(rowIp, !isDyn);
     show(rowFqdn, isDyn);
+    const isLedger = regMode.value === 'ledger';
+    // 管理表のみ更新では Qualys へ送る項目（スキャナー/プロファイル/作成時の状態）は無関係なので隠す。
+    show(optSection, !isLedger);
+    show(rowState, !isLedger);
     show(rowScanOpt, p.withScan);
     show(rowMapOpt, p.withMap);
     refreshPreview();
     syncTitle();
   }
+  regMode.addEventListener('change', syncRows);
   assetType.addEventListener('change', syncRows);
   kind.addEventListener('change', syncRows);
   region.addEventListener('change', refreshPreview);
@@ -191,6 +216,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     el('div', { class: 'qam-insp-sec-note' }, [
       'AssetGroup（とドメイン）を作成し、続けて検査スケジュールを登録します。検査は検査予定日に1回だけ実行されます。作成後の変更・削除は Qualys の画面で行ってください。',
     ]),
+    field('登録モード', regMode, '「管理表のみ更新」は Qualys へ一切登録せず、QAM の検査一覧・四半期判定に予定として記録します。'),
     field('資産種別', assetType, '静的=IP 資産（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は登録しません）。'),
     field('外部接続申請番号', appNo, 'AssetGroup 名は「申請番号(仮)」、ドメイン名は「小文字の申請番号.地域コード」になります。'),
     rowKind,
@@ -201,9 +227,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     field('スケジュールのタイトル', title, '既定は「AssetGroup名_検査予定日(YYYYMMDD)」。書き換えるとその値を使います。'),
     field('検査予定日', startDate, 'この日に1回だけ実行されます（繰り返しはありません）。'),
     field('開始時刻（時／分）', el('div', { class: 'qam-sched-time' }, [startHour, startMinute])),
-    field('スキャナー', scanner),
-    rowScanOpt, rowMapOpt,
-    field('作成時の状態', active),
+    optSection,
+    rowState,
     err,
   ]);
   addIp(); addFqdn();
@@ -246,9 +271,18 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     ];
     if (errors.length) { showErrors([...new Set(errors)]); return false; }
     showErrors([]);
-    if (!(await o.confirm('この内容で登録しますか？', describeProvision(p)))) return false;
+    const mode = regMode.value as RegisterMode;
+    const time = `${String(scan.startHour).padStart(2, '0')}:${String(scan.startMinute).padStart(2, '0')}`;
+    const lines = mode === 'ledger'
+      ? [
+        '【管理表のみ更新】Qualys へは登録しません。',
+        ...(plan.withScan ? [`SCAN 予定を記録: ${plan.title}（${scan.startDate} ${time}）`] : []),
+        ...(plan.withMap ? [`MAP 予定を記録: ${plan.domain}（${scan.startDate} ${time}）`] : []),
+      ]
+      : describeProvision(p);
+    if (!(await o.confirm(mode === 'ledger' ? '管理表に記録しますか？' : 'この内容で登録しますか？', lines))) return false;
     try {
-      await o.submit(p, scan, map);
+      await o.submit(mode, p, scan, map);
       o.onDone();
       return true;
     } catch (e) {

@@ -286,18 +286,20 @@ export function buildEntries(
   for (const m of mapRuns) {
     out.push({ kind: 'map', category: 'run', title: m.title, target: m.domain, setten: '', datetime: m.datetime, state: m.state || '—', ref: m.ref });
   }
+  const schedState = (active: boolean, source?: string): string =>
+    (source === 'manual' ? '管理表のみ' : (active ? '有効' : '無効'));
   for (const s of scanScheds) {
     out.push({
       kind: 'scan', category: 'schedule', title: s.title, target: ags(s.assetGroups),
       setten: s.assetGroups.map((a) => settenId(a.trim())).filter(Boolean).join(', '),
-      datetime: s.nextLaunch, state: s.active ? '有効' : '無効', ref: s.id,
+      datetime: s.nextLaunch, state: schedState(s.active, s.source), ref: s.id,
     });
   }
   for (const m of mapScheds) {
     out.push({
       kind: 'map', category: 'schedule', title: m.title, target: m.domains.join(', '),
       setten: m.assetGroups.map((a) => settenId(a.trim())).filter(Boolean).join(', '),
-      datetime: m.nextLaunch, state: m.active ? '有効' : '無効', ref: m.id,
+      datetime: m.nextLaunch, state: schedState(m.active, m.source), ref: m.id,
     });
   }
   // 新しい順（日時が読めないものは末尾）。
@@ -410,16 +412,21 @@ function unmatched(hits: RunHit[], targets: InspTarget[], q: Quarter, limit = 50
   return { inQuarter, keys: [...seen].sort().slice(0, limit) };
 }
 
+// 管理表（Qualys 未登録の予定）。スケジュール行と同じ形で合流させる。
+export interface ManualRows { scan: ScanScheduleRow[]; map: MapScheduleRow[] }
+
 export function computeInspection(
   records: QamRecords, raw: QamInspectionRaw | null, fiscalStartMonth: number, patternSrc: string, now: Date,
+  manual?: ManualRows,
 ): InspectionData {
   const q = quarterOf(now, fiscalStartMonth);
   const t = buildTargets(records, agPattern(patternSrc));
   // 応答から読めた行（Rows）と、対象キーへ展開したヒットを別々に持つ（切り分け用）。
   const scanRunRows = raw ? parseScanList(raw.scans) : [];
   const mapRunRows = raw ? parseMapList(raw.maps) : [];
-  const scanSchedRows = raw ? parseScanSchedules(raw.scanSchedules) : [];
-  const mapSchedRows = raw ? parseMapSchedules(raw.mapSchedules) : [];
+  // 管理表の予定は Qualys のスケジュールと同格に扱う（判定・週次・一覧すべてに乗る）。
+  const scanSchedRows = [...(raw ? parseScanSchedules(raw.scanSchedules) : []), ...(manual?.scan ?? [])];
+  const mapSchedRows = [...(raw ? parseMapSchedules(raw.mapSchedules) : []), ...(manual?.map ?? [])];
   const scanHits = scanRunHits(scanRunRows);
   const mapHits = mapRunHits(mapRunRows);
   const scanScheds = scanSchedHits(scanSchedRows);

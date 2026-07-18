@@ -19,7 +19,7 @@ import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, DEFA
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, appendManualInspection, readManualInspections, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords } from './types';
@@ -697,7 +697,19 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   const stamp = resolveAsof(stamps, asof ? `${asof}T99` : undefined);
   const snap = stamp ? await readSnapshot(backend, 'group', stamp) : null;
   const pattern = cfg.inspectionAgPattern || DEFAULT_AG_PATTERN;
-  const data = computeInspection(snap?.records ?? {}, raw, cfg.fiscalStartMonth || 4, pattern, new Date());
+  // 管理表（Qualys 未登録の予定）もスケジュールとして合流させる。
+  const manual = await readManualInspections(backend);
+  const manualRows = {
+    scan: manual.filter((m) => m.kind === 'scan').map((m) => ({
+      id: `manual-${m.ts}`, title: m.title, active: true, nextLaunch: m.nextLaunch,
+      assetGroups: m.assetGroups, source: 'manual' as const,
+    })),
+    map: manual.filter((m) => m.kind === 'map').map((m) => ({
+      id: `manual-${m.ts}`, title: m.title, active: true, nextLaunch: m.nextLaunch,
+      domains: m.domains, assetGroups: m.assetGroups, source: 'manual' as const,
+    })),
+  };
+  const data = computeInspection(snap?.records ?? {}, raw, cfg.fiscalStartMonth || 4, pattern, new Date(), manualRows);
   count.textContent = `${data.quarter.label}／SCAN ${data.scan.length} 件・MAP ${data.map.length} 件`;
   clear(host);
   // AssetGroup が 1 件も無いときだけ空表示。パターン不一致で 0 件のときは本体を出す
@@ -729,11 +741,13 @@ async function renderQuickInspect(count: HTMLElement, host: HTMLElement): Promis
       timeZoneCode: cfg.scheduleTimeZone || 'JP',
     },
     confirm: (title, lines) => confirmModal(title, lines.join('\n'), '登録する'),
-    submit: async (p, scanInput, mapInput) => {
-      await ensureAuthor(); // 書き込み操作なので作業者を確定させる
+    submit: async (mode, p, scanInput, mapInput) => {
+      await ensureAuthor(); // 記録にも作業者を残すので先に確定させる
+      const author = localStorage.getItem(LS.author) || '';
+      if (mode === 'ledger') return recordLedger(author, p, scanInput, mapInput);
       const creds = await resolveQualysCreds();
       if (!creds) throw new Error('Qualys の接続先/認証情報が未設定です');
-      return runProvision(creds, localStorage.getItem(LS.author) || '', p, scanInput, mapInput);
+      return runProvision(creds, author, p, scanInput, mapInput);
     },
     onDone: () => { refresh(); },
   });
@@ -775,6 +789,36 @@ async function askDuplicate(what: string, name: string): Promise<{ choice: DupCh
       onClose: () => { if (!done) resolve({ choice: 'cancel', newName: '' }); },
     });
   });
+}
+
+// 管理表のみ更新: Qualys へは一切登録せず、予定を管理表(inspection/manual.jsonl)に記録する。
+// 検査一覧には「管理表のみ」、四半期判定には通常のスケジュールと同格の「予定」として乗る。
+async function recordLedger(
+  author: string, p: ProvisionInput, scanInput: ScheduleInput, mapInput: ScheduleInput,
+): Promise<{ steps: string[] }> {
+  const plan = planProvision(p);
+  const steps: string[] = [];
+  const ts = new Date().toISOString();
+  // 予定日時はローカル時刻として記録（週次バケットも利用者のタイムゾーンで切っているため）。
+  const at = (i: ScheduleInput): string =>
+    `${i.startDate}T${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}:00`;
+  if (plan.withScan) {
+    await appendManualInspection(backend, {
+      ts, author, kind: 'scan', title: scanInput.title,
+      nextLaunch: at(scanInput), assetGroups: [plan.title], domains: [],
+    });
+    steps.push(`SCAN 予定を管理表に記録（${plan.title}）`);
+  }
+  if (plan.withMap) {
+    await appendManualInspection(backend, {
+      ts, author, kind: 'map', title: mapInput.title,
+      nextLaunch: at(mapInput), assetGroups: [plan.title], domains: [plan.domain],
+    });
+    steps.push(`MAP 予定を管理表に記録（${plan.domain}）`);
+  }
+  recordOp('検査登録(管理表のみ)', steps.join(' / '));
+  toast(`管理表に記録しました: ${steps.join(' / ')}`, 'ok');
+  return { steps };
 }
 
 async function runProvision(
@@ -1503,6 +1547,9 @@ function openHelp(): void {
           AssetGroup 名は<b>「申請番号(仮)」</b>、ドメイン名は<b>「小文字の申請番号.地域コード」</b>になります。
           スケジュールのタイトルは<b>「AssetGroup名_検査予定日(YYYYMMDD)」</b>が既定で入ります。
           検査は<b>検査予定日に1回だけ</b>実行され（繰り返しなし）、開始日と開始時刻だけを指定します。
+          <b>登録モード</b>で「管理表のみ更新」を選ぶと、Qualys へは登録せずに予定だけを管理表へ記録します
+          （検査一覧に状態「管理表のみ」で表示され、四半期判定にも予定として乗ります）。
+          スキャナー・オプションプロファイルは「オプション設定」（折りたたみ）にあります。
           <b>同名が既にある場合は「既存を使う／別名で作る／中止」を確認</b>します。
           登録内容は操作履歴に残り、<b>実行者・発行したAPI・パラメータは api-audit.log にも記録</b>されます。</li>
       <li><b>検査一覧</b>：取得した<b>実行履歴</b>と<b>予約済み</b>を1つの表で確認できます。「区分」列で

@@ -9,12 +9,13 @@ export interface ScanRun { ref: string; title: string; datetime: string; state: 
 // 実施済みマップ 1 件。domain はマップ対象ドメイン。
 export interface MapRun { ref: string; title: string; datetime: string; state: string; domain: string }
 // スケジュール 1 件。nextLaunch は次回実行予定（ISO）。
-export interface ScanScheduleRow { id: string; title: string; active: boolean; nextLaunch: string; assetGroups: string[] }
+// source='manual' は QAM の管理表（Qualys 未登録の予定）由来。パーサは付けない。
+export interface ScanScheduleRow { id: string; title: string; active: boolean; nextLaunch: string; assetGroups: string[]; source?: 'manual' }
 // v1 のスケジュールマップ。TARGETS は「ドメイン:[ネットブロック]」形式を複数取りうる。
 // AssetGroup 指定でも組めるので assetGroups も保持する（ドメイン照合の補完に使う）。
 export interface MapScheduleRow {
   id: string; title: string; active: boolean; nextLaunch: string;
-  domains: string[]; assetGroups: string[];
+  domains: string[]; assetGroups: string[]; source?: 'manual';
 }
 
 const txt = (n: Element | null): string => (n ? (n.textContent ?? '').trim() : '');

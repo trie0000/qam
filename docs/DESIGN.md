@@ -270,7 +270,10 @@ qam/
 - **1回のみ実行**: スケジュールは周期を持たず「検査予定日＋開始時刻」だけ指定する。API 上は
   `occurrence=daily & frequency_days=1 & recurrence=1`（1回実行後に自動無効化。v1/v2 とも対応確認済み）。
   タイトル既定は `AssetGroup名_YYYYMMDD`（申請番号・予定日に追従、手編集後は上書きしない）。
-- **UI**: 左ペインの独立ビュー「簡易検査」。フォームはモーダルではなくページ内に置く
+- **登録モード**: `qualys`（実登録）/ `ledger`（管理表のみ）。ledger は Qualys API を呼ばず
+  `inspection/manual.jsonl` に追記（恒久・剪定対象外）。読み出しはスケジュール行（source='manual'）に
+  変換して computeInspection の manual 引数へ合流させる。検査一覧の状態は「管理表のみ」で区別する。
+- **UI**: 左ペインの独立ビュー「簡易検査」。スキャナー/プロファイルは折りたたみ「オプション設定」に集約。フォームはモーダルではなくページ内に置く
   （`buildInspectionForm` が本体 node と submit を返す）。四半期検査の「新規検査登録」ボタンは
   このビューへ遷移するだけにして、登録 UI を一箇所に集約している。
 - **注意（既知の落とし穴）**: `hidden` 属性は UA の `display:none` なので、`.qam-field` のように

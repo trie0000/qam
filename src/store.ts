@@ -165,6 +165,24 @@ export async function readInspectionLegacy(b: FileBackend): Promise<QamInspectio
   try { return JSON.parse(raw) as QamInspectionRaw; } catch { return null; }
 }
 
+// --- 四半期検査の管理表（手動記録） ---
+// Qualys へ登録せず「予定」を管理表としてだけ持つモードの記録。追記のみ・剪定しない
+// （検査計画の恒久記録。Qualys 側に実体は無いので、一覧では「管理表」と明示する）。
+export interface QamManualInspection {
+  ts: string;              // 記録日時(ISO)
+  author: string;
+  kind: 'scan' | 'map';
+  title: string;           // スケジュールタイトル
+  nextLaunch: string;      // 検査予定日時(ISO・ローカル)
+  assetGroups: string[];   // AssetGroup タイトル
+  domains: string[];       // MAP 対象ドメイン（scan は空）
+}
+const MANUAL_INSPECTION = 'inspection/manual.jsonl';
+export const appendManualInspection = (b: FileBackend, m: QamManualInspection): Promise<void> =>
+  b.write(MANUAL_INSPECTION, JSON.stringify(m) + '\n', true);
+export const readManualInspections = (b: FileBackend): Promise<QamManualInspection[]> =>
+  readJsonl<QamManualInspection>(b, MANUAL_INSPECTION);
+
 // --- 操作履歴（監査ログ）: 登録/削除/変更などの操作を 作業者・日時つきで記録 ---
 export interface QamOp { ts: string; author: string; action: string; entity?: QamEntity; detail: string }
 const OPS = 'ops.jsonl';

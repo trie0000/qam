@@ -5,6 +5,7 @@ import {
   prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, importHistory,
   backupSlot, listBackups, hasBackup, pruneBackups,
   writeInspection, getInspectionDates, readInspectionAt, readInspectionLegacy,
+  appendManualInspection, readManualInspections,
 } from '../src/store';
 import type { QamEvent } from '../src/types';
 
@@ -268,5 +269,17 @@ describe('四半期検査の日次スナップショット', () => {
     const removed = await prune(b, 30, '2026-07-18');
     expect(removed).toContain('inspection/2026-05-01');
     expect(await getInspectionDates(b)).toEqual(['2026-07-15']);
+  });
+});
+
+describe('管理表（手動記録）の追記/読込', () => {
+  it('追記した順に読め、剪定やスナップショットとは独立している', async () => {
+    const b = new MemBackend();
+    await appendManualInspection(b, { ts: '2026-07-19T00:00:00Z', author: 'a', kind: 'scan', title: 't1', nextLaunch: '2026-08-01T02:00:00', assetGroups: ['AB(仮)'], domains: [] });
+    await appendManualInspection(b, { ts: '2026-07-19T00:01:00Z', author: 'a', kind: 'map', title: 't2', nextLaunch: '2026-08-02T02:00:00', assetGroups: ['AB(仮)'], domains: ['ab.jp'] });
+    const rows = await readManualInspections(b);
+    expect(rows.map((r) => r.kind)).toEqual(['scan', 'map']);
+    await prune(b, 1, '2027-01-01'); // 保存期間を過ぎても管理表は残る
+    expect(await readManualInspections(b)).toHaveLength(2);
   });
 });

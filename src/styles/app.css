@@ -449,3 +449,7 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 /* 簡易検査ビュー: 登録フォームをページ内に置く */
 .qam-quick { padding: var(--s-5) var(--gutter); max-width: 720px; display: flex; flex-direction: column; }
 .qam-quick-actions { display: flex; justify-content: flex-end; padding-top: var(--s-3); }
+/* 簡易検査: 折りたたみのオプション設定 */
+.qam-prov-opt { margin-bottom: var(--s-5); }
+.qam-prov-optbody { margin-top: var(--s-4); padding: var(--s-4) var(--s-4) 0;
+  border-left: 3px solid var(--line); }
