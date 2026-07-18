@@ -3,7 +3,7 @@ import {
   DEFAULT_AG_PATTERN, agPattern, quarterOf, buildTargets, classify, countStatus, weeklySummary,
   pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished, computeInspection,
 } from '../src/inspection';
-import { parseScanList, parseMapList, parseScanSchedules, parseMapSchedules } from '../src/inspection-parse';
+import { parseScanList, parseMapList, parseScanSchedules, parseMapSchedules, parseMapTargets } from '../src/inspection-parse';
 import { qualysErrorText } from '../src/qualys';
 import type { QamRecord, QamRecords } from '../src/types';
 
@@ -379,5 +379,71 @@ describe('Qualys エラー応答の検出', () => {
   it('正常な一覧応答はエラーとみなさない', () => {
     expect(qualysErrorText('<SCAN_LIST_OUTPUT><RESPONSE><SCAN_LIST><SCAN><REF>scan/1</REF></SCAN></SCAN_LIST></RESPONSE></SCAN_LIST_OUTPUT>')).toBe('');
     expect(qualysErrorText('<MAP_REPORT_LIST><MAP_REPORT ref="map/1" domain="a.example"/></MAP_REPORT_LIST>')).toBe('');
+  });
+});
+
+// 実テナントの応答そのままの形（IP はマスク）。要素は SCAN、TYPE=MAP、
+// TARGETS は「ドメイン:[ネットブロック]」、NEXTLAUNCH_UTC は Z 無しで SCHEDULE の外。
+const REAL_MAP_SCHED = `<?xml version="1.0"?><SCHEDULEDSCANS>
+ <SCAN active="yes" ref="1000001">
+  <TITLE><![CDATA[AB123_m_20210303]]></TITLE>
+  <TARGETS><![CDATA[example.jp:[10.0.0.1, 10.0.0.2]]]></TARGETS>
+  <SCHEDULE>
+   <WEEKLY frequency_weeks="1" weekdays="1"/>
+   <START_DATE_UTC>2021-03-01T15:00:00</START_DATE_UTC>
+   <START_HOUR>0</START_HOUR><START_MINUTE>0</START_MINUTE>
+   <TIME_ZONE><TIME_ZONE_CODE>JP</TIME_ZONE_CODE></TIME_ZONE>
+   <DST_SELECTED>0</DST_SELECTED>
+  </SCHEDULE>
+  <NEXTLAUNCH_UTC>2026-07-19T15:00:00</NEXTLAUNCH_UTC>
+  <ISCANNER_NAME>external</ISCANNER_NAME>
+  <TYPE>MAP</TYPE>
+  <ASSET_GROUPS><ASSET_GROUP><ASSET_GROUP_TITLE><![CDATA[AB123 拠点名]]></ASSET_GROUP_TITLE></ASSET_GROUP></ASSET_GROUPS>
+ </SCAN>
+</SCHEDULEDSCANS>`;
+
+describe('スケジュールマップ（実応答フォーマット）', () => {
+  it('ドメイン:[ネットブロック] からドメインだけを取り出す', () => {
+    expect(parseMapTargets('example.jp:[10.0.0.1, 10.0.0.2]')).toEqual(['example.jp']);
+    expect(parseMapTargets('a.example, b.example')).toEqual(['a.example', 'b.example']);
+    expect(parseMapTargets('a.example:[10.0.0.1], b.example:[10.0.0.2]')).toEqual(['a.example', 'b.example']);
+    expect(parseMapTargets('none:[10.0.0.1-10.0.0.9]')).toEqual([]); // ネットブロックのみは対象外
+    expect(parseMapTargets('')).toEqual([]);
+  });
+
+  it('SCAN要素・TYPE=MAP・Z無しのNEXTLAUNCH_UTC を正しく読む', () => {
+    const rows = parseMapSchedules(REAL_MAP_SCHED);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: '1000001', active: true, domains: ['example.jp'], assetGroups: ['AB123 拠点名'] });
+    expect(rows[0].nextLaunch).toBe('2026-07-19T15:00:00Z'); // Z を補ってUTC扱い
+    expect(new Date(rows[0].nextLaunch).toISOString()).toBe('2026-07-19T15:00:00.000Z');
+  });
+
+  it('TYPE が SCAN のタスクは混ざっていても除外する', () => {
+    const mixed = REAL_MAP_SCHED.replace('<TYPE>MAP</TYPE>', '<TYPE>SCAN</TYPE>');
+    expect(parseMapSchedules(mixed)).toHaveLength(0);
+  });
+
+  it('登録ドメインと突合してスケジュール済みになる', () => {
+    const d = computeInspection(
+      records(group('AB123 拠点名', ['example.jp'])),
+      { scans: '', maps: '', scanSchedules: '', mapSchedules: REAL_MAP_SCHED, fetchedAt: '2026-07-18T00:00:00Z' },
+      4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18),
+    );
+    expect(d.sources.mapSchedRows).toBe(1);
+    expect(d.sources.mapScheds).toBe(1);
+    expect(d.map[0].key).toBe('example.jp');
+    expect(d.map[0].status).toBe('scheduled');
+  });
+
+  it('スケジュールのドメインがDOMAIN_LISTに無くても、接続点IDで補完する', () => {
+    // AG には別ドメインだけ登録されている（TARGETS のドメインと不一致）
+    const d = computeInspection(
+      records(group('AB123 拠点名', ['other.example'])),
+      { scans: '', maps: '', scanSchedules: '', mapSchedules: REAL_MAP_SCHED, fetchedAt: '2026-07-18T00:00:00Z' },
+      4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18),
+    );
+    expect(d.map[0].key).toBe('other.example');
+    expect(d.map[0].status).toBe('scheduled'); // 接続点 AB123 にマップ予定があるので補完
   });
 });

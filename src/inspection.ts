@@ -144,6 +144,10 @@ export function scanSchedHits(rows: ScanScheduleRow[]): SchedHit[] {
 export const mapSchedHits = (rows: MapScheduleRow[]): SchedHit[] =>
   rows.flatMap((m) => m.domains.map((d) => ({ key: d, nextLaunch: m.nextLaunch, active: m.active })));
 
+// マップのスケジュールは AssetGroup 指定でも組める。接続点ID をキーにしたヒットも作る。
+export const mapSchedAgHits = (rows: MapScheduleRow[]): SchedHit[] =>
+  rows.flatMap((m) => m.assetGroups.map((ag) => ({ key: settenId(ag.trim()), nextLaunch: m.nextLaunch, active: m.active })));
+
 const weekNoOf = (d: Date, q: Quarter): number | null => q.weeks.find((w) => d >= w.start && d <= w.end)?.no ?? null;
 
 // 対象ごとに 検査済み / スケジュール済み / 未対応 を判定する。
@@ -176,6 +180,30 @@ export function classify(targets: InspTarget[], runs: RunHit[], scheds: SchedHit
     const next = sched.get(k);
     if (next) return { ...t, status: 'scheduled' as const, doneAt: '', weekNo: null, nextLaunch: next.toISOString() };
     return { ...t, status: 'pending' as const, doneAt: '', weekNo: null, nextLaunch: '' };
+  });
+}
+
+// ドメインで一致しなかった MAP 対象を、その接続点にマップ予定があるかで補完する。
+// （スケジュールが AssetGroup 指定のみで、TARGETS に当該ドメインが出てこない場合の救済）
+export function fillMapScheduleByAg(rows: InspRow[], agScheds: SchedHit[], q: Quarter): InspRow[] {
+  const byAg = new Map<string, Date>();
+  for (const s of agScheds) {
+    if (!s.active) continue;
+    const d = toDate(s.nextLaunch);
+    const k = norm(s.key);
+    if (!d || !k || d < q.start || d > q.end) continue;
+    const prev = byAg.get(k);
+    if (!prev || d < prev) byAg.set(k, d);
+  }
+  if (!byAg.size) return rows;
+  return rows.map((r) => {
+    if (r.status !== 'pending') return r;
+    let best: Date | null = null;
+    for (const ag of r.ags) {
+      const d = byAg.get(norm(ag));
+      if (d && (!best || d < best)) best = d;
+    }
+    return best ? { ...r, status: 'scheduled' as const, nextLaunch: best.toISOString() } : r;
   });
 }
 
@@ -273,7 +301,8 @@ export function computeInspection(
   const scanScheds = scanSchedHits(scanSchedRows);
   const mapScheds = mapSchedHits(mapSchedRows);
   const scan = classify(t.scan, scanHits, scanScheds, q);
-  const map = classify(t.map, mapHits, mapScheds, q);
+  // ドメイン照合 → 接続点ID による補完、の順で MAP を確定する。
+  const map = fillMapScheduleByAg(classify(t.map, mapHits, mapScheds, q), mapSchedAgHits(mapSchedRows), q);
   const us = unmatched(scanHits, t.scan, q);
   const um = unmatched(mapHits, t.map, q);
   return {

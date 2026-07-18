@@ -209,21 +209,38 @@ DTD: `map_report_lists.dtd`。**`ref`/`date`/`domain`/`status` は `MAP_REPORT` 
 
 ### スケジュール済みマップ — `/msp/scheduled_scans.php?type=map`（v1）
 
-DTD: `scheduled_scans.dtd`。ルートは **`SCHEDULEDSCANS`**（アンダースコア無し）、
-**`active` は属性で "yes"/"no"**、対象は **`TARGETS`（カンマ区切り・ドメインと AssetGroup 名が混在しうる）**、
-`NEXTLAUNCH_UTC` は**タスク直下**。`type=scan`（既定）/`type=all` も指定可。
+DTD: `scheduled_scans.dtd`。**実応答で確認済みの形**（実テナントの応答・IP はマスク）:
 
 ```xml
 <SCHEDULEDSCANS>
- <MAP active="yes" ref="11155">
-  <TITLE><![CDATA[Weekly Map]]></TITLE>
-  <TARGETS><![CDATA[example.com, sub.example.com]]></TARGETS>
-  <SCHEDULE><WEEKLY frequency_weeks="1"/><START_DATE_UTC>2026-07-01T22:00:00</START_DATE_UTC></SCHEDULE>
-  <NEXTLAUNCH_UTC>2026-09-05T02:00:00Z</NEXTLAUNCH_UTC>
- </MAP>
+ <SCAN active="yes" ref="1000001">                        <!-- type=map でも要素名は SCAN -->
+  <TITLE><![CDATA[XX000_m_20210303]]></TITLE>
+  <TARGETS><![CDATA[example.jp:[10.0.0.1, 10.0.0.2]]]></TARGETS>   <!-- ドメイン:[ネットブロック] -->
+  <SCHEDULE>
+   <WEEKLY frequency_weeks="1" weekdays="1"/>
+   <START_DATE_UTC>2021-03-01T15:00:00</START_DATE_UTC>
+   <START_HOUR>0</START_HOUR><START_MINUTE>0</START_MINUTE>
+   <TIME_ZONE><TIME_ZONE_CODE>JP</TIME_ZONE_CODE></TIME_ZONE>
+   <DST_SELECTED>0</DST_SELECTED>
+  </SCHEDULE>
+  <NEXTLAUNCH_UTC>2026-07-19T15:00:00</NEXTLAUNCH_UTC>     <!-- SCHEDULE の外・Z が付かない -->
+  <ISCANNER_NAME>external</ISCANNER_NAME>
+  <TYPE>MAP</TYPE>                                          <!-- 種別はここで判別 -->
+  <ASSET_GROUPS><ASSET_GROUP><ASSET_GROUP_TITLE/></ASSET_GROUP></ASSET_GROUPS>
+ </SCAN>
 </SCHEDULEDSCANS>
 ```
-注: `type=map` でもタスク要素が `<SCAN>` で返る場合があるため、パーサは `MAP`/`SCAN` の両方を見る。
+
+パーサが押さえている癖（いずれも実応答で踏んだもの）:
+
+| 癖 | 対応 |
+|---|---|
+| ルートは **`SCHEDULEDSCANS`**（アンダースコア無し） | そのまま探す |
+| `type=map` でも**要素名は `<SCAN>`**、種別は **`<TYPE>MAP</TYPE>`** | `MAP`/`SCAN` 両方を見て、`TYPE` があれば MAP のみ採用 |
+| `active` は**属性で `"yes"/"no"`** | `yes`/`1`/`true` を有効、要素が無ければ有効扱い |
+| **`TARGETS` は `ドメイン:[IP, IP]` 形式** | 角括弧内のカンマで割らず、`:` の前をドメインとする（`none` は除外） |
+| **`NEXTLAUNCH_UTC` に `Z` が付かない**（`SCHEDULE` の外） | 要素名どおり UTC として解釈（`Z` を補う）。付けないとローカル時刻扱いでずれる |
+| `ASSET_GROUPS` も持つ | ドメインで一致しない場合の接続点ID 補完に使う |
 
 ## 正規化マッピング（XML → 内部レコード）
 

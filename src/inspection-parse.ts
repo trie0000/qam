@@ -10,8 +10,12 @@ export interface ScanRun { ref: string; title: string; datetime: string; state: 
 export interface MapRun { ref: string; title: string; datetime: string; state: string; domain: string }
 // スケジュール 1 件。nextLaunch は次回実行予定（ISO）。
 export interface ScanScheduleRow { id: string; title: string; active: boolean; nextLaunch: string; assetGroups: string[] }
-// v1 のスケジュールマップは 1 タスクに複数ドメインを指定できる（TARGETS がカンマ区切り）。
-export interface MapScheduleRow { id: string; title: string; active: boolean; nextLaunch: string; domains: string[] }
+// v1 のスケジュールマップ。TARGETS は「ドメイン:[ネットブロック]」形式を複数取りうる。
+// AssetGroup 指定でも組めるので assetGroups も保持する（ドメイン照合の補完に使う）。
+export interface MapScheduleRow {
+  id: string; title: string; active: boolean; nextLaunch: string;
+  domains: string[]; assetGroups: string[];
+}
 
 const txt = (n: Element | null): string => (n ? (n.textContent ?? '').trim() : '');
 
@@ -56,9 +60,37 @@ function isActive(el: Element): boolean {
   return v === '1' || v === 'true' || v === 'yes';
 }
 
+// v1 は <NEXTLAUNCH_UTC>2026-07-19T15:00:00</NEXTLAUNCH_UTC> のように Z を付けずに返す。
+// そのまま Date に渡すとローカル時刻扱いになるので、要素名どおり UTC として解釈させる。
+const asUtc = (v: string): string => (v && !/([Zz]|[+-]\d{2}:?\d{2})$/.test(v) ? `${v}Z` : v);
+
 // 次回実行予定。UTC 系の要素名が版で揺れるので候補を並べる。
 const nextLaunchOf = (el: Element): string =>
-  pick(el, ['nextlaunch', 'next_launch'], ['NEXTLAUNCH_UTC', 'NEXT_LAUNCH_UTC', 'NEXTLAUNCH', 'NEXT_LAUNCH']);
+  asUtc(pick(el, ['nextlaunch', 'next_launch'], ['NEXTLAUNCH_UTC', 'NEXT_LAUNCH_UTC', 'NEXTLAUNCH', 'NEXT_LAUNCH']));
+
+// Qualys の map ターゲットは「ドメイン:[ネットブロック, ネットブロック]」形式を取る
+// （例: example.jp:[10.0.0.1, 10.0.0.2]）。角括弧の中のカンマで割らないよう深さ 0 のカンマだけで
+// 分割し、':' より前をドメインとして採る。'none' はネットブロックのみのマップを表す予約語。
+export function parseMapTargets(raw: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let cur = '';
+  const flush = (): void => {
+    const tok = cur.trim();
+    cur = '';
+    if (!tok) return;
+    const dom = tok.split(':')[0].trim().toLowerCase();
+    if (dom && dom !== 'none') out.push(dom);
+  };
+  for (const ch of raw) {
+    if (ch === '[' || ch === '(') depth++;
+    else if (ch === ']' || ch === ')') depth = Math.max(0, depth - 1);
+    else if (ch === ',' && depth === 0) { flush(); continue; }
+    cur += ch;
+  }
+  flush();
+  return uniq(out);
+}
 
 // 指定タグの要素を集める（複数候補タグに対応）。
 function elements(doc: Document, tags: string[]): Element[] {
@@ -118,20 +150,29 @@ export function parseScanSchedules(xml: string): ScanScheduleRow[] {
   }));
 }
 
-// スケジュール済みマップ一覧（v1 /msp/scheduled_scans.php?type=map）。
-//   <SCHEDULEDSCANS><MAP active="yes" ref="11155"><TITLE/><TARGETS>dom1, dom2</TARGETS>
-//     <SCHEDULE>…</SCHEDULE><NEXTLAUNCH_UTC>…</NEXTLAUNCH_UTC></MAP></SCHEDULEDSCANS>
-// v1 は type=map でもタスク要素が <SCAN> で返る場合があるため両方を見る。
-// TARGETS はカンマ区切りで、ドメインと AssetGroup 名が混在しうる（ドメイン照合なので非ドメインは素通り）。
+// スケジュール済みマップ一覧（v1 /msp/scheduled_scans.php?type=map）。実応答の形:
+//   <SCHEDULEDSCANS>
+//     <SCAN active="yes" ref="1000001">          ← type=map でも要素名は SCAN
+//       <TITLE/><TARGETS>ドメイン:[IP, IP]</TARGETS>
+//       <SCHEDULE><WEEKLY …/>…</SCHEDULE>
+//       <NEXTLAUNCH_UTC>2026-07-19T15:00:00</NEXTLAUNCH_UTC>   ← Z 無し・SCHEDULE の外
+//       <TYPE>MAP</TYPE>
+//       <ASSET_GROUPS><ASSET_GROUP><ASSET_GROUP_TITLE/></ASSET_GROUP></ASSET_GROUPS>
+//     </SCAN>
+//   </SCHEDULEDSCANS>
 export function parseMapSchedules(xml: string): MapScheduleRow[] {
   if (isBlank(xml)) return [];
   const doc = parseXmlDocument(xml);
-  return elements(doc, ['MAP', 'SCAN']).map((m) => ({
-    id: pick(m, ['id', 'ref'], ['ID', 'REF']),
-    title: pick(m, ['title'], ['TITLE']),
-    active: isActive(m),
-    nextLaunch: nextLaunchOf(m),
-    // 対象ドメインの入れ物は版で名前が異なる（TARGETS / SCAN_TARGET / DOMAIN…）。候補を順に探す。
-    domains: uniq(csv(pick(m, ['domain', 'target', 'targets'], ['TARGETS', 'SCAN_TARGET', 'DOMAINS', 'DOMAIN', 'TARGET']))),
-  }));
+  return elements(doc, ['MAP', 'SCAN'])
+    // scan と map が混在する応答に備え、TYPE があれば MAP のみ採る（無い版は全件）。
+    .filter((m) => { const t = firstText(m, ['TYPE']).toUpperCase(); return !t || t === 'MAP'; })
+    .map((m) => ({
+      id: pick(m, ['id', 'ref'], ['ID', 'REF']),
+      title: pick(m, ['title'], ['TITLE']),
+      active: isActive(m),
+      nextLaunch: nextLaunchOf(m),
+      // 対象の入れ物は版で名前が異なる。値は「ドメイン:[ネットブロック]」形式を想定して解く。
+      domains: parseMapTargets(pick(m, ['domain', 'target', 'targets'], ['TARGETS', 'SCAN_TARGET', 'DOMAINS', 'DOMAIN', 'TARGET'])),
+      assetGroups: assetGroupTitles(m),
+    }));
 }
