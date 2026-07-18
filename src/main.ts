@@ -691,7 +691,9 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   const data = computeInspection(snap?.records ?? {}, raw, cfg.fiscalStartMonth || 4, pattern, new Date());
   count.textContent = `${data.quarter.label}／SCAN ${data.scan.length} 件・MAP ${data.map.length} 件`;
   clear(host);
-  if (!data.scan.length && !data.map.length) { host.append(inspectionEmpty(pattern)); return; }
+  // AssetGroup が 1 件も無いときだけ空表示。パターン不一致で 0 件のときは本体を出す
+  // （「対象母集団」セクションが、どの AssetGroup がなぜ対象外かを示すため）。
+  if (!data.sources.agTotal) { host.append(inspectionEmpty(pattern)); return; }
   host.append(renderInspectionView({ data, busy: inspectionBusy, onFetch: () => { void runInspectionFetch(); } }));
 }
 

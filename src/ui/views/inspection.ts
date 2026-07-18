@@ -107,6 +107,36 @@ function matrixSection(d: InspectionData): HTMLElement {
   );
 }
 
+// 対象母集団: AssetGroup 全件のうち何件がパターンに一致したか、一致しなかったのは何か。
+// 「一部の AssetGroup しか出てこない」の理由をここで直接示す。
+function populationSection(d: InspectionData): HTMLElement {
+  const s = d.sources;
+  const body = el('div', { class: 'qam-insp-src' }, [
+    el('p', { class: 'qam-insp-sec-note' }, [
+      `AssetGroup 全 ${s.agTotal} 件のうち ${s.agMatched} 件が対象パターン ${d.pattern} に一致（対象外 ${s.agSkipped.length} 件）。`,
+    ]),
+  ]);
+  if (!s.agTotal) {
+    body.append(el('p', { class: 'qam-insp-warn' }, [
+      'AssetGroup のスナップショットがありません。先に「取込」から AssetGroup を取り込んでください。',
+    ]));
+    return section('対象母集団', '', body);
+  }
+  if (s.agSkipped.length) {
+    body.append(
+      el('p', { class: 'qam-insp-warn' }, [
+        `対象外になった AssetGroup（${s.agSkipped.length} 件）: ${s.agSkipped.join(', ')}`,
+      ]),
+      el('p', { class: 'qam-insp-sec-note' }, [
+        'パターンは「タイトル全体」に対する完全一致です（^ と $ で囲まれているため、'
+        + 'タイトルに拠点名などが付いていると一致しません）。前方一致にしたい場合は末尾の $ を外し、'
+        + '一部だけを対象にしたい場合は接頭辞を限定してください。共通設定の「四半期検査: 対象 AssetGroup パターン」で変更できます。',
+      ]),
+    );
+  }
+  return section('対象母集団', 'どの AssetGroup が四半期検査の対象になっているか。', body);
+}
+
 // 取得内訳: 応答から何件読めたか。「取得したのに全部未対応」の切り分け用。
 // 対象に紐づかなかったキーを出すことで、対象パターンのズレをその場で気付けるようにする。
 function sourcesSection(d: InspectionData): HTMLElement {
@@ -208,7 +238,7 @@ export function renderInspectionView(o: InspectionViewOpts): HTMLElement {
   ]);
   return el('div', { class: 'qam-insp' }, [
     head, toolbarRow(o), cards,
-    pendingSection(d), sourcesSection(d), weeklySection(d), matrixSection(d),
+    populationSection(d), pendingSection(d), sourcesSection(d), weeklySection(d), matrixSection(d),
   ]);
 }
 
@@ -216,7 +246,8 @@ export function renderInspectionView(o: InspectionViewOpts): HTMLElement {
 // el() の children はテキストノードとして append されるので、ここでのエスケープは不要。
 export function inspectionEmpty(patternSrc: string): HTMLElement {
   return el('div', { class: 'qam-insp-empty' }, [
-    el('p', {}, ['対象の AssetGroup がありません。']),
-    el('p', {}, [`AssetGroup を取り込んでいるか、対象パターン（${patternSrc}）が実際のタイトル形式と合っているかを設定で確認してください。`]),
+    el('p', {}, ['AssetGroup のスナップショットがありません。']),
+    el('p', {}, ['右上の「取込」から AssetGroup を取り込むと、四半期検査の対象を判定できます。']),
+    el('p', {}, [`（取り込み済みなのに出ない場合は、対象パターン ${patternSrc} を共通設定で確認してください）`]),
   ]);
 }

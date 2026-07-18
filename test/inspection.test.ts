@@ -201,6 +201,27 @@ describe('取得内訳（診断）', () => {
     expect(d.scan[0].status).toBe('pending');
   });
 
+  it('パターン不一致で対象外になったAGを母集団の内訳として返す', () => {
+    const recs = records(
+      group('IJ500'), group('IJ9999'),        // 完全一致するので対象
+      group('AB1234D 東京拠点'),               // 末尾に拠点名 → $ 一致せず対象外
+      group('共通グループ'), group('Prod'),
+    );
+    const d = computeInspection(recs, null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.sources.agTotal).toBe(5);
+    expect(d.sources.agMatched).toBe(2);
+    expect(d.scan.map((r) => r.key)).toEqual(['IJ500', 'IJ9999']);
+    expect(d.sources.agSkipped).toEqual(['AB1234D 東京拠点', 'Prod', '共通グループ']);
+    expect(d.pattern).toBe(DEFAULT_AG_PATTERN);
+  });
+
+  it('末尾の $ を外した前方一致パターンなら拠点名付きも対象になる', () => {
+    const recs = records(group('AB1234D 東京拠点'), group('共通グループ'));
+    const d = computeInspection(recs, null, 4, '^[A-Z]{2}[0-9]{3,4}D?', new Date(2026, 6, 18));
+    expect(d.sources.agMatched).toBe(1);
+    expect(d.scan[0].key).toBe('AB1234D 東京拠点');
+  });
+
   it('未取得(raw=null)でも算出でき、件数は0になる', () => {
     const d = computeInspection(records(group('AB123')), null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
     expect(d.sources).toMatchObject({ scanRuns: 0, mapRuns: 0, scanScheds: 0, mapScheds: 0 });

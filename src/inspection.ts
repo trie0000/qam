@@ -78,12 +78,18 @@ export function quarterOf(now: Date, fiscalStartMonth = 4): Quarter {
 
 // AssetGroup スナップショットから SCAN 対象 AG と MAP 対象ドメインを導出。
 // DOMAIN_LIST が空の AG は MAP 対象に出さない（＝MAP 対象外）。
-export function buildTargets(records: QamRecords, pattern: RegExp): { scan: InspTarget[]; map: InspTarget[] } {
+// skipped にはパターン不一致で対象外になったタイトルを残す（「なぜ出ないのか」を UI で示すため）。
+export interface BuiltTargets { scan: InspTarget[]; map: InspTarget[]; total: number; skipped: string[] }
+export function buildTargets(records: QamRecords, pattern: RegExp): BuiltTargets {
   const scan: InspTarget[] = [];
+  const skipped: string[] = [];
   const domainAgs = new Map<string, string[]>();
+  let total = 0;
   for (const r of Object.values(records)) {
     const title = (r.scalar.TITLE || r.name || '').trim();
-    if (!title || !pattern.test(title)) continue;
+    if (!title) continue;
+    total++;
+    if (!pattern.test(title)) { skipped.push(title); continue; }
     scan.push({ kind: 'scan', key: title, ags: [title] });
     for (const raw of r.set.DOMAIN_LIST ?? []) {
       const dom = norm(raw);
@@ -97,7 +103,7 @@ export function buildTargets(records: QamRecords, pattern: RegExp): { scan: Insp
   const map: InspTarget[] = [...domainAgs.entries()]
     .map(([key, ags]) => ({ kind: 'map' as const, key, ags: ags.sort() }))
     .sort((a, b) => a.key.localeCompare(b.key));
-  return { scan, map };
+  return { scan, map, total, skipped: skipped.sort() };
 }
 
 // 実施・スケジュールを「対象キー → ヒット」の形へ正規化する。
@@ -202,6 +208,8 @@ export interface InspectionSources {
   scanRuns: number; mapRuns: number; scanScheds: number; mapScheds: number;
   scanRunsInQuarter: number; mapRunsInQuarter: number;
   unmatchedScanAgs: string[]; unmatchedMapDomains: string[];
+  // 母集団の内訳: スナップショットの AssetGroup 総数と、パターンで対象外になったもの。
+  agTotal: number; agMatched: number; agSkipped: string[];
 }
 
 export interface InspectionData {
@@ -211,6 +219,7 @@ export interface InspectionData {
   weeks: WeekSummary[];
   pending: PendingAg[];
   fetchedAt: string;
+  pattern: string; // 適用した対象パターン（UI で提示して調整できるように）
   sources: InspectionSources;
 }
 
@@ -247,11 +256,13 @@ export function computeInspection(
     weeks: weeklySummary(scan, map, q),
     pending: pendingAgs(scan, map),
     fetchedAt: raw?.fetchedAt ?? '',
+    pattern: patternSrc || DEFAULT_AG_PATTERN,
     sources: {
       scanRuns: scanHits.length, mapRuns: mapHits.length,
       scanScheds: scanScheds.length, mapScheds: mapScheds.length,
       scanRunsInQuarter: us.inQuarter, mapRunsInQuarter: um.inQuarter,
       unmatchedScanAgs: us.keys, unmatchedMapDomains: um.keys,
+      agTotal: t.total, agMatched: t.scan.length, agSkipped: t.skipped.slice(0, 100),
     },
   };
 }
