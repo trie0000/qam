@@ -222,6 +222,9 @@ export function pendingAgs(scan: InspRow[], map: InspRow[]): PendingAg[] {
 // 応答から読めた件数と、対象に紐づかなかったキー。「取得したのに全部未対応」の原因切り分け用。
 //   unmatchedScanAgs が多い = 対象パターンが実際の AssetGroup 名と合っていない可能性が高い。
 export interface InspectionSources {
+  // Rows = 応答XMLから読めた件数 / それ以外 = 対象キーに展開したヒット数。
+  // 「Rows はあるのにヒットが 0」なら、対象キー（AssetGroup 名やドメイン）が応答に入っていない。
+  scanRunRows: number; mapRunRows: number; scanSchedRows: number; mapSchedRows: number;
   scanRuns: number; mapRuns: number; scanScheds: number; mapScheds: number;
   scanRunsInQuarter: number; mapRunsInQuarter: number;
   unmatchedScanAgs: string[]; unmatchedMapDomains: string[];
@@ -260,10 +263,15 @@ export function computeInspection(
 ): InspectionData {
   const q = quarterOf(now, fiscalStartMonth);
   const t = buildTargets(records, agPattern(patternSrc));
-  const scanHits = raw ? scanRunHits(parseScanList(raw.scans)) : [];
-  const mapHits = raw ? mapRunHits(parseMapList(raw.maps)) : [];
-  const scanScheds = raw ? scanSchedHits(parseScanSchedules(raw.scanSchedules)) : [];
-  const mapScheds = raw ? mapSchedHits(parseMapSchedules(raw.mapSchedules)) : [];
+  // 応答から読めた行（Rows）と、対象キーへ展開したヒットを別々に持つ（切り分け用）。
+  const scanRunRows = raw ? parseScanList(raw.scans) : [];
+  const mapRunRows = raw ? parseMapList(raw.maps) : [];
+  const scanSchedRows = raw ? parseScanSchedules(raw.scanSchedules) : [];
+  const mapSchedRows = raw ? parseMapSchedules(raw.mapSchedules) : [];
+  const scanHits = scanRunHits(scanRunRows);
+  const mapHits = mapRunHits(mapRunRows);
+  const scanScheds = scanSchedHits(scanSchedRows);
+  const mapScheds = mapSchedHits(mapSchedRows);
   const scan = classify(t.scan, scanHits, scanScheds, q);
   const map = classify(t.map, mapHits, mapScheds, q);
   const us = unmatched(scanHits, t.scan, q);
@@ -275,6 +283,8 @@ export function computeInspection(
     fetchedAt: raw?.fetchedAt ?? '',
     pattern: patternSrc || DEFAULT_AG_PATTERN,
     sources: {
+      scanRunRows: scanRunRows.length, mapRunRows: mapRunRows.length,
+      scanSchedRows: scanSchedRows.length, mapSchedRows: mapSchedRows.length,
       scanRuns: scanHits.length, mapRuns: mapHits.length,
       scanScheds: scanScheds.length, mapScheds: mapScheds.length,
       scanRunsInQuarter: us.inQuarter, mapRunsInQuarter: um.inQuarter,

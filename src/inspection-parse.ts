@@ -131,6 +131,7 @@ export function parseMapSchedules(xml: string): MapScheduleRow[] {
     title: pick(m, ['title'], ['TITLE']),
     active: isActive(m),
     nextLaunch: nextLaunchOf(m),
-    domains: uniq(csv(pick(m, ['domain'], ['TARGETS', 'DOMAIN', 'TARGET']))),
+    // 対象ドメインの入れ物は版で名前が異なる（TARGETS / SCAN_TARGET / DOMAIN…）。候補を順に探す。
+    domains: uniq(csv(pick(m, ['domain', 'target', 'targets'], ['TARGETS', 'SCAN_TARGET', 'DOMAINS', 'DOMAIN', 'TARGET']))),
   }));
 }

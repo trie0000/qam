@@ -4,6 +4,7 @@ import {
   pendingAgs, scanRunHits, mapRunHits, scanSchedHits, mapSchedHits, isFinished, computeInspection,
 } from '../src/inspection';
 import { parseScanList, parseMapList, parseScanSchedules, parseMapSchedules } from '../src/inspection-parse';
+import { qualysErrorText } from '../src/qualys';
 import type { QamRecord, QamRecords } from '../src/types';
 
 // AssetGroup スナップショットの最小レコードを作る。
@@ -243,6 +244,32 @@ describe('取得内訳（診断）', () => {
     expect(d.sources.unmatchedScanAgs).toEqual([]);
   });
 
+  // show_ags=1 を付けないと Qualys は ASSET_GROUP_TITLE_LIST を返さない。
+  // その場合「応答はあるのに対象キーへ展開できない」状態になり、全件未対応に見える。
+  it('応答にAssetGroup名が無い場合、Rowsは数えるがヒットは0になる（切り分け用）', () => {
+    const noAgs = `<?xml version="1.0"?><SCAN_LIST_OUTPUT><RESPONSE><SCAN_LIST>
+      <SCAN><REF>scan/1</REF><LAUNCH_DATETIME>2026-07-09T02:00:00Z</LAUNCH_DATETIME>
+        <STATUS><STATE>Finished</STATE></STATUS><TARGET>10.0.0.1</TARGET></SCAN>
+    </SCAN_LIST></RESPONSE></SCAN_LIST_OUTPUT>`;
+    const d = computeInspection(records(group('AB123')), raw(noAgs), 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.sources.scanRunRows).toBe(1); // 応答は読めている
+    expect(d.sources.scanRuns).toBe(0);    // だが対象キーへ展開できない
+    expect(d.scan[0].status).toBe('pending');
+  });
+
+  it('スケジュールマップの対象要素名が版で違っても読める', () => {
+    const variants = [
+      '<TARGETS><![CDATA[a.example]]></TARGETS>',
+      '<SCAN_TARGET>a.example</SCAN_TARGET>',
+      '<DOMAIN>a.example</DOMAIN>',
+    ];
+    for (const target of variants) {
+      const xml = `<?xml version="1.0"?><SCHEDULEDSCANS><MAP active="yes" ref="1">${target}
+        <NEXTLAUNCH_UTC>2026-09-05T02:00:00Z</NEXTLAUNCH_UTC></MAP></SCHEDULEDSCANS>`;
+      expect(mapSchedHits(parseMapSchedules(xml))[0]).toMatchObject({ key: 'a.example', active: true });
+    }
+  });
+
   it('未取得(raw=null)でも算出でき、件数は0になる', () => {
     const d = computeInspection(records(group('AB123')), null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
     expect(d.sources).toMatchObject({ scanRuns: 0, mapRuns: 0, scanScheds: 0, mapScheds: 0 });
@@ -339,5 +366,18 @@ describe('XML パーサ', () => {
     const v1Sched = `<?xml version="1.0"?><SCHEDULEDSCANS>
       <MAP active="yes" ref="1"><TARGETS>a.example</TARGETS></MAP></SCHEDULEDSCANS>`;
     expect(parseMapList(v1Sched)).toHaveLength(0);
+  });
+});
+
+describe('Qualys エラー応答の検出', () => {
+  it('HTTP 200 でも SIMPLE_RETURN / ERROR はエラーとして扱う', () => {
+    expect(qualysErrorText('<?xml version="1.0"?><SIMPLE_RETURN><RESPONSE><TEXT>parameter is not valid</TEXT></RESPONSE></SIMPLE_RETURN>'))
+      .toContain('parameter is not valid');
+    expect(qualysErrorText('<MAP_REPORT_LIST><ERROR number="999">not authorized</ERROR></MAP_REPORT_LIST>'))
+      .toBe('not authorized');
+  });
+  it('正常な一覧応答はエラーとみなさない', () => {
+    expect(qualysErrorText('<SCAN_LIST_OUTPUT><RESPONSE><SCAN_LIST><SCAN><REF>scan/1</REF></SCAN></SCAN_LIST></RESPONSE></SCAN_LIST_OUTPUT>')).toBe('');
+    expect(qualysErrorText('<MAP_REPORT_LIST><MAP_REPORT ref="map/1" domain="a.example"/></MAP_REPORT_LIST>')).toBe('');
   });
 });

@@ -144,12 +144,12 @@ function sourcesSection(d: InspectionData): HTMLElement {
   const s = d.sources;
   const body = el('div', { class: 'qam-insp-src' }, [
     table(
-      ['応答', '読めた件数', 'うち今四半期'],
+      ['応答', '応答の件数', '対象キーに展開', 'うち今四半期'],
       [
-        ['実施済みスキャン', String(s.scanRuns), String(s.scanRunsInQuarter)],
-        ['実施済みマップ', String(s.mapRuns), String(s.mapRunsInQuarter)],
-        ['スキャンのスケジュール', String(s.scanScheds), '—'],
-        ['マップのスケジュール', String(s.mapScheds), '—'],
+        ['実施済みスキャン', String(s.scanRunRows), String(s.scanRuns), String(s.scanRunsInQuarter)],
+        ['実施済みマップ', String(s.mapRunRows), String(s.mapRuns), String(s.mapRunsInQuarter)],
+        ['スキャンのスケジュール', String(s.scanSchedRows), String(s.scanScheds), '—'],
+        ['マップのスケジュール', String(s.mapSchedRows), String(s.mapScheds), '—'],
       ],
       'qam-insp-weekly',
     ),
@@ -168,7 +168,19 @@ function sourcesSection(d: InspectionData): HTMLElement {
       'AssetGroup の DOMAIN_LIST に登録されていないドメインが検査されています（MAP 対象は AssetGroup の登録ドメインから導出しています）。',
     ]));
   }
-  if (!s.mapRuns) {
+  // 「応答はあるのに対象キーへ展開できていない」＝応答に AssetGroup 名やドメインが入っていない。
+  const gaps: string[] = [];
+  if (s.scanRunRows && !s.scanRuns) gaps.push('実施済みスキャン（応答に AssetGroup 名が入っていない）');
+  if (s.mapRunRows && !s.mapRuns) gaps.push('実施済みマップ（応答にドメインが入っていない）');
+  if (s.scanSchedRows && !s.scanScheds) gaps.push('スキャンのスケジュール（応答に AssetGroup 名が入っていない）');
+  if (s.mapSchedRows && !s.mapScheds) gaps.push('マップのスケジュール（応答にドメインが入っていない）');
+  if (gaps.length) {
+    body.append(el('p', { class: 'qam-insp-warn' }, [`応答は取得できているが対象キーを読み取れないものがあります: ${gaps.join(' / ')}`]),
+      el('p', { class: 'qam-insp-sec-note' }, [
+        '保存された応答XML（データフォルダの raw/<日付>/inspection-*.xml）で実際の要素名を確認してください。',
+      ]));
+  }
+  if (!s.mapRunRows) {
     body.append(el('p', { class: 'qam-insp-sec-note' }, [
       '実施済みマップが 0 件の場合、マップが「レポートを保存する」設定で実行されていない可能性があります（保存されたマップレポートしか API から取得できません）。',
     ]));

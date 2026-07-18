@@ -175,6 +175,17 @@ const qualysDateTime = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/,
 // 1本でも取れれば表示する（エンドポイントの有無は契約/版で差があるため、全滅時だけ例外）。
 export interface InspectionDownload { raw: QamInspectionRaw; warnings: string[] }
 
+// Qualys は不正パラメータ等を HTTP 200 + <SIMPLE_RETURN><TEXT> や <ERROR> で返すことがある。
+// ok だけ見ると「エラー」と「0 件」を区別できず、黙って未対応表示になるので本文も検査する。
+export function qualysErrorText(xml: string): string {
+  if (/<(SIMPLE|GENERIC)_RETURN/i.test(xml)) {
+    const m = xml.match(/<TEXT>([\s\S]*?)<\/TEXT>/i);
+    return (m ? m[1] : 'Qualys がエラーを返しました').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  const e = xml.match(/<ERROR[^>]*>([\s\S]*?)<\/ERROR>/i);
+  return e ? e[1].replace(/\s+/g, ' ').trim() : '';
+}
+
 export async function downloadInspection(
   creds: QualysCreds, quarterStart: Date, onProgress?: InspectionProgress,
 ): Promise<InspectionDownload> {
@@ -185,6 +196,8 @@ export async function downloadInspection(
     if (!res.ok || !res.xml) {
       throw new Error(`status ${res.status}: ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
     }
+    const err = qualysErrorText(res.xml);
+    if (err) throw new Error(err); // 200 でも本文がエラーなら失敗扱い（fallback / 警告へ）
     return res.xml;
   };
   // fallback は「絞り込みパラメータを受け付けない環境」向けの取り直し
@@ -198,7 +211,9 @@ export async function downloadInspection(
     }
   };
   const after = encodeURIComponent(qualysDateTime(quarterStart));
-  const scanUrl = `${base}/api/2.0/fo/scan/?action=list`;
+  // show_ags=1 が無いと ASSET_GROUP_TITLE_LIST が返らない（＝対象 AssetGroup を特定できず全件が未対応になる）。
+  // 公式サンプルも ?action=list&show_ags=1&show_op=1。fallback も show_ags を落とさない。
+  const scanUrl = `${base}/api/2.0/fo/scan/?action=list&show_ags=1`;
   const scans = await tryGet('実施済みスキャン', `${scanUrl}&state=Finished&launched_after_datetime=${after}`, scanUrl);
   // マップは v1(MSP) にしか無い。v2 に /api/2.0/fo/map/ は存在せず 404 になる。
   // map_report_list.php が返すのは「保存されたマップレポート」＝save_report 付きで実行されたマップのみ。
