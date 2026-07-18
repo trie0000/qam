@@ -10,8 +10,8 @@ import type { MatrixRow } from '../src/inspection';
 import type { QamRecord, QamRecords } from '../src/types';
 
 // AssetGroup スナップショットの最小レコードを作る。
-function group(title: string, domains: string[] = []): QamRecord {
-  return { key: title, name: title, scalar: { TITLE: title }, set: { DOMAIN_LIST: domains }, info: {}, hash: '' };
+function group(title: string, domains: string[] = [], ips: string[] = ['10.0.0.1']): QamRecord {
+  return { key: title, name: title, scalar: { TITLE: title }, set: { DOMAIN_LIST: domains, IPS: ips }, info: {}, hash: '' };
 }
 const records = (...gs: QamRecord[]): QamRecords => Object.fromEntries(gs.map((g) => [g.key, g]));
 
@@ -519,5 +519,45 @@ describe('週セルの表記（絞り込みの値リストに出る）', () => {
     expect(markText(row({ scanDoneWeek: 1, mapDoneWeeks: [1] }), 1)).toBe('S M');
     expect(markText(row({ scanDoneWeek: 1, mapSchedWeeks: [1] }), 1)).toBe('S M(予約)');
     expect(markText(row({ scanDoneWeek: 2 }), 1)).toBe(''); // 別の週には出さない
+  });
+});
+
+describe('SCAN 対象条件（IP未登録の扱い）', () => {
+  const at = (recs: QamRecords) => buildTargets(recs, agPattern(DEFAULT_AG_PATTERN));
+
+  it('接続点IDがDで終わらず IP_SET が未登録なら SCAN 対象外', () => {
+    const t = at(records(group('AB123 東京', [], [])));
+    expect(t.scan).toHaveLength(0);
+    expect(t.scanExcluded).toEqual(['AB123 東京（ID: AB123）']);
+  });
+
+  it('IDがDで終わるものは IP 未登録でも SCAN 対象（動的運用）', () => {
+    const t = at(records(group('AB123D 東京', [], [])));
+    expect(t.scan.map((x) => x.key)).toEqual(['AB123D']);
+    expect(t.scanExcluded).toEqual([]);
+  });
+
+  it('IP が登録されていれば D で終わらなくても SCAN 対象', () => {
+    const t = at(records(group('AB123 東京', [], ['10.0.0.1-10.0.0.9'])));
+    expect(t.scan.map((x) => x.key)).toEqual(['AB123']);
+  });
+
+  it('SCAN 対象外でも、ドメイン登録があれば MAP 対象には残る', () => {
+    const t = at(records(group('AB123 東京', ['a.example'], [])));
+    expect(t.scan).toHaveLength(0);
+    expect(t.map.map((x) => x.key)).toEqual(['a.example']);
+    expect(t.map[0].ags).toEqual(['AB123']); // 所属接続点は保持
+  });
+
+  it('同一接続点に複数AGがあり1つでもIP登録があれば対象（除外リストにも出さない）', () => {
+    const t = at(records(group('AB123 東京', [], []), group('AB123 東京(予備)', [], ['10.0.0.1'])));
+    expect(t.scan.map((x) => x.key)).toEqual(['AB123']);
+    expect(t.scanExcluded).toEqual([]);
+  });
+
+  it('マトリクスでは SCAN 対象外が「対象外」として出る', () => {
+    const d = computeInspection(records(group('AB123 東京', ['a.example'], [])), null, 4, DEFAULT_AG_PATTERN, new Date(2026, 6, 18));
+    expect(d.matrix[0]).toMatchObject({ ag: 'AB123', scanStatus: null, mapStatus: 'pending' });
+    expect(d.sources.agScanExcluded).toEqual(['AB123 東京（ID: AB123）']);
   });
 });

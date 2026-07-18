@@ -140,7 +140,8 @@ function populationSection(d: InspectionData): HTMLElement {
   const s = d.sources;
   const body = el('div', { class: 'qam-insp-src' }, [
     el('p', { class: 'qam-insp-sec-note' }, [
-      `AssetGroup 全 ${s.agTotal} 件 → 接続点ID ${s.agMatched} 件が対象（対象外 ${s.agSkipped.length} 件）。`
+      `AssetGroup 全 ${s.agTotal} 件 → SCAN 対象の接続点ID ${s.agMatched} 件`
+      + `（パターン不一致 ${s.agSkipped.length} 件 / IP未登録で SCAN 対象外 ${s.agScanExcluded.length} 件）。`
       + `接続点ID は AssetGroup タイトルの先頭〜最初の半角スペースまでを切り出し、パターン ${d.pattern} で判定します。`,
     ]),
   ]);
@@ -150,10 +151,21 @@ function populationSection(d: InspectionData): HTMLElement {
     ]));
     return section('対象母集団', '', body);
   }
+  if (s.agScanExcluded.length) {
+    body.append(
+      el('p', { class: 'qam-insp-sec-note' }, [
+        `SCAN 対象外（${s.agScanExcluded.length} 件）: ${s.agScanExcluded.join(' / ')}`,
+      ]),
+      el('p', { class: 'qam-insp-sec-note' }, [
+        '接続点ID が D で終わらず、かつ IP が未登録のためスキャンする実体がありません'
+        + '（ドメイン登録があれば MAP の対象にはなります）。',
+      ]),
+    );
+  }
   if (s.agSkipped.length) {
     body.append(
       el('p', { class: 'qam-insp-warn' }, [
-        `対象外（${s.agSkipped.length} 件）: ${s.agSkipped.join(' / ')}`,
+        `パターン不一致（${s.agSkipped.length} 件）: ${s.agSkipped.join(' / ')}`,
       ]),
       el('p', { class: 'qam-insp-sec-note' }, [
         'かっこ内が切り出した接続点ID です。ID が想定と違う場合はタイトルの区切り（半角スペース）を、'

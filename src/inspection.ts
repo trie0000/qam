@@ -84,15 +84,23 @@ export function quarterOf(now: Date, fiscalStartMonth = 4): Quarter {
   return { fy, q, label: `${fy}年度 Q${q}`, start, end, weeks: weeksOf(start, end) };
 }
 
+// 接続点ID が D で終わるものは動的（IP を登録せず運用する）ため、IP_SET 未登録でも SCAN 対象。
+// D で終わらないのに IP_SET が未登録の AssetGroup は、スキャンする実体が無いので SCAN 対象外。
+export const isScanEligible = (id: string, ips: string[]): boolean => /d$/i.test(id) || ips.length > 0;
+
 // AssetGroup スナップショットから SCAN 対象（接続点ID）と MAP 対象ドメインを導出。
 // パターンは AG タイトルそのものではなく、切り出した接続点ID に対して適用する。
-// DOMAIN_LIST が空の AG は MAP 対象に出さない（＝MAP 対象外）。
-// skipped には対象外になった「タイトル（抽出ID）」を残す（「なぜ出ないのか」を UI で示すため）。
-export interface BuiltTargets { scan: InspTarget[]; map: InspTarget[]; total: number; skipped: string[] }
+// DOMAIN_LIST が空の AG は MAP 対象に出さない（＝MAP 対象外）。MAP の判定は SCAN 対象可否と独立。
+// skipped=パターン不一致 / scanExcluded=上の IP 未登録ルールで SCAN 対象外。どちらも UI で理由を示す。
+export interface BuiltTargets {
+  scan: InspTarget[]; map: InspTarget[]; total: number; skipped: string[]; scanExcluded: string[];
+}
 export function buildTargets(records: QamRecords, pattern: RegExp): BuiltTargets {
   const skipped: string[] = [];
-  const byId = new Map<string, InspTarget>();          // 接続点ID → SCAN 対象（同一IDの複数AGは束ねる）
+  const byId = new Map<string, InspTarget>();          // 接続点ID → SCAN 候補（同一IDの複数AGは束ねる）
   const domains = new Map<string, InspTarget>();       // ドメイン → MAP 対象
+  const eligible = new Set<string>();                  // SCAN 対象になった接続点ID
+  const excludedBy = new Map<string, string[]>();      // 接続点ID → 対象外だった AG タイトル
   let total = 0;
   const push = (t: InspTarget, ag: string, title: string): void => {
     if (!t.ags.includes(ag)) t.ags.push(ag);
@@ -107,6 +115,9 @@ export function buildTargets(records: QamRecords, pattern: RegExp): BuiltTargets
     const cur = byId.get(id) ?? { kind: 'scan' as const, key: id, ags: [id], titles: [] };
     push(cur, id, title);
     byId.set(id, cur);
+    // 同一接続点に複数 AG がある場合、1 つでも対象条件を満たせばその接続点は SCAN 対象。
+    if (isScanEligible(id, r.set.IPS ?? [])) eligible.add(id);
+    else excludedBy.set(id, [...(excludedBy.get(id) ?? []), title]);
     for (const raw of r.set.DOMAIN_LIST ?? []) {
       const dom = norm(raw);
       if (!dom) continue;
@@ -117,11 +128,15 @@ export function buildTargets(records: QamRecords, pattern: RegExp): BuiltTargets
   }
   const sortTarget = (t: InspTarget): InspTarget => ({ ...t, ags: [...t.ags].sort(), titles: [...t.titles].sort() });
   const byKey = (a: InspTarget, b: InspTarget): number => a.key.localeCompare(b.key);
+  const scanExcluded = [...excludedBy.entries()]
+    .filter(([id]) => !eligible.has(id))  // 別の AG で対象になった接続点は除外リストに出さない
+    .flatMap(([id, titles]) => titles.map((t) => `${t}（ID: ${id}）`));
   return {
-    scan: [...byId.values()].map(sortTarget).sort(byKey),
+    scan: [...byId.values()].filter((t) => eligible.has(t.key)).map(sortTarget).sort(byKey),
     map: [...domains.values()].map(sortTarget).sort(byKey),
     total,
     skipped: skipped.sort(),
+    scanExcluded: scanExcluded.sort(),
   };
 }
 
@@ -314,8 +329,10 @@ export interface InspectionSources {
   scanRuns: number; mapRuns: number; scanScheds: number; mapScheds: number;
   scanRunsInQuarter: number; mapRunsInQuarter: number;
   unmatchedScanAgs: string[]; unmatchedMapDomains: string[];
-  // 母集団の内訳: スナップショットの AssetGroup 総数と、パターンで対象外になったもの。
-  agTotal: number; agMatched: number; agSkipped: string[];
+  // 母集団の内訳: スナップショットの AssetGroup 総数と、対象外になったもの。
+  //   agSkipped   = 接続点ID がパターンに一致しない
+  //   agScanExcluded = パターンには一致するが IP 未登録ルールで SCAN 対象外
+  agTotal: number; agMatched: number; agSkipped: string[]; agScanExcluded: string[];
 }
 
 export interface InspectionData {
@@ -378,7 +395,8 @@ export function computeInspection(
       scanScheds: scanScheds.length, mapScheds: mapScheds.length,
       scanRunsInQuarter: us.inQuarter, mapRunsInQuarter: um.inQuarter,
       unmatchedScanAgs: us.keys, unmatchedMapDomains: um.keys,
-      agTotal: t.total, agMatched: t.scan.length, agSkipped: t.skipped.slice(0, 100),
+      agTotal: t.total, agMatched: t.scan.length,
+      agSkipped: t.skipped.slice(0, 100), agScanExcluded: t.scanExcluded.slice(0, 100),
     },
   };
 }
