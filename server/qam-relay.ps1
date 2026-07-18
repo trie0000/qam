@@ -353,7 +353,13 @@ function Invoke-QualysScheduleAdd { param($Body)
     $base = ([string]$Body.base).TrimEnd('/')
     if (-not $base) { return [ordered]@{ ok = $false; error = '接続先(POD)が未設定です' } }
     $path = [string]$Body.path
-    $allowed = @('/api/2.0/fo/schedule/scan/', '/msp/scheduled_scans.php')
+    # 書き込みを許可するパス。検査登録で使うもののみ（任意 URL への POST は受け付けない）。
+    $allowed = @(
+        '/api/2.0/fo/schedule/scan/',   # SCAN スケジュール作成(v2)
+        '/msp/scheduled_scans.php',     # MAP スケジュール作成(v1)
+        '/api/2.0/fo/asset/group/',     # AssetGroup 作成(v2)
+        '/msp/asset_domain.php'         # ドメイン登録(v1)
+    )
     if ($allowed -notcontains $path) { return [ordered]@{ ok = $false; error = "許可されていない送信先です: $path" } }
     $parts = New-Object System.Collections.ArrayList
     if ($Body.fields) {
@@ -555,6 +561,7 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'mapOptionProfile') { Set-QamEnvValue $EnvFile 'QAM_MAP_OPTION_PROFILE' $b.mapOptionProfile }
                 if ($b.PSObject.Properties.Name -contains 'scannerAppliance') { Set-QamEnvValue $EnvFile 'QAM_SCANNER_APPLIANCE' $b.scannerAppliance }
                 if ($b.PSObject.Properties.Name -contains 'scheduleTimeZone') { Set-QamEnvValue $EnvFile 'QAM_SCHEDULE_TIME_ZONE' $b.scheduleTimeZone }
+                if ($b.PSObject.Properties.Name -contains 'regions') { Set-QamEnvValue $EnvFile 'QAM_REGIONS' $b.regions }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -579,6 +586,7 @@ function Invoke-Route { param($Ctx)
                 mapOptionProfile = $env:QAM_MAP_OPTION_PROFILE
                 scannerAppliance = if ($env:QAM_SCANNER_APPLIANCE) { $env:QAM_SCANNER_APPLIANCE } else { 'External' }
                 scheduleTimeZone = if ($env:QAM_SCHEDULE_TIME_ZONE) { $env:QAM_SCHEDULE_TIME_ZONE } else { 'JP' }
+                regions = $env:QAM_REGIONS
             }; return
         }
         '^/qam/backup$' {

@@ -258,6 +258,62 @@ export async function createSchedule(creds: QualysCreds, input: ScheduleInput, a
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// 検査登録の前段: AssetGroup 作成 / ドメイン登録 と、その重複確認。
+// いずれも Qualys への書き込みなので relay の schedule-add 経路（form POST・監査ログ付き）を使う。
+// ──────────────────────────────────────────────────────────────────────────
+export const ASSET_GROUP_PATH = '/api/2.0/fo/asset/group/';
+export const DOMAIN_ADD_PATH = '/msp/asset_domain.php';
+
+async function writeQualys(
+  creds: QualysCreds, path: string, fields: Record<string, string>, author: string,
+): Promise<{ message: string }> {
+  const res = await qualysScheduleAdd({
+    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, proxy: creds.proxy,
+    path, author, fields,
+  });
+  if (res.error) throw new Error(res.error);
+  const r = scheduleResult(res.xml ?? '');
+  if (!r.ok) throw new Error(r.message);
+  if (!res.ok) throw new Error(`HTTP ${res.status}: ${r.message}`);
+  return { message: r.message };
+}
+
+// 同名の AssetGroup があるか（title は完全一致で検索できる）。あれば ID を返す。
+export async function findAssetGroup(creds: QualysCreds, title: string): Promise<{ id: string } | null> {
+  const base = creds.base.replace(/\/+$/, '');
+  const url = `${base}${ASSET_GROUP_PATH}?action=list&title=${encodeURIComponent(title)}`;
+  const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
+  if (!res.ok || !res.xml) throw new Error(`AssetGroup の確認に失敗 (status ${res.status}): ${failReason(res)}`);
+  const err = qualysErrorText(res.xml);
+  if (err) throw new Error(err);
+  const id = res.xml.match(/<ID>([^<]+)<\/ID>/i)?.[1]?.trim();
+  return id ? { id } : null;
+}
+
+// 既に登録済みのドメインか（サブスクリプションのドメイン一覧から探す）。
+export async function findDomain(creds: QualysCreds, domain: string): Promise<boolean> {
+  const base = creds.base.replace(/\/+$/, '');
+  const url = `${base}/api/2.0/fo/asset/domain/?action=list`;
+  const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
+  if (!res.ok || !res.xml) throw new Error(`ドメインの確認に失敗 (status ${res.status}): ${failReason(res)}`);
+  const want = domain.trim().toLowerCase();
+  for (const m of res.xml.matchAll(/<DOMAIN_NAME>([^<]+)<\/DOMAIN_NAME>/gi)) {
+    if (m[1].trim().toLowerCase() === want) return true;
+  }
+  // 要素名が版で違う場合に備え、素の <DOMAIN> テキストも見る。
+  for (const m of res.xml.matchAll(/<DOMAIN(?:\s[^>]*)?>([^<]+)<\/DOMAIN>/gi)) {
+    if (m[1].trim().toLowerCase() === want) return true;
+  }
+  return false;
+}
+
+export const createAssetGroup = (creds: QualysCreds, fields: Record<string, string>, author: string): Promise<{ message: string }> =>
+  writeQualys(creds, ASSET_GROUP_PATH, fields, author);
+
+export const addDomain = (creds: QualysCreds, domain: string, author: string): Promise<{ message: string }> =>
+  writeQualys(creds, DOMAIN_ADD_PATH, { action: 'add', domain }, author);
+
+// ──────────────────────────────────────────────────────────────────────────
 // ユーザ登録（/msp/user.php?action=add）。言語/SAMLはAPI非対応のため扱わない。
 // SAMLは「新規ユーザにSSO有効化」をQualysサブスクリプション側で設定する前提。
 // ──────────────────────────────────────────────────────────────────────────

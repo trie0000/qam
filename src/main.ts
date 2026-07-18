@@ -10,11 +10,12 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
-import { downloadEntity, downloadIps, downloadInspection, createSchedule, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { downloadEntity, downloadIps, downloadInspection, createSchedule, createAssetGroup, findAssetGroup, findDomain, addDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { openScheduleForm } from './ui/views/schedule-form';
-import { describeSchedule } from './schedule';
+import type { ScheduleInput } from './schedule';
+import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, DEFAULT_REGIONS, type ProvisionInput } from './provision';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
@@ -705,40 +706,119 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
     data, busy: inspectionBusy, dates, asof,
     onFetch: () => { void runInspectionFetch(); },
     onAsof: (d) => { state.inspAsof = d; refresh(); },
-    onAddSchedule: () => { void openScheduleAdd(data); },
+    onAddSchedule: () => { void openScheduleAdd(); },
   }));
 }
 
-// スケジュール登録（Qualys への書き込み）。認証は取得と同じ経路、確認は要約モーダルで行う。
-async function openScheduleAdd(data: ReturnType<typeof computeInspection>): Promise<void> {
+// 検査登録（Qualys への書き込み）。AssetGroup 作成 → ドメイン登録 → スケジュール登録 の順に進める。
+// 途中で失敗しても、そこまでに何ができたかを画面に出す（黙って中途半端な状態にしない）。
+async function openScheduleAdd(): Promise<void> {
   await ensureAuthor(); // 書き込み操作なので作業者を先に確定させる
   const creds = await resolveQualysCreds();
   if (!creds) return;
-  // 対象の候補は今表示している母集団から出す（AssetGroup タイトルとドメイン）。
-  const assetGroups = [...new Set(data.matrix.flatMap((r) => r.titles))].sort();
-  const domains = [...new Set(data.map.map((m) => m.key))].sort();
   const cfg = await getConfig();
   const author = localStorage.getItem(LS.author) || '';
   openScheduleForm({
     today: dateOfStamp(stampNow()),
-    assetGroups,
-    domains,
-    // 共通設定の既定値（種別ごとのオプションプロファイル・スキャナー・タイムゾーン）。
+    regions: parseRegions(cfg.regions || ''),
     defaults: {
       scanOptionProfile: cfg.scanOptionProfile || '',
       mapOptionProfile: cfg.mapOptionProfile || '',
       scannerAppliance: cfg.scannerAppliance || 'External',
       timeZoneCode: cfg.scheduleTimeZone || 'JP',
     },
-    confirm: (summary) => confirmModal('この内容で登録しますか？', summary, '登録する'),
-    submit: async (input) => {
-      const res = await createSchedule(creds, input, author);
-      recordOp('スケジュール登録', describeSchedule(input));
-      toast(`スケジュールを登録しました${res.message ? `: ${res.message}` : ''}`, 'ok');
-      return res.message;
-    },
+    confirm: (title, lines) => confirmModal(title, lines.join('\n'), '登録する'),
+    submit: (p, scanInput, mapInput) => runProvision(creds, author, p, scanInput, mapInput),
     onDone: () => { refresh(); },
   });
+}
+
+// 既に同じものがある場合の選択肢。破壊的な既定を持たせず、必ず利用者に選ばせる。
+type DupChoice = 'use' | 'rename' | 'cancel';
+async function askDuplicate(what: string, name: string): Promise<{ choice: DupChoice; newName: string }> {
+  const body = el('div', {}, [
+    el('div', { style: 'margin-bottom:var(--s-4)' }, [callout(`${what}「${name}」は既に存在します。どうしますか？`)]),
+  ]);
+  const sel = el('select', { class: 'in' }) as HTMLSelectElement;
+  sel.append(
+    el('option', { value: 'use' }, ['既存をそのまま使う（新規作成しない）']),
+    el('option', { value: 'rename' }, ['別の名前で作成する']),
+    el('option', { value: 'cancel' }, ['登録を中止する']),
+  );
+  const rename = el('input', { class: 'in', value: `${name}-2` }) as HTMLInputElement;
+  const renameField = el('div', { class: 'qam-field' }, [el('label', {}, ['新しい名前']), rename]);
+  renameField.hidden = true;
+  sel.addEventListener('change', () => { renameField.hidden = sel.value !== 'rename'; });
+  body.append(el('div', { class: 'qam-field' }, [el('label', {}, ['対応']), sel]), renameField);
+  return new Promise((resolve) => {
+    let done = false;
+    openModal({
+      title: '同名の登録があります', body, primaryLabel: '決定',
+      onPrimary: () => {
+        const choice = sel.value as DupChoice;
+        if (choice === 'rename' && !rename.value.trim()) { toast('新しい名前を入力してください', 'error'); return false; }
+        done = true; resolve({ choice, newName: rename.value.trim() }); return true;
+      },
+      onClose: () => { if (!done) resolve({ choice: 'cancel', newName: '' }); },
+    });
+  });
+}
+
+async function runProvision(
+  creds: { base: string; user: string; pass: string; proxy: string },
+  author: string, p: ProvisionInput, scanInput: ScheduleInput, mapInput: ScheduleInput,
+): Promise<{ steps: string[] }> {
+  const plan = planProvision(p);
+  const steps: string[] = [];
+  setRelayBusy(true); // 書き込み中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
+  try {
+    let agTitle = plan.title;
+    // 1) AssetGroup（同名は Qualys 側で一意制約に触れるので事前に確認する）
+    if (await findAssetGroup(creds, agTitle)) {
+      const d = await askDuplicate('AssetGroup', agTitle);
+      if (d.choice === 'cancel') throw new Error('登録を中止しました');
+      if (d.choice === 'rename') {
+        agTitle = d.newName;
+        await createAssetGroup(creds, { ...buildAssetGroupParams(p), title: agTitle }, author);
+        steps.push(`AssetGroup「${agTitle}」を作成`);
+      } else steps.push(`AssetGroup「${agTitle}」は既存を使用`);
+    } else {
+      await createAssetGroup(creds, buildAssetGroupParams(p), author);
+      steps.push(`AssetGroup「${agTitle}」を作成`);
+    }
+    // 2) ドメイン（MAP を含むときのみ）
+    let domain = plan.domain;
+    if (plan.withMap && domain) {
+      if (await findDomain(creds, domain)) {
+        const d = await askDuplicate('ドメイン', domain);
+        if (d.choice === 'cancel') throw new Error(`登録を中止しました（ここまで: ${steps.join(' / ')}）`);
+        if (d.choice === 'rename') {
+          domain = d.newName;
+          await addDomain(creds, domain, author);
+          steps.push(`ドメイン「${domain}」を登録`);
+        } else steps.push(`ドメイン「${domain}」は既存を使用`);
+      } else {
+        await addDomain(creds, domain, author);
+        steps.push(`ドメイン「${domain}」を登録`);
+      }
+    }
+    // 3) スケジュール（名前を変えた場合は対象も差し替える）
+    if (plan.withScan) {
+      await createSchedule(creds, { ...scanInput, targets: [agTitle] }, author);
+      steps.push('SCAN スケジュールを登録');
+    }
+    if (plan.withMap) {
+      await createSchedule(creds, { ...mapInput, targets: [domain] }, author);
+      steps.push('MAP スケジュールを登録');
+    }
+    recordOp('検査登録', steps.join(' / '));
+    toast(`検査を登録しました: ${steps.join(' / ')}`, 'ok');
+    return { steps };
+  } catch (e) {
+    // 途中まで進んでいたら、それも含めて理由を返す（フォームに表示される）。
+    if (steps.length) recordOp('検査登録(中断)', `${steps.join(' / ')} / 失敗: ${(e as Error).message}`);
+    throw new Error(steps.length ? `${(e as Error).message}（完了: ${steps.join(' / ')}）` : (e as Error).message);
+  } finally { setRelayBusy(false); }
 }
 
 // 接続先と認証情報を解決（未設定ならその場で入力を促す）。取得・登録で共有する。
@@ -1223,6 +1303,7 @@ async function openSettings(): Promise<void> {
   const mapOpt = el('input', { class: 'in', value: cfg.mapOptionProfile || '', placeholder: '未設定ならアカウント既定' }) as HTMLInputElement;
   const scannerAp = el('input', { class: 'in', value: cfg.scannerAppliance || 'External', placeholder: 'External' }) as HTMLInputElement;
   const schedTz = el('input', { class: 'in', value: cfg.scheduleTimeZone || 'JP', placeholder: 'JP' }) as HTMLInputElement;
+  const regionsIn = el('input', { class: 'in', value: cfg.regions || formatRegions(DEFAULT_REGIONS), placeholder: formatRegions(DEFAULT_REGIONS) }) as HTMLInputElement;
   const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
   const author = el('input', { class: 'in', value: localStorage.getItem(LS.author) || '', placeholder: '例: 山田' }) as HTMLInputElement;
   const theme = el('select', { class: 'in' }) as HTMLSelectElement;
@@ -1304,7 +1385,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
@@ -1325,7 +1406,7 @@ async function openSettings(): Promise<void> {
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
-        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP' });
+        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)) });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
         if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
@@ -1401,10 +1482,14 @@ function openHelp(): void {
           <b>対象×週マトリクス</b>（どの週に検査されたか）を表示します。</li>
       <li>「Qualys から取得」で最新状況を取得（母集団の AssetGroup は資産取込のものを使うため再取得不要）。
           CSV／Excel で出力できます。</li>
-      <li><b>新規検査登録</b>：Qualys に SCAN／MAP のスケジュールを<b>新規作成</b>できます（作成のみ。
-          変更・削除は Qualys の画面で行ってください）。<b>本番への書き込み</b>なので、送信前に内容の要約を
-          確認する画面が出ます。既定は<b>「無効で作成」</b>で、Qualys 側で内容を確認してから有効化する運用を想定しています。
-          オプションプロファイル・スキャナー・タイムゾーンは<b>共通設定の既定値</b>が初期表示され、その場で変更できます。
+      <li><b>新規検査登録</b>：<b>AssetGroup とドメインを払い出してから、検査スケジュールを登録</b>します
+          （作成のみ。変更・削除は Qualys の画面で行ってください）。
+          AssetGroup 名は<b>「申請番号(仮)」</b>、ドメイン名は<b>「小文字の申請番号.地域コード」</b>になります
+          （(仮) はDNS名に使えないためドメインでは省きます）。
+          検査種別は <b>SCAN のみ／MAP のみ／両方</b>から選べます。
+          SCAN 対象の IP は行ごとに<b>「単体（IP・CIDR）」と「レンジ（開始〜終了）」を切り替え</b>られ、
+          IP・DNS とも複数行を指定できます。入力内容から作られる AssetGroup 名・ドメイン名はその場に表示されます。
+          <b>同名が既にある場合は「既存を使う／別名で作る／中止」を確認</b>します。
           登録内容は操作履歴に残り、<b>実行者・発行したAPI・パラメータは api-audit.log にも記録</b>されます。</li>
       <li><b>検査一覧</b>：取得した<b>実行履歴</b>と<b>予約済み</b>を1つの表で確認できます。「区分」列で
           どちらかに絞り込めます。</li>
