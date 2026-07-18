@@ -434,6 +434,10 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-sched-time { display: flex; gap: var(--s-3); }
 .qam-sched-time .in { width: 90px; }
 .qam-sched-err { color: var(--danger); font-size: var(--fs-sm); margin-top: var(--s-3); user-select: text; }
+/* hidden 属性は UA の display:none だが、作者側の display 指定（flex 等）に負ける。
+   .qam-field や .qam-prov-range を hidden にしても消えないので、ここで確実に消す。 */
+[hidden] { display: none !important; }
+
 /* 検査登録フォーム: IP/DNS の可変行とプレビュー */
 .qam-prov-list { display: flex; flex-direction: column; gap: var(--s-2); margin-bottom: var(--s-2); }
 .qam-prov-row { display: flex; align-items: center; gap: var(--s-2); }
@@ -442,3 +446,6 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-prov-range { display: flex; align-items: center; gap: var(--s-2); flex: 1; }
 .qam-prov-preview { font-size: var(--fs-sm); color: var(--ink-3); background: var(--paper-2);
   border-radius: var(--r-2); padding: var(--s-3) var(--s-4); user-select: text; overflow-wrap: anywhere; }
+/* 簡易検査ビュー: 登録フォームをページ内に置く */
+.qam-quick { padding: var(--s-5) var(--gutter); max-width: 720px; display: flex; flex-direction: column; }
+.qam-quick-actions { display: flex; justify-content: flex-end; padding-top: var(--s-3); }

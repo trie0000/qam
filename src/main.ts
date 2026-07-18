@@ -13,7 +13,7 @@ import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, re
 import { downloadEntity, downloadIps, downloadInspection, createSchedule, createAssetGroup, findAssetGroup, findDomain, addDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
-import { openScheduleForm } from './ui/views/schedule-form';
+import { buildInspectionForm } from './ui/views/schedule-form';
 import type { ScheduleInput } from './schedule';
 import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, DEFAULT_REGIONS, type ProvisionInput } from './provision';
 import { parseQualysXml } from './ingest/parse';
@@ -33,7 +33,7 @@ function recordOp(action: string, detail: string, entity?: QamEntity): void {
 const GUARD_RATIO = 0.5;
 
 const state = {
-  mode: 'assets' as 'assets' | 'history' | 'ops' | 'licenses' | 'inspection',
+  mode: 'assets' as 'assets' | 'history' | 'ops' | 'licenses' | 'inspection' | 'quick',
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
@@ -159,7 +159,7 @@ function renderLeft(): void {
   clear(left);
   left.append(el('div', { class: 'qam-navhead' }, ['ビュー']));
   const nav = el('div', { class: 'qam-nav' });
-  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['inspection', '四半期検査', 'check'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
+  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['inspection', '四半期検査', 'check'], ['quick', '簡易検査', 'send'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
   for (const [m, label, ic] of modes) {
     const b = el('button', { 'aria-current': String(state.mode === m), html: `${icon(ic, 16)}<span>${label}</span>` });
     b.addEventListener('click', () => { state.mode = m; state.selected.clear(); refresh(); });
@@ -185,14 +185,14 @@ async function refresh(): Promise<void> {
   }
   // subbar
   const subbar = el('div', { class: 'qam-subbar' });
-  const titles = { assets: '資産一覧', history: '変更履歴', ops: '操作履歴', licenses: 'ライセンス数推移', inspection: '四半期検査' } as const;
+  const titles = { assets: '資産一覧', history: '変更履歴', ops: '操作履歴', licenses: 'ライセンス数推移', inspection: '四半期検査', quick: '簡易検査' } as const;
   const title = el('span', { class: 'qam-title' }, [titles[state.mode]]);
   const count = el('span', { class: 'qam-count' });
   subbar.append(title, count, el('span', { class: 'qam-spacer' }));
   // toolbar
   const toolbar = el('div', { class: 'qam-toolbar' });
   // 検索/全文表示は表ビュー用。ダッシュボード型（推移・四半期検査）では出さない。
-  if (state.mode !== 'licenses' && state.mode !== 'inspection') {
+  if (state.mode !== 'licenses' && state.mode !== 'inspection' && state.mode !== 'quick') {
     const search = el('div', { class: 'qam-search', html: icon('search', 14) });
     const sIn = el('input', { type: 'text', placeholder: '検索（ID / 名前 / IP / FQDN）', value: state.q }) as HTMLInputElement;
     onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
@@ -217,7 +217,7 @@ async function refresh(): Promise<void> {
   }
 
   const filterBar = el('div', { class: 'qam-filterbar' });
-  const scrollable = state.mode === 'licenses' || state.mode === 'inspection'; // 縦に積むダッシュボードはビュー全体をスクロール
+  const scrollable = state.mode === 'licenses' || state.mode === 'inspection' || state.mode === 'quick'; // 縦に積むダッシュボードはビュー全体をスクロール
   const tableHost = el('div', { style: 'min-height:0;overflow:' + (scrollable ? 'auto' : 'hidden') });
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
   main.append(tabs, subbar, toolbar, filterBar, tableHost);
@@ -226,6 +226,7 @@ async function refresh(): Promise<void> {
   else if (state.mode === 'history') await renderHistory(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'licenses') await renderLicenses(count, tableHost);
   else if (state.mode === 'inspection') await renderInspection(count, tableHost);
+  else if (state.mode === 'quick') await renderQuickInspect(count, tableHost);
   else await renderOps(subbar, count, toolbar, filterBar, tableHost);
 }
 
@@ -706,19 +707,19 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
     data, busy: inspectionBusy, dates, asof,
     onFetch: () => { void runInspectionFetch(); },
     onAsof: (d) => { state.inspAsof = d; refresh(); },
-    onAddSchedule: () => { void openScheduleAdd(); },
+    onAddSchedule: () => { state.mode = 'quick'; refresh(); },
   }));
 }
 
-// 検査登録（Qualys への書き込み）。AssetGroup 作成 → ドメイン登録 → スケジュール登録 の順に進める。
-// 途中で失敗しても、そこまでに何ができたかを画面に出す（黙って中途半端な状態にしない）。
-async function openScheduleAdd(): Promise<void> {
-  await ensureAuthor(); // 書き込み操作なので作業者を先に確定させる
-  const creds = await resolveQualysCreds();
-  if (!creds) return;
+// 簡易検査ビュー: 検査登録フォームをインラインで置く（Qualys への書き込み）。
+// AssetGroup 作成 → ドメイン登録 → スケジュール登録 の順に進める。
+async function renderQuickInspect(count: HTMLElement, host: HTMLElement): Promise<void> {
+  clear(leftCalHost);
   const cfg = await getConfig();
-  const author = localStorage.getItem(LS.author) || '';
-  openScheduleForm({
+  count.textContent = 'AssetGroup とドメインを払い出して検査を登録';
+  clear(host);
+  const wrap = el('div', { class: 'qam-quick' });
+  const form = buildInspectionForm({
     today: dateOfStamp(stampNow()),
     regions: parseRegions(cfg.regions || ''),
     defaults: {
@@ -728,9 +729,21 @@ async function openScheduleAdd(): Promise<void> {
       timeZoneCode: cfg.scheduleTimeZone || 'JP',
     },
     confirm: (title, lines) => confirmModal(title, lines.join('\n'), '登録する'),
-    submit: (p, scanInput, mapInput) => runProvision(creds, author, p, scanInput, mapInput),
+    submit: async (p, scanInput, mapInput) => {
+      await ensureAuthor(); // 書き込み操作なので作業者を確定させる
+      const creds = await resolveQualysCreds();
+      if (!creds) throw new Error('Qualys の接続先/認証情報が未設定です');
+      return runProvision(creds, localStorage.getItem(LS.author) || '', p, scanInput, mapInput);
+    },
     onDone: () => { refresh(); },
   });
+  const go = el('button', { class: 'btn btn--primary', html: `${icon('send', 16)}<span>内容を確認して登録</span>` });
+  go.addEventListener('click', () => {
+    go.setAttribute('disabled', 'true');
+    form.submit().finally(() => go.removeAttribute('disabled'));
+  });
+  wrap.append(form.node, el('div', { class: 'qam-quick-actions' }, [go]));
+  host.append(wrap);
 }
 
 // 既に同じものがある場合の選択肢。破壊的な既定を持たせず、必ず利用者に選ばせる。
@@ -1482,7 +1495,7 @@ function openHelp(): void {
           <b>対象×週マトリクス</b>（どの週に検査されたか）を表示します。</li>
       <li>「Qualys から取得」で最新状況を取得（母集団の AssetGroup は資産取込のものを使うため再取得不要）。
           CSV／Excel で出力できます。</li>
-      <li><b>新規検査登録</b>：<b>AssetGroup とドメインを払い出してから、検査スケジュールを登録</b>します
+      <li><b>簡易検査</b>（左ペイン）：<b>AssetGroup とドメインを払い出してから、検査スケジュールを登録</b>します
           （作成のみ。変更・削除は Qualys の画面で行ってください）。
           AssetGroup 名は<b>「申請番号(仮)」</b>、ドメイン名は<b>「小文字の申請番号.地域コード」</b>になります
           （(仮) はDNS名に使えないためドメインでは省きます）。

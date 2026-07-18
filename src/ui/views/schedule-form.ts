@@ -1,9 +1,10 @@
-// 検査登録フォーム。1 回の登録で次を作る（種別で増減する）:
+// 簡易検査（検査登録）フォーム。1 回の登録で次を作る（種別で増減する）:
 //   AssetGroup「申請番号(仮)」作成 → ドメイン登録 → SCAN/MAP スケジュール登録
+// 左ペインの独立ビューにインラインで置く（モーダルではない）ので、
+// 本体（node）と送信処理（submit）を返す形にしてある。
 // 本番 Qualys への書き込みなので、送信前に「何が作られるか」を必ず確認させる。
 // 命名・パラメータ組立・検証は provision.ts / schedule.ts（純粋関数）に委ねる。
 import { el } from '../dom';
-import { openModal } from '../modal';
 import {
   WEEKDAYS, WEEKDAY_LABEL, defaultScheduleInput, validateSchedule,
   type Occurrence, type ScheduleInput, type Weekday,
@@ -23,7 +24,7 @@ export interface ScheduleDefaults {
 // 登録の実行結果（どこまで進んだかを画面に出す）。
 export interface ProvisionResult { steps: string[] }
 
-export interface ScheduleFormOpts {
+export interface InspectionFormOpts {
   today: string;
   defaults: ScheduleDefaults;
   regions: RegionOption[];
@@ -77,7 +78,7 @@ function dnsRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { n
   return { node, read: () => input.value };
 }
 
-export function openScheduleForm(o: ScheduleFormOpts): void {
+export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement; submit: () => Promise<boolean> } {
   const regions = o.regions.length ? o.regions : DEFAULT_REGIONS;
 
   // ---- 払い出し（AssetGroup / ドメイン）----
@@ -233,32 +234,30 @@ export function openScheduleForm(o: ScheduleFormOpts): void {
     err.textContent = msgs.join(' / ');
   };
 
-  openModal({
-    title: '新規検査登録',
-    body,
-    primaryLabel: '内容を確認して登録',
-    onPrimary: async () => {
-      const p = readProvision();
-      const plan = planProvision(p);
-      const scan = readSchedule('scan', p);
-      const map = readSchedule('map', p);
-      // 払い出しと、実際に作るスケジュールの両方を検証してから確認へ進む。
-      const errors = [
-        ...validateProvision(p),
-        ...(plan.withScan ? validateSchedule(scan) : []),
-        ...(plan.withMap ? validateSchedule(map) : []),
-      ];
-      if (errors.length) { showErrors([...new Set(errors)]); return false; }
-      showErrors([]);
-      if (!(await o.confirm('この内容で登録しますか？', describeProvision(p)))) return false;
-      try {
-        await o.submit(p, scan, map);
-        o.onDone();
-        return true;
-      } catch (e) {
-        showErrors([(e as Error).message]);
-        return false;
-      }
-    },
-  });
+  // 送信本体。検証 → 確認 → 実行。成功したら true。
+  const submit = async (): Promise<boolean> => {
+    const p = readProvision();
+    const plan = planProvision(p);
+    const scan = readSchedule('scan', p);
+    const map = readSchedule('map', p);
+    // 払い出しと、実際に作るスケジュールの両方を検証してから確認へ進む。
+    const errors = [
+      ...validateProvision(p),
+      ...(plan.withScan ? validateSchedule(scan) : []),
+      ...(plan.withMap ? validateSchedule(map) : []),
+    ];
+    if (errors.length) { showErrors([...new Set(errors)]); return false; }
+    showErrors([]);
+    if (!(await o.confirm('この内容で登録しますか？', describeProvision(p)))) return false;
+    try {
+      await o.submit(p, scan, map);
+      o.onDone();
+      return true;
+    } catch (e) {
+      showErrors([(e as Error).message]);
+      return false;
+    }
+  };
+
+  return { node: body, submit };
 }
