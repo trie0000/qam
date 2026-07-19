@@ -39,46 +39,65 @@ export function parseRegions(src: string): RegionOption[] {
 export const formatRegions = (list: RegionOption[]): string =>
   list.map((r) => `${r.label}=${r.code}`).join(',');
 
-export interface IpEntry { mode: IpMode; single: string; from: string; to: string }
-export const emptyIpEntry = (): IpEntry => ({ mode: 'single', single: '', from: '', to: '' });
+// 検査資産情報は 1 つのテキスト欄で受け、カンマ区切りで複数指定できる。
+// IP は「単体 / CIDR / レンジ」の 3 形式。レンジは展開せず表記のまま Qualys へ渡す。
+export type IpTokenKind = 'single' | 'cidr' | 'range';
 
 const IPV4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 const isIpv4 = (s: string): boolean => {
-  const m = s.trim().match(IPV4);
-  return !!m && m.slice(1).every((p) => Number(p) <= 255);
+  const m = s.match(IPV4);
+  return !!m && m.slice(1).every((p) => Number(p) <= 255 && String(Number(p)) === p.replace(/^0+(?=\d)/, ''));
 };
-// 単体欄は CIDR も許す（Qualys の ips は 10.1.1.1/31 のような表記も受け付ける）。
-const isIpOrCidr = (s: string): boolean => {
-  const [ip, bits] = s.trim().split('/');
-  if (!isIpv4(ip)) return false;
-  if (bits === undefined) return true;
-  const n = Number(bits);
-  return Number.isInteger(n) && n >= 0 && n <= 32;
+const isCidr = (s: string): boolean => {
+  const i = s.indexOf('/');
+  if (i < 0) return false;
+  const bits = Number(s.slice(i + 1));
+  return isIpv4(s.slice(0, i)) && Number.isInteger(bits) && bits >= 0 && bits <= 32;
 };
 
-// 1 行を Qualys の ips パラメータ用トークンにする。未入力は空文字。
-export function ipEntryValue(e: IpEntry): string {
-  if (e.mode === 'range') {
-    const from = e.from.trim(); const to = e.to.trim();
-    return from && to ? `${from}-${to}` : '';
-  }
-  return e.single.trim();
+// レンジの "-" は両端に半角スペースがあっても受ける。前後の余計な空白は落とす。
+export const normalizeIpToken = (raw: string): string => raw.trim().replace(/\s*-\s*/g, '-');
+
+export function classifyIpToken(raw: string): IpTokenKind | null {
+  const t = normalizeIpToken(raw);
+  if (isIpv4(t)) return 'single';
+  if (isCidr(t)) return 'cidr';
+  const i = t.indexOf('-');
+  if (i > 0 && isIpv4(t.slice(0, i)) && isIpv4(t.slice(i + 1))) return 'range';
+  return null;
 }
 
-// 行ごとの入力エラー（空行は呼び出し側で除外するので、ここでは値がある行だけ見る）。
-export function ipEntryError(e: IpEntry): string {
-  if (e.mode === 'range') {
-    const from = e.from.trim(); const to = e.to.trim();
-    if (!from && !to) return '';
-    if (!isIpv4(from) || !isIpv4(to)) return `IP レンジの表記が不正です: ${from || '(空)'}-${to || '(空)'}`;
-    return '';
+// FQDN はラベルを "." で連ねた形（先頭 www. は Qualys の指定により不可）。
+const FQDN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
+export const isFqdn = (raw: string): boolean => FQDN.test(raw.trim());
+
+// 入力欄に薄く出す書式ガイド（そのまま placeholder に使う）。
+export const IP_INPUT_HINT = '10.0.0.1 / 10.0.0.0/24 / 10.0.0.1-10.0.0.99（カンマ区切りで複数可）';
+export const FQDN_INPUT_HINT = 'host1.example.jp（www. は付けない・カンマ区切りで複数可）';
+
+export interface TokenParse { tokens: string[]; errors: string[] }
+
+// カンマ区切りを分割して正規化する。レンジは展開しない（表記のまま 1 件として扱う）。
+// 形式に合わないものは errors に入れ、呼び出し側で警告を出して修正を促す。
+export function parseIpInput(raw: string): TokenParse {
+  const tokens: string[] = []; const errors: string[] = [];
+  for (const part of (raw || '').split(',')) {
+    const t = normalizeIpToken(part);
+    if (!t) continue;
+    if (classifyIpToken(t)) tokens.push(t); else errors.push(t);
   }
-  const v = e.single.trim();
-  if (!v) return '';
-  return isIpOrCidr(v) ? '' : `IP の表記が不正です: ${v}`;
+  return { tokens, errors };
 }
 
-const hasValue = (e: IpEntry): boolean => !!ipEntryValue(e);
+export function parseFqdnInput(raw: string): TokenParse {
+  const tokens: string[] = []; const errors: string[] = [];
+  for (const part of (raw || '').split(',')) {
+    const t = part.trim();
+    if (!t) continue;
+    if (isFqdn(t) && !/^www\./i.test(t)) tokens.push(t); else errors.push(t);
+  }
+  return { tokens, errors };
+}
 
 // AssetGroup 名。Qualys 側で一意必須なので、申請番号をそのまま識別子に使う。
 export const assetGroupTitle = (applicationNo: string): string => `${applicationNo.trim()}(仮)`;
@@ -105,7 +124,7 @@ export interface ProvisionInput {
   regionCode: string;      // 地域コード（MAP を含むときのみ使用）
   assetType: AssetType;    // 静的 / 動的(FQDN指定)
   kind: InspectKind;       // 静的のとき: scan のみ / map のみ / 両方。動的は scan 固定
-  ips: IpEntry[];          // 静的の検査資産情報（動的では使わない）
+  ips: string[];           // 静的の検査資産情報（正規化済みトークン。動的では使わない）
   dnsNames: string[];      // 動的の検査資産情報=FQDN（静的では使わない）
   // 申請情報（任意）。Qualys へは AssetGroup の division / comments として記録する。
   subject?: string;        // 件名
@@ -138,7 +157,7 @@ export function planProvision(i: ProvisionInput): ProvisionPlan {
     // 動的は MAP をしないのでドメインを払い出さない。
     domain: isDyn ? '' : domainName(i.applicationNo, i.regionCode),
     // 静的=IP のみ / 動的=FQDN のみ（もう一方の入力は捨てて、意図しない登録を防ぐ）。
-    ips: isDyn ? [] : i.ips.filter(hasValue).map(ipEntryValue),
+    ips: isDyn ? [] : i.ips.map(normalizeIpToken).filter(Boolean),
     dnsNames: isDyn ? i.dnsNames.map((d) => d.trim()).filter(Boolean) : [],
     withScan: needsScan(kind),
     withMap: !isDyn && needsMap(kind),
@@ -160,16 +179,14 @@ export function validateProvision(i: ProvisionInput): string[] {
     if (p.domain && p.domain.length > 253) e.push('ドメイン名が長すぎます（253文字以内）');
   }
   if (i.assetType === 'static') {
-    for (const row of i.ips) {
-      const err = ipEntryError(row);
-      if (err) e.push(err);
-    }
+    // 追加時に検証済みだが、念のためここでも形式を確認する。
+    for (const t of p.ips) if (!classifyIpToken(t)) e.push(`IP の表記が不正です: ${t}`);
     if (!p.ips.length) e.push('検査資産情報の IP を1つ以上入力してください');
   } else {
     if (!p.dnsNames.length) e.push('検査資産情報の FQDN を1つ以上入力してください');
     for (const d of p.dnsNames) {
-      // ドメイン名のみ（www. は付けない）という Qualys の指定に沿ってチェックする。
       if (/^www\./i.test(d)) e.push(`FQDN の先頭に "www." は付けないでください: ${d}`);
+      else if (!isFqdn(d)) e.push(`FQDN の表記が不正です: ${d}`);
     }
   }
   return e;

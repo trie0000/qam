@@ -4,11 +4,13 @@
 // 左ペインの独立ビューにインラインで置くので、本体（node）と送信処理（submit）を返す。
 // 本番 Qualys への書き込みなので、送信前に「何が作られるか」を必ず確認させる。
 // 命名・パラメータ組立・検証は provision.ts / schedule.ts（純粋関数）に委ねる。
-import { el } from '../dom';
+import { el, clear, onEnter } from '../dom';
+import { icon } from '../../icons';
 import { defaultScheduleInput, validateSchedule, type ScheduleInput } from '../../schedule';
 import {
   DEFAULT_REGIONS, planProvision, validateProvision, describeProvision,
-  type AssetType, type InspectKind, type IpEntry, type ProvisionInput, type RegionOption,
+  parseIpInput, parseFqdnInput, IP_INPUT_HINT, FQDN_INPUT_HINT,
+  type AssetType, type InspectKind, type ProvisionInput, type RegionOption, type TokenParse,
 } from '../../provision';
 
 export interface ScheduleDefaults {
@@ -31,6 +33,7 @@ export interface InspectionFormOpts {
   defaults: ScheduleDefaults;
   regions: RegionOption[];
   confirm: (title: string, lines: string[]) => Promise<boolean>;
+  warn: (title: string, lines: string[]) => void;   // 書式違反の警告
   submit: (mode: RegisterMode, p: ProvisionInput, scan: ScheduleInput, map: ScheduleInput) => Promise<ProvisionResult>;
   onDone: () => void;
 }
@@ -48,41 +51,46 @@ const field = (label: string, node: Node, note = ''): HTMLElement =>
 const numInput = (value: number, min: number, max: number): HTMLInputElement =>
   el('input', { class: 'in', type: 'number', min: String(min), max: String(max), value: String(value) }) as HTMLInputElement;
 
-// 「単体 / レンジ」を切り替えられる IP 入力行。行は動的に増減する。
-function ipRow(onChange: () => void, onRemove: (row: HTMLElement) => void, init?: IpEntry): { node: HTMLElement; read: () => IpEntry } {
-  const mode = el('select', { class: 'in qam-prov-mode' }) as HTMLSelectElement;
-  mode.append(el('option', { value: 'single' }, ['単体']), el('option', { value: 'range' }, ['レンジ']));
-  const single = el('input', { class: 'in', placeholder: '10.0.0.1 または 10.0.0.0/24' }) as HTMLInputElement;
-  const from = el('input', { class: 'in', placeholder: '開始 10.0.0.1' }) as HTMLInputElement;
-  const to = el('input', { class: 'in', placeholder: '終了 10.0.0.99' }) as HTMLInputElement;
-  const rangeBox = el('div', { class: 'qam-prov-range' }, [from, el('span', {}, ['〜']), to]);
-  const del = el('button', { class: 'btn btn--sm', type: 'button' }, ['削除']);
-  const node = el('div', { class: 'qam-prov-row' }, [mode, single, rangeBox, del]);
-  const sync = (): void => {
-    const isRange = mode.value === 'range';
-    single.hidden = isRange;
-    rangeBox.hidden = !isRange;
+// 検査資産情報のエディタ: テキスト欄に直接入力 →「追加」でリストへ。
+// カンマ区切りは分割して複数行として登録する（レンジは展開しない）。
+// 書式違反が1つでもあれば何も追加せず警告し、入力はそのまま残して修正を促す。
+interface TokenEditor { node: HTMLElement; read: () => string[]; add: (tokens: string[]) => void }
+function tokenEditor(
+  hint: string,
+  parse: (raw: string) => TokenParse,
+  onInvalid: (bad: string[]) => void,
+  onChange: () => void,
+): TokenEditor {
+  const tokens: string[] = [];
+  const input = el('input', { class: 'in', placeholder: hint }) as HTMLInputElement;
+  const addBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['追加']);
+  const list = el('div', { class: 'qam-tok-list' });
+
+  const draw = (): void => {
+    clear(list);
+    tokens.forEach((t, idx) => {
+      const del = el('button', { class: 'btn btn--icon btn--sm', type: 'button', 'aria-label': `${t} を削除`, title: '削除', html: icon('x', 13) });
+      del.addEventListener('click', () => { tokens.splice(idx, 1); draw(); onChange(); });
+      list.append(el('div', { class: 'qam-tok-item' }, [del, el('span', { class: 'qam-tok-val' }, [t])]));
+    });
+    onChange();
   };
-  if (init) { mode.value = init.mode; single.value = init.single; from.value = init.from; to.value = init.to; }
-  mode.addEventListener('change', () => { sync(); onChange(); });
-  for (const inp of [single, from, to]) inp.addEventListener('input', onChange);
-  del.addEventListener('click', () => onRemove(node));
-  sync();
+  const commit = (): void => {
+    const { tokens: ok, errors } = parse(input.value);
+    if (errors.length) { onInvalid(errors); return; } // 修正できるよう入力は消さない
+    for (const t of ok) if (!tokens.includes(t)) tokens.push(t);
+    input.value = '';
+    draw();
+  };
+  addBtn.addEventListener('click', commit);
+  onEnter(input, commit); // IME 変換中の Enter は無視される
+
+  const node = el('div', {}, [el('div', { class: 'qam-tok-input' }, [input, addBtn]), list]);
   return {
     node,
-    read: () => ({ mode: mode.value as IpEntry['mode'], single: single.value, from: from.value, to: to.value }),
+    read: () => [...tokens],
+    add: (init) => { for (const t of init) if (t && !tokens.includes(t)) tokens.push(t); draw(); },
   };
-}
-
-// FQDN の入力行（動的・複数）。
-function fqdnRow(onChange: () => void, onRemove: (row: HTMLElement) => void, init?: string): { node: HTMLElement; read: () => string } {
-  const input = el('input', { class: 'in', placeholder: 'host1.example.jp（www. は付けない）' }) as HTMLInputElement;
-  if (init) input.value = init;
-  const del = el('button', { class: 'btn btn--sm', type: 'button' }, ['削除']);
-  const node = el('div', { class: 'qam-prov-row' }, [input, del]);
-  input.addEventListener('input', onChange);
-  del.addEventListener('click', () => onRemove(node));
-  return { node, read: () => input.value };
 }
 
 // 検査予定日(YYYY-MM-DD) → タイトル用 YYYYMMDD。
@@ -107,7 +115,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const appNo = el('input', { class: 'in', placeholder: '例: EXT-2026-001' }) as HTMLInputElement;
   const subject = el('input', { class: 'in', placeholder: '例: ○○システム 外部公開に伴う検査' }) as HTMLInputElement;
   const department = el('input', { class: 'in', placeholder: '例: ○○部' }) as HTMLInputElement;
-  const applicant = el('input', { class: 'in', value: o.author }) as HTMLInputElement;
+  const applicant = el('input', { class: 'in', placeholder: '検査を依頼してきた部門の担当者名' }) as HTMLInputElement;
   const note = el('textarea', { class: 'in qam-prov-note', rows: '3', placeholder: '補足があれば記入' }) as HTMLTextAreaElement;
   const region = el('select', { class: 'in' }) as HTMLSelectElement;
   regions.forEach((r) => region.append(el('option', { value: r.code }, [`${r.label}（${r.code}）`])));
@@ -118,24 +126,15 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     el('option', { value: 'map' }, ['MAP のみ']),
   );
 
-  const ipRows: { node: HTMLElement; read: () => IpEntry }[] = [];
-  const fqdnRows: { node: HTMLElement; read: () => string }[] = [];
-  const ipList = el('div', { class: 'qam-prov-list' });
-  const fqdnList = el('div', { class: 'qam-prov-list' });
   const preview = el('div', { class: 'qam-prov-preview' });
-
-  const addIp = (init?: IpEntry): void => {
-    const r = ipRow(refreshPreview, (n) => { const i = ipRows.findIndex((x) => x.node === n); if (i >= 0) { ipRows.splice(i, 1); n.remove(); refreshPreview(); } }, init);
-    ipRows.push(r); ipList.append(r.node); refreshPreview();
+  const warnInvalid = (kind: string) => (bad: string[]): void => {
+    o.warn(`${kind}の書式を確認してください`, [
+      `次の入力は書式に合っていません: ${bad.join(', ')}`,
+      kind === 'IP' ? `正しい書式: ${IP_INPUT_HINT}` : `正しい書式: ${FQDN_INPUT_HINT}`,
+    ]);
   };
-  const addFqdn = (init?: string): void => {
-    const r = fqdnRow(refreshPreview, (n) => { const i = fqdnRows.findIndex((x) => x.node === n); if (i >= 0) { fqdnRows.splice(i, 1); n.remove(); refreshPreview(); } }, init);
-    fqdnRows.push(r); fqdnList.append(r.node); refreshPreview();
-  };
-  const addIpBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['＋ IP を追加']);
-  const addFqdnBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['＋ FQDN を追加']);
-  addIpBtn.addEventListener('click', () => addIp());
-  addFqdnBtn.addEventListener('click', () => addFqdn());
+  const ipEditor = tokenEditor(IP_INPUT_HINT, parseIpInput, warnInvalid('IP'), () => refreshPreview());
+  const fqdnEditor = tokenEditor(FQDN_INPUT_HINT, parseFqdnInput, warnInvalid('FQDN'), () => refreshPreview());
 
   // ---- スケジュール（1回のみ: 検査予定日と開始時刻だけ）----
   const title = el('input', { class: 'in', placeholder: 'AssetGroup名_YYYYMMDD が自動で入ります' }) as HTMLInputElement;
@@ -151,10 +150,10 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const rowKind = field('検査種別', kind, 'MAP と SCAN の両方／MAP 単体／SCAN 単体。');
   const rowState = field('作成時の状態', active);
   const rowRegion = field('地域区分', region, 'ドメイン名の末尾に付く地域コードです。');
-  const rowIp = field('検査資産情報（IP）', el('div', {}, [ipList, addIpBtn]),
-    '「単体」は IP か CIDR、「レンジ」は開始〜終了。行を追加して複数指定できます。AssetGroup の IP_SET に登録されます。');
-  const rowFqdn = field('検査資産情報（FQDN）', el('div', {}, [fqdnList, addFqdnBtn]),
-    '行を追加して複数指定できます。AssetGroup の DNS_LIST に登録されます。');
+  const rowIp = field('検査資産情報（IP）', ipEditor.node,
+    '入力して「追加」（Enter でも可）。カンマ区切りで複数まとめて追加できます。AssetGroup の IP_SET に登録されます。');
+  const rowFqdn = field('検査資産情報（FQDN）', fqdnEditor.node,
+    '入力して「追加」（Enter でも可）。カンマ区切りで複数まとめて追加できます。AssetGroup の DNS_LIST に登録されます。');
   const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, '共通設定の既定値が入っています。');
   const rowMapOpt = field('MAP のオプションプロファイル', mapOpt, '共通設定の既定値が入っています。');
   const rowScanner = field('スキャナー', scanner, '共通設定の既定値が入っています。');
@@ -172,8 +171,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     regionCode: region.value,
     assetType: assetType.value as AssetType,
     kind: kind.value as InspectKind,
-    ips: ipRows.map((r) => r.read()),
-    dnsNames: fqdnRows.map((r) => r.read()),
+    ips: ipEditor.read(),
+    dnsNames: fqdnEditor.read(),
     subject: subject.value,
     department: department.value,
     applicant: applicant.value,
@@ -238,7 +237,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     field('件名', subject),
     field('申請部門', department, 'AssetGroup の Division に記録されます。'),
     rowRegion,
-    field('申請者', applicant, '既定は記入者名です。'),
+    field('申請部門担当者', applicant, '検査を依頼してきた部門の担当者名です（このツールの利用者ではありません）。'),
 
     section('検査対象'),
     field('資産種別', assetType, '静的=IP 資産（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は登録しません）。'),
@@ -264,16 +263,14 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     appNo.value = init.applicationNo;
     subject.value = init.subject ?? '';
     department.value = init.department ?? '';
-    applicant.value = init.applicant?.trim() || o.author;
+    applicant.value = init.applicant ?? '';
     note.value = init.note ?? '';
     assetType.value = init.assetType;
     kind.value = init.kind;
     if ([...region.options].some((op) => op.value === init.regionCode)) region.value = init.regionCode;
-    for (const row of init.ips) addIp(row);
-    for (const d of init.dnsNames) addFqdn(d);
+    ipEditor.add(init.ips);
+    fqdnEditor.add(init.dnsNames);
   }
-  if (!ipRows.length) addIp();
-  if (!fqdnRows.length) addFqdn();
   syncRows();
 
   // 共通のスケジュール項目を組み立て、種別ごとに対象とプロファイルだけ差し替える。

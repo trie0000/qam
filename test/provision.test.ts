@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_REGIONS, parseRegions, formatRegions, assetGroupTitle, toDnsLabel, domainName,
-  ipEntryValue, ipEntryError, planProvision, validateProvision, buildAssetGroupParams,
-  describeProvision, emptyIpEntry, type IpEntry, type ProvisionInput,
+  classifyIpToken, normalizeIpToken, parseIpInput, parseFqdnInput, isFqdn,
+  planProvision, validateProvision, buildAssetGroupParams,
+  describeProvision, type ProvisionInput,
 } from '../src/provision';
 
-const ip = (o: Partial<IpEntry>): IpEntry => ({ ...emptyIpEntry(), ...o });
 const base = (o: Partial<ProvisionInput> = {}): ProvisionInput => ({
   applicationNo: 'EXT-2026-001', regionCode: 'jp', assetType: 'static', kind: 'both',
-  ips: [ip({ single: '10.0.0.1' })], dnsNames: [], ...o,
+  ips: ['10.0.0.1'], dnsNames: [], ...o,
 });
 // 動的（FQDN 指定）の入力。IP は使わない。
 const dyn = (o: Partial<ProvisionInput> = {}): ProvisionInput =>
@@ -53,20 +53,41 @@ describe('命名', () => {
   });
 });
 
-describe('IP 入力（単体 / レンジ）', () => {
-  it('単体は IP か CIDR、レンジは 開始-終了 の形になる', () => {
-    expect(ipEntryValue(ip({ single: '10.0.0.1' }))).toBe('10.0.0.1');
-    expect(ipEntryValue(ip({ single: '10.0.0.0/24' }))).toBe('10.0.0.0/24');
-    expect(ipEntryValue(ip({ mode: 'range', from: '10.0.0.1', to: '10.0.0.9' }))).toBe('10.0.0.1-10.0.0.9');
-    expect(ipEntryValue(ip({}))).toBe('');  // 空行
+describe('検査資産情報の入力（テキスト直接入力）', () => {
+  it('単体 / CIDR / レンジ を判別する', () => {
+    expect(classifyIpToken('10.0.0.1')).toBe('single');
+    expect(classifyIpToken('10.0.0.0/24')).toBe('cidr');
+    expect(classifyIpToken('10.0.0.1-10.0.0.99')).toBe('range');
+    expect(classifyIpToken('10.0.0.999')).toBeNull();
+    expect(classifyIpToken('10.0.0.1/33')).toBeNull();
+    expect(classifyIpToken('10.0.0.1-')).toBeNull();
+    expect(classifyIpToken('abc')).toBeNull();
   });
 
-  it('不正な表記はエラーにする', () => {
-    expect(ipEntryError(ip({ single: '10.0.0.999' }))).toContain('IP の表記が不正');
-    expect(ipEntryError(ip({ single: '10.0.0.1/33' }))).toContain('IP の表記が不正');
-    expect(ipEntryError(ip({ mode: 'range', from: '10.0.0.1', to: 'abc' }))).toContain('IP レンジの表記が不正');
-    expect(ipEntryError(ip({}))).toBe('');  // 空行はエラーにしない
-    expect(ipEntryError(ip({ mode: 'range', from: '', to: '' }))).toBe('');
+  it('レンジの "-" は両端の半角スペースを許し、前後の空白はトリミングする', () => {
+    expect(normalizeIpToken('  10.0.0.1 - 10.0.0.99  ')).toBe('10.0.0.1-10.0.0.99');
+    expect(classifyIpToken(' 10.0.0.1 - 10.0.0.99 ')).toBe('range');
+    expect(normalizeIpToken('  10.0.0.1  ')).toBe('10.0.0.1');
+  });
+
+  it('カンマ区切りは分割して複数トークンにする（レンジは展開しない）', () => {
+    const r = parseIpInput('10.0.0.1, 10.0.0.0/24 , 10.0.1.1 - 10.0.1.9');
+    expect(r.tokens).toEqual(['10.0.0.1', '10.0.0.0/24', '10.0.1.1-10.0.1.9']);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('書式違反は errors に集め、空要素は無視する', () => {
+    const r = parseIpInput('10.0.0.1, , bad, 10.0.0.256');
+    expect(r.tokens).toEqual(['10.0.0.1']);
+    expect(r.errors).toEqual(['bad', '10.0.0.256']);
+  });
+
+  it('FQDN もカンマ区切りで分割し、www. 付きや不正形式は errors にする', () => {
+    const r = parseFqdnInput(' a.example.jp , www.example.jp, bad_host, b.example.jp ');
+    expect(r.tokens).toEqual(['a.example.jp', 'b.example.jp']);
+    expect(r.errors).toEqual(['www.example.jp', 'bad_host']);
+    expect(isFqdn('host1.example.jp')).toBe(true);
+    expect(isFqdn('nodot')).toBe(false);
   });
 });
 
@@ -84,7 +105,7 @@ describe('資産種別・検査種別と入力検証', () => {
     const st = planProvision(base({ dnsNames: ['ignored.example.jp'] }));
     expect(st.ips).toEqual(['10.0.0.1']);
     expect(st.dnsNames).toEqual([]);
-    const dy = planProvision(dyn({ ips: [ip({ single: '10.0.0.1' })] }));
+    const dy = planProvision(dyn({ ips: ['10.0.0.1'] }));
     expect(dy.ips).toEqual([]);
     expect(dy.dnsNames).toEqual(['host1.example.jp']);
   });
@@ -118,17 +139,15 @@ describe('資産種別・検査種別と入力検証', () => {
     expect(validateProvision(dyn({ dnsNames: ['www.example.jp'] })).join()).toContain('"www." は付けないでください');
   });
 
-  it('不正な IP 行はまとめて報告する（静的）', () => {
-    const errs = validateProvision(base({ ips: [ip({ single: 'bad' }), ip({ mode: 'range', from: '10.0.0.1', to: 'x' })] }));
+  it('不正な IP トークンはまとめて報告する（静的・防御的検証）', () => {
+    const errs = validateProvision(base({ ips: ['bad', '10.0.0.1-x'] }));
     expect(errs.filter((e) => e.includes('表記が不正'))).toHaveLength(2);
   });
 });
 
 describe('AssetGroup 作成パラメータ', () => {
   it('静的: title / ips / domains を組み立てる（DNS は載せない）', () => {
-    const p = buildAssetGroupParams(base({
-      ips: [ip({ single: '10.0.0.1' }), ip({ mode: 'range', from: '10.0.1.0', to: '10.0.1.99' })],
-    }));
+    const p = buildAssetGroupParams(base({ ips: ['10.0.0.1', '10.0.1.0-10.0.1.99'] }));
     expect(p).toEqual({
       action: 'add',
       title: 'EXT-2026-001(仮)',

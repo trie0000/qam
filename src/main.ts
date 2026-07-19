@@ -802,6 +802,7 @@ async function openQuickInspectModal(initial?: ProvisionInput): Promise<void> {
       timeZoneCode: cfg.scheduleTimeZone || 'JP',
     },
     confirm: (title, lines) => confirmModal(title, lines.join('\n'), '登録する'),
+    warn: (title, lines) => { alertModal(title, lines.join('\n')); },
     submit: async (mode, p, scanInput, mapInput) => {
       if (mode === 'ledger') return recordLedger(author, p, scanInput, mapInput);
       const creds = await resolveQualysCreds();
@@ -1178,6 +1179,14 @@ function promptQualysCreds(curUser: string, curPass: string): Promise<{ user: st
       },
       onClose: () => { if (!done) resolve(null); },
     });
+  });
+}
+
+// 情報/警告の通知だけを行うモーダル（選択肢は無く、閉じるだけ）。
+function alertModal(title: string, message: string): void {
+  openModal({
+    title, body: el('div', { style: 'user-select:text;white-space:pre-wrap' }, [message]),
+    primaryLabel: 'OK', onPrimary: () => true,
   });
 }
 
@@ -1638,7 +1647,12 @@ function openHelp(): void {
           登録モーダルは<b>背景クリックでは閉じません</b>（キャンセル／×／Esc のみ）。
           入力は「申請情報（申請番号・件名・申請部門・地域区分・申請者）」「検査対象」「検査スケジュール」
           「その他（備考）」のセクション構成で、申請部門は AssetGroup の Division、
-          件名・申請者・備考は Comments に記録されます。
+          件名・申請部門担当者・備考は Comments に記録されます（<b>申請部門担当者</b>は検査を依頼してきた
+          部門の担当者名で、このツールの利用者ではありません）。
+          <b>検査資産情報</b>はテキスト欄に直接入力して「追加」（Enter でも可）でリストに積まれ、
+          各行の削除ボタンで消せます。<b>カンマ区切りで複数まとめて追加</b>でき、IP は単体／CIDR／レンジを
+          自動判別します（レンジの「-」は両端に半角スペースがあっても可、前後の空白は自動除去。
+          レンジは展開せず1件として扱います）。書式違反があれば警告が出るので、修正して追加し直してください。
           <b>同名が既にある場合は「既存を使う／別名で作る／中止」を確認</b>します。
           登録内容は操作履歴に残り、<b>実行者・発行したAPI・パラメータは api-audit.log にも記録</b>されます。</li>
       <li><b>検査一覧</b>：取得した<b>実行履歴</b>と<b>予約済み</b>を1つの表で確認できます。「区分」列で
