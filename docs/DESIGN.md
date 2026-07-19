@@ -268,7 +268,13 @@ qam/
   「既存を使う / 別名で作る / 中止」を必ず選ばせる（破壊的な既定を置かない）。途中失敗時は
   完了済みの手順を添えて返し、操作履歴にも中断として残す。
 - **relay の許可パス**: schedule/scan・scheduled_scans.php・asset/group・asset_domain.php の 4 つのみ。
-- **資産種別**: 静的（IP 指定）= 検査種別を両方/SCAN/MAP から選択、検査資産情報は IP のみ（IP_SET へ）。
+- **検査種別は資産ごと**: `AssetEntry { value, scan, map }` を持ち、SCAN 対象は AssetGroup の
+  `ips`/`dns_names`、MAP 対象は **domains** へ登録する（静的=申請番号ベースのドメイン1件＋対象IPを
+  `netblock` に／動的=FQDN 自体をドメインに）。`planProvision` が scanTargets / mapTargets /
+  domains / netblocks を導出する。全選択チェックは行の状態に追従する。
+- **スケジュールタイトル**: `scheduleTitle(agTitle, kind, ymd)` = `AG名_s_YYYYMMDD` / `AG名_m_YYYYMMDD`。
+- **検査予定日時**: SCAN/MAP で別に保持。「同じタイミング」チェック時は MAP が SCAN に追従する。
+- **資産種別**: 静的（IP 指定）= 検査資産情報は IP のみ。
   IP は **プライベートIP（RFC1918）を拒否**（`containsPrivateIp`。単体・CIDR のネットワークアドレス・
   レンジの両端すべてを見る）。動的では IP エディタを `setEnabled(false)` で無効化し、値も保持しない
   （隠すだけだと種別を戻したとき等に残ってしまうため）。

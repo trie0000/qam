@@ -15,7 +15,7 @@ import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { buildInspectionForm } from './ui/views/schedule-form';
 import type { ScheduleInput } from './schedule';
-import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, DEFAULT_REGIONS, type ProvisionInput } from './provision';
+import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, buildDomainParams, DEFAULT_REGIONS, type ProvisionInput } from './provision';
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
@@ -780,8 +780,7 @@ function prefillFrom(m: QamManualInspection): ProvisionInput {
     applicationNo: ag.replace(/\(仮\)$/, ''),
     regionCode: (m.domains[0] ?? '').split('.').pop() ?? '',
     assetType: 'static',
-    kind: m.kind,
-    ips: [], dnsNames: [],
+    assets: [], // 旧データは資産の内訳を持たないので空（入力し直してもらう）
     subject: m.subject, department: m.department, applicant: m.applicant, note: m.note,
   };
 }
@@ -874,11 +873,11 @@ async function recordLedger(
   if (plan.withMap) {
     await appendManualInspection(backend, {
       ts, author, mode: 'ledger', kind: 'map', title: mapInput.title,
-      nextLaunch: at(mapInput), assetGroups: [plan.title], domains: [plan.domain],
+      nextLaunch: at(mapInput), assetGroups: [plan.title], domains: plan.domains,
       subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
       provision: p,
     });
-    steps.push(`MAP 予定を管理表に記録（${plan.domain}）`);
+    steps.push(`MAP 予定を管理表に記録（${plan.domains.join(', ')}）`);
   }
   recordOp('検査登録(管理表のみ)', steps.join(' / '));
   toast(`管理表に記録しました: ${steps.join(' / ')}`, 'ok');
@@ -907,21 +906,23 @@ async function runProvision(
       await createAssetGroup(creds, buildAssetGroupParams(p), author);
       steps.push(`AssetGroup「${agTitle}」を作成`);
     }
-    // 2) ドメイン（MAP を含むときのみ）
-    let domain = plan.domain;
-    if (plan.withMap && domain) {
-      if (await findDomain(creds, domain)) {
-        const d = await askDuplicate('ドメイン', domain);
-        if (d.choice === 'cancel') throw new Error(`登録を中止しました（ここまで: ${steps.join(' / ')}）`);
-        if (d.choice === 'rename') {
-          domain = d.newName;
-          await addDomain(creds, domain, author);
-          steps.push(`ドメイン「${domain}」を登録`);
-        } else steps.push(`ドメイン「${domain}」は既存を使用`);
+    // 2) ドメイン（MAP 対象がある場合のみ・複数あり得る）
+    const domains: string[] = [];
+    for (const d0 of plan.domains) {
+      let d = d0;
+      if (await findDomain(creds, d)) {
+        const dup = await askDuplicate('ドメイン', d);
+        if (dup.choice === 'cancel') throw new Error(`登録を中止しました（ここまで: ${steps.join(' / ')}）`);
+        if (dup.choice === 'rename') {
+          d = dup.newName;
+          await addDomain(creds, buildDomainParams(p, d), author);
+          steps.push(`ドメイン「${d}」を登録`);
+        } else steps.push(`ドメイン「${d}」は既存を使用`);
       } else {
-        await addDomain(creds, domain, author);
-        steps.push(`ドメイン「${domain}」を登録`);
+        await addDomain(creds, buildDomainParams(p, d), author);
+        steps.push(`ドメイン「${d}」を登録`);
       }
+      domains.push(d);
     }
     // 3) スケジュール（名前を変えた場合は対象も差し替える）
     if (plan.withScan) {
@@ -929,7 +930,7 @@ async function runProvision(
       steps.push('SCAN スケジュールを登録');
     }
     if (plan.withMap) {
-      await createSchedule(creds, { ...mapInput, targets: [domain] }, author);
+      await createSchedule(creds, { ...mapInput, targets: domains }, author);
       steps.push('MAP スケジュールを登録');
     }
     // 登録履歴（管理表）にも残す。実体は Qualys にあるので判定へは合流しない（mode='qualys'）。
@@ -947,7 +948,7 @@ async function runProvision(
     if (plan.withMap) {
       await appendManualInspection(backend, {
         ts, author, mode: 'qualys', kind: 'map', title: mapInput.title,
-        nextLaunch: at(mapInput), assetGroups: [agTitle], domains: [domain],
+        nextLaunch: at(mapInput), assetGroups: [agTitle], domains,
         subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
         provision: p,
       }).catch(() => undefined);

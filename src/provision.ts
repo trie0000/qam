@@ -154,48 +154,54 @@ export function domainName(applicationNo: string, regionCode: string): string {
   return label && code ? `${label}.${code}` : '';
 }
 
+// 検査対象の資産 1 件。資産ごとに SCAN / MAP のどちらを実施するかを持つ（両方可）。
+//   SCAN 対象 → AssetGroup の ips / dns_names に登録し、AssetGroup 指定でスケジュール
+//   MAP  対象 → domains に登録し、ドメイン指定でスケジュール
+export interface AssetEntry { value: string; scan: boolean; map: boolean }
+
 export interface ProvisionInput {
   applicationNo: string;   // 外部接続申請番号
-  regionCode: string;      // 地域コード（MAP を含むときのみ使用）
-  assetType: AssetType;    // 静的 / 動的(FQDN指定)
-  kind: InspectKind;       // 静的のとき: scan のみ / map のみ / 両方。動的は scan 固定
-  ips: string[];           // 静的の検査資産情報（正規化済みトークン。動的では使わない）
-  dnsNames: string[];      // 動的の検査資産情報=FQDN（静的では使わない）
+  regionCode: string;      // 地域コード（静的の MAP 用ドメイン名に使う）
+  assetType: AssetType;    // 静的(IP指定) / 動的(FQDN指定)
+  assets: AssetEntry[];    // 検査対象（静的=IPトークン / 動的=FQDN）
   // 申請情報（任意）。Qualys へは AssetGroup の division / comments として記録する。
   subject?: string;        // 件名
   department?: string;     // 申請部門
-  applicant?: string;      // 申請者（既定は記入者名）
+  applicant?: string;      // 申請部門担当者
   note?: string;           // 備考（複数行）
 }
 
-// 動的は MAP を実施できない（IP ネットブロックを持たない）ため、種別は常に scan として扱う。
-export const effectiveKind = (i: Pick<ProvisionInput, 'assetType' | 'kind'>): InspectKind =>
-  (i.assetType === 'dynamic' ? 'scan' : i.kind);
-
-export const needsScan = (k: InspectKind): boolean => k === 'scan' || k === 'both';
-export const needsMap = (k: InspectKind): boolean => k === 'map' || k === 'both';
+const valueOf = (a: AssetEntry): string => a.value.trim();
+export const scanAssets = (i: ProvisionInput): string[] => i.assets.filter((a) => a.scan).map(valueOf).filter(Boolean);
+export const mapAssets = (i: ProvisionInput): string[] => i.assets.filter((a) => a.map).map(valueOf).filter(Boolean);
 
 // 入力から Qualys へ渡す値をまとめて導出する（画面のプレビューにもそのまま使う）。
 export interface ProvisionPlan {
-  title: string;        // AssetGroup 名
-  domain: string;       // MAP 対象ドメイン（map を含まないときも参考表示する）
-  ips: string[];        // ips パラメータ用トークン
-  dnsNames: string[];
+  title: string;          // AssetGroup 名
+  scanTargets: string[];  // AssetGroup の ips / dns_names に入れる資産
+  mapTargets: string[];   // MAP 検査対象の資産
+  domains: string[];      // domains へ登録する名前（MAP スケジュールの対象）
+  netblocks: string[];    // 静的のとき、生成ドメインに紐付けるネットブロック
   withScan: boolean;
   withMap: boolean;
 }
+
 export function planProvision(i: ProvisionInput): ProvisionPlan {
-  const kind = effectiveKind(i);
   const isDyn = i.assetType === 'dynamic';
+  const scanTargets = scanAssets(i);
+  const mapTargets = mapAssets(i);
   return {
     title: assetGroupTitle(i.applicationNo),
-    // 動的は MAP をしないのでドメインを払い出さない。
-    domain: isDyn ? '' : domainName(i.applicationNo, i.regionCode),
-    // 静的=IP のみ / 動的=FQDN のみ（もう一方の入力は捨てて、意図しない登録を防ぐ）。
-    ips: isDyn ? [] : i.ips.map(normalizeIpToken).filter(Boolean),
-    dnsNames: isDyn ? i.dnsNames.map((d) => d.trim()).filter(Boolean) : [],
-    withScan: needsScan(kind),
-    withMap: !isDyn && needsMap(kind),
+    scanTargets,
+    mapTargets,
+    // 動的(FQDN)は FQDN 自体をドメインとして登録。静的(IP)は申請番号ベースの
+    // ドメイン名を1つ払い出し、対象IPをそのネットブロックとして紐付ける。
+    domains: mapTargets.length
+      ? (isDyn ? mapTargets : [domainName(i.applicationNo, i.regionCode)].filter(Boolean))
+      : [],
+    netblocks: isDyn ? [] : mapTargets,
+    withScan: scanTargets.length > 0,
+    withMap: mapTargets.length > 0,
   };
 }
 
@@ -206,56 +212,84 @@ export function validateProvision(i: ProvisionInput): string[] {
   // Qualys の制約: AssetGroup 名は一意で、"All" は使用不可。
   if (no && assetGroupTitle(no).toLowerCase() === 'all') e.push('AssetGroup 名に "All" は使用できません');
   const p = planProvision(i);
-  if (p.withMap) {
-    if (no && !toDnsLabel(no)) {
-      e.push('申請番号に英数字が含まれていないため、ドメイン名を作れません（英数字とハイフンを含めてください）');
-    }
-    if (!i.regionCode.trim()) e.push('地域区分を選んでください');
-    if (p.domain && p.domain.length > 253) e.push('ドメイン名が長すぎます（253文字以内）');
+  const isStatic = i.assetType === 'static';
+
+  if (!i.assets.length) {
+    e.push(isStatic ? '検査資産情報の IP を1つ以上入力してください' : '検査資産情報の FQDN を1つ以上入力してください');
+  } else if (!p.withScan && !p.withMap) {
+    e.push('資産ごとに SCAN / MAP のどちらを実施するかを選んでください');
   }
-  if (i.assetType === 'static') {
-    // 追加時に検証済みだが、念のためここでも形式を確認する。
-    for (const t of p.ips) {
-      if (!classifyIpToken(t)) e.push(`IP の表記が不正です: ${t}`);
-      else if (containsPrivateIp(t)) e.push(`プライベートIPは登録できません: ${t}`);
+
+  // 資産の書式（追加時に検証済みだが、念のため）。
+  for (const a of i.assets) {
+    const v = a.value.trim();
+    if (!v) continue;
+    if (isStatic) {
+      if (!classifyIpToken(v)) e.push(`IP の表記が不正です: ${v}`);
+      else if (containsPrivateIp(v)) e.push(`プライベートIPは登録できません: ${v}`);
+    } else if (!isFqdn(v)) e.push(`FQDN の表記が不正です: ${v}`);
+  }
+
+  // MAP 用ドメインは静的のときだけ申請番号から払い出す。
+  if (p.withMap && isStatic) {
+    if (no && !toDnsLabel(no)) {
+      e.push('申請番号に英数字が含まれていないため、MAP 用のドメイン名を作れません（英数字とハイフンを含めてください）');
     }
-    if (!p.ips.length) e.push('検査資産情報の IP を1つ以上入力してください');
-  } else {
-    if (!p.dnsNames.length) e.push('検査資産情報の FQDN を1つ以上入力してください');
-    for (const d of p.dnsNames) if (!isFqdn(d)) e.push(`FQDN の表記が不正です: ${d}`);
+    if (!i.regionCode.trim()) e.push('MAP を実施する資産があるため、地域区分を選んでください');
+    for (const d of p.domains) if (d.length > 253) e.push(`ドメイン名が長すぎます（253文字以内）: ${d}`);
   }
   return e;
 }
 
 // AssetGroup 作成（/api/2.0/fo/asset/group/?action=add）のパラメータ。
+// SCAN 対象だけを ips / dns_names に載せる（MAP 対象は domains 側で扱う）。
 // 空の項目は送らない（Qualys が不正パラメータとして弾くのを避ける）。
 export function buildAssetGroupParams(i: ProvisionInput): Record<string, string> {
   const p = planProvision(i);
   const params: Record<string, string> = { action: 'add', title: p.title };
-  if (p.ips.length) params.ips = p.ips.join(',');
-  if (p.dnsNames.length) params.dns_names = p.dnsNames.join(',');
-  if (p.withMap && p.domain) params.domains = p.domain;
-  // 申請情報を Qualys 側にも残す（division=申請部門 / comments=件名・申請者・備考の連結）。
+  if (p.scanTargets.length) {
+    if (i.assetType === 'static') params.ips = p.scanTargets.join(',');
+    else params.dns_names = p.scanTargets.join(',');
+  }
+  // 申請情報を Qualys 側にも残す（division=申請部門 / comments=件名・担当者・備考の連結）。
   const dep = (i.department ?? '').trim();
   if (dep) params.division = dep;
   const comments = [
     (i.subject ?? '').trim() && `件名: ${(i.subject ?? '').trim()}`,
-    (i.applicant ?? '').trim() && `申請者: ${(i.applicant ?? '').trim()}`,
+    (i.applicant ?? '').trim() && `申請部門担当者: ${(i.applicant ?? '').trim()}`,
     (i.note ?? '').trim() && `備考: ${(i.note ?? '').trim()}`,
   ].filter(Boolean).join(' / ');
   if (comments) params.comments = comments;
   return params;
 }
 
+// ドメイン登録（/msp/asset_domain.php?action=add）のパラメータ。
+// 静的は生成ドメイン＋対象IPのネットブロック、動的は FQDN をそのまま登録する。
+export function buildDomainParams(i: ProvisionInput, domain: string): Record<string, string> {
+  const p = planProvision(i);
+  const params: Record<string, string> = { action: 'add', domain };
+  if (p.netblocks.length) params.netblock = p.netblocks.join(',');
+  return params;
+}
+
+// スケジュールのタイトル: AssetGroup 名の後ろに種別（_s_ / _m_）と検査予定日を挟む。
+//   例) EXT-2026-001(仮)_s_20260801 / EXT-2026-001(仮)_m_20260801
+export const scheduleTitle = (agTitle: string, kind: 'scan' | 'map', ymd: string): string =>
+  `${agTitle}${kind === 'map' ? '_m_' : '_s_'}${ymd}`;
+
 // 確認モーダルに出す要約（何が作られるかを列挙する）。
 export function describeProvision(i: ProvisionInput): string[] {
   const p = planProvision(i);
-  const lines = [`AssetGroup「${p.title}」を作成（${i.assetType === 'dynamic' ? '動的・FQDN指定' : '静的・IP資産'}）`];
+  const kindLabel = i.assetType === 'dynamic' ? '動的・FQDN指定' : '静的・IP指定';
+  const lines = [`AssetGroup「${p.title}」を作成（${kindLabel}）`];
   if ((i.subject ?? '').trim()) lines.push(`　件名: ${(i.subject ?? '').trim()}`);
-  if (p.ips.length) lines.push(`　IP: ${p.ips.join(', ')}`);
-  if (p.dnsNames.length) lines.push(`　FQDN: ${p.dnsNames.join(', ')}`);
-  if (p.withMap) lines.push(`ドメイン「${p.domain}」を登録`);
+  if (p.withScan) lines.push(`　SCAN 対象（${i.assetType === 'static' ? 'IP_SET' : 'DNS_LIST'}）: ${p.scanTargets.join(', ')}`);
+  else lines.push('　SCAN 対象なし（AssetGroup のみ作成）');
+  for (const d of p.domains) {
+    const nb = p.netblocks.length ? `（ネットブロック: ${p.netblocks.join(', ')}）` : '';
+    lines.push(`ドメイン「${d}」を登録${nb}`);
+  }
   if (p.withScan) lines.push(`SCAN スケジュールを登録（対象: ${p.title}）`);
-  if (p.withMap) lines.push(`MAP スケジュールを登録（対象: ${p.domain}）`);
+  if (p.withMap) lines.push(`MAP スケジュールを登録（対象: ${p.domains.join(', ')}）`);
   return lines;
 }

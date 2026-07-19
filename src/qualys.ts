@@ -310,8 +310,9 @@ export async function findDomain(creds: QualysCreds, domain: string): Promise<bo
 export const createAssetGroup = (creds: QualysCreds, fields: Record<string, string>, author: string): Promise<{ message: string }> =>
   writeQualys(creds, ASSET_GROUP_PATH, fields, author);
 
-export const addDomain = (creds: QualysCreds, domain: string, author: string): Promise<{ message: string }> =>
-  writeQualys(creds, DOMAIN_ADD_PATH, { action: 'add', domain }, author);
+// fields には action=add / domain / netblock(任意) を渡す（組立は provision.ts）。
+export const addDomain = (creds: QualysCreds, fields: Record<string, string>, author: string): Promise<{ message: string }> =>
+  writeQualys(creds, DOMAIN_ADD_PATH, fields, author);
 
 // ──────────────────────────────────────────────────────────────────────────
 // ユーザ登録（/msp/user.php?action=add）。言語/SAMLはAPI非対応のため扱わない。

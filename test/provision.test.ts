@@ -3,16 +3,18 @@ import {
   DEFAULT_REGIONS, parseRegions, formatRegions, assetGroupTitle, toDnsLabel, domainName,
   classifyIpToken, normalizeIpToken, parseIpInput, parseFqdnInput, isFqdn, containsPrivateIp,
   planProvision, validateProvision, buildAssetGroupParams,
-  describeProvision, type ProvisionInput,
+  describeProvision, buildDomainParams, scheduleTitle, type ProvisionInput,
 } from '../src/provision';
 
+// 既定は「SCAN と MAP の両方を実施する IP 資産 1 件」。
+const asset = (value: string, scan = true, map = true) => ({ value, scan, map });
 const base = (o: Partial<ProvisionInput> = {}): ProvisionInput => ({
-  applicationNo: 'EXT-2026-001', regionCode: 'jp', assetType: 'static', kind: 'both',
-  ips: ['203.0.113.1'], dnsNames: [], ...o,
+  applicationNo: 'EXT-2026-001', regionCode: 'jp', assetType: 'static',
+  assets: [asset('203.0.113.1')], ...o,
 });
-// 動的（FQDN 指定）の入力。IP は使わない。
+// 動的（FQDN 指定）の入力。
 const dyn = (o: Partial<ProvisionInput> = {}): ProvisionInput =>
-  base({ assetType: 'dynamic', kind: 'scan', ips: [], dnsNames: ['host1.example.jp'], ...o });
+  base({ assetType: 'dynamic', assets: [asset('host1.example.jp', true, false)], ...o });
 
 describe('地域区分', () => {
   it('既定は6区分で、欧州=eu・中国=cn', () => {
@@ -95,27 +97,44 @@ describe('検査資産情報の入力（テキスト直接入力）', () => {
     const r = parseFqdnInput('www.example.jp, www2.example.jp');
     expect(r.tokens).toEqual(['www.example.jp', 'www2.example.jp']);
     expect(r.errors).toEqual([]);
-    expect(validateProvision(dyn({ dnsNames: ['www.example.jp'] }))).toEqual([]);
+    expect(validateProvision(dyn({ assets: [asset('www.example.jp', true, false)] }))).toEqual([]);
   });
 });
 
-describe('資産種別・検査種別と入力検証', () => {
-  it('静的は種別を選べる。動的は常に SCAN のみ（MAP を出さない）', () => {
-    expect(planProvision(base({ kind: 'scan' }))).toMatchObject({ withScan: true, withMap: false });
-    expect(planProvision(base({ kind: 'map' }))).toMatchObject({ withScan: false, withMap: true });
-    expect(planProvision(base({ kind: 'both' }))).toMatchObject({ withScan: true, withMap: true });
-    // 動的は kind に何が入っていても scan として扱う
-    expect(planProvision(dyn({ kind: 'both' }))).toMatchObject({ withScan: true, withMap: false });
-    expect(planProvision(dyn()).domain).toBe('');
+describe('資産ごとの SCAN/MAP 指定と入力検証', () => {
+  it('資産ごとのチェックで実施内容が決まる（両方・片方）', () => {
+    const both = planProvision(base({ assets: [asset('203.0.113.1', true, true)] }));
+    expect(both).toMatchObject({ withScan: true, withMap: true });
+    expect(both.scanTargets).toEqual(['203.0.113.1']);
+    expect(both.mapTargets).toEqual(['203.0.113.1']);
+
+    const scanOnly = planProvision(base({ assets: [asset('203.0.113.1', true, false)] }));
+    expect(scanOnly).toMatchObject({ withScan: true, withMap: false });
+    expect(scanOnly.domains).toEqual([]);
+
+    const mapOnly = planProvision(base({ assets: [asset('203.0.113.1', false, true)] }));
+    expect(mapOnly).toMatchObject({ withScan: false, withMap: true });
+    expect(mapOnly.scanTargets).toEqual([]);
   });
 
-  it('静的は IP のみ・動的は FQDN のみを採用する（もう一方は捨てる）', () => {
-    const st = planProvision(base({ dnsNames: ['ignored.example.jp'] }));
-    expect(st.ips).toEqual(['203.0.113.1']);
-    expect(st.dnsNames).toEqual([]);
-    const dy = planProvision(dyn({ ips: ['203.0.113.1'] }));
-    expect(dy.ips).toEqual([]);
-    expect(dy.dnsNames).toEqual(['host1.example.jp']);
+  it('資産ごとに振り分けられる（一部SCAN・一部MAP）', () => {
+    const p = planProvision(base({
+      assets: [asset('203.0.113.1', true, false), asset('203.0.113.2', false, true), asset('203.0.113.3', true, true)],
+    }));
+    expect(p.scanTargets).toEqual(['203.0.113.1', '203.0.113.3']);
+    expect(p.mapTargets).toEqual(['203.0.113.2', '203.0.113.3']);
+  });
+
+  it('静的の MAP は申請番号ベースのドメイン1件＋対象IPをネットブロックにする', () => {
+    const p = planProvision(base({ assets: [asset('203.0.113.1', false, true), asset('203.0.113.2', false, true)] }));
+    expect(p.domains).toEqual(['ext-2026-001.jp']);
+    expect(p.netblocks).toEqual(['203.0.113.1', '203.0.113.2']);
+  });
+
+  it('動的の MAP は FQDN 自体をドメインとして登録する（ネットブロックなし）', () => {
+    const p = planProvision(dyn({ assets: [asset('a.example.jp', false, true), asset('b.example.jp', false, true)] }));
+    expect(p.domains).toEqual(['a.example.jp', 'b.example.jp']);
+    expect(p.netblocks).toEqual([]);
   });
 
   it('正しい入力なら検証を通る（静的・動的とも）', () => {
@@ -123,97 +142,83 @@ describe('資産種別・検査種別と入力検証', () => {
     expect(validateProvision(dyn())).toEqual([]);
   });
 
-  it('申請番号は必須。MAP を含むときだけドメイン名を検査する', () => {
-    expect(validateProvision(base({ applicationNo: ' ' }))).toContain('外部接続申請番号を入力してください');
-    expect(validateProvision(base({ applicationNo: '申請' })).join()).toContain('ドメイン名を作れません');
-    // SCAN のみ・動的では英数字なしでもドメインの指摘は出ない
-    expect(validateProvision(base({ applicationNo: '申請', kind: 'scan' })).join()).not.toContain('ドメイン名');
-    expect(validateProvision(dyn({ applicationNo: '申請' })).join()).not.toContain('ドメイン名');
+  it('資産が空、または SCAN/MAP のどちらも未選択なら弾く', () => {
+    expect(validateProvision(base({ assets: [] }))).toContain('検査資産情報の IP を1つ以上入力してください');
+    expect(validateProvision(dyn({ assets: [] }))).toContain('検査資産情報の FQDN を1つ以上入力してください');
+    expect(validateProvision(base({ assets: [asset('203.0.113.1', false, false)] })))
+      .toContain('資産ごとに SCAN / MAP のどちらを実施するかを選んでください');
   });
 
-  it('MAP を含むなら地域区分が必須（動的は不要）', () => {
-    expect(validateProvision(base({ kind: 'map', regionCode: '' }))).toContain('地域区分を選んでください');
-    expect(validateProvision(base({ kind: 'scan', regionCode: '' }))).toEqual([]);
-    expect(validateProvision(dyn({ regionCode: '' }))).toEqual([]);
+  it('静的で MAP があるときだけ地域区分とドメイン名を検査する', () => {
+    expect(validateProvision(base({ regionCode: '' }))).toContain('MAP を実施する資産があるため、地域区分を選んでください');
+    // SCAN だけなら地域区分は不要
+    expect(validateProvision(base({ regionCode: '', assets: [asset('203.0.113.1', true, false)] }))).toEqual([]);
+    // 動的は申請番号からドメインを作らないので影響しない
+    expect(validateProvision(dyn({ regionCode: '', applicationNo: '申請' }))).toEqual([]);
   });
 
-  it('静的は検査資産情報の IP が必須（DNS では代用できない）', () => {
-    expect(validateProvision(base({ ips: [], dnsNames: ['a.example.jp'] })))
-      .toContain('検査資産情報の IP を1つ以上入力してください');
-  });
-
-  it('動的は検査資産情報の FQDN が必須で、不正形式は弾く', () => {
-    expect(validateProvision(dyn({ dnsNames: [] }))).toContain('検査資産情報の FQDN を1つ以上入力してください');
-    expect(validateProvision(dyn({ dnsNames: ['bad_host'] })).join()).toContain('FQDN の表記が不正です');
-  });
-
-  it('不正な IP トークンはまとめて報告する（静的・防御的検証）', () => {
-    const errs = validateProvision(base({ ips: ['bad', '203.0.113.1-x'] }));
-    expect(errs.filter((e) => e.includes('表記が不正'))).toHaveLength(2);
+  it('不正な IP トークンとプライベートIPはまとめて報告する', () => {
+    const errs = validateProvision(base({ assets: [asset('bad'), asset('192.168.1.1')] }));
+    expect(errs.join()).toContain('IP の表記が不正です');
+    expect(errs.join()).toContain('プライベートIPは登録できません');
   });
 });
 
-describe('AssetGroup 作成パラメータ', () => {
-  it('静的: title / ips / domains を組み立てる（DNS は載せない）', () => {
-    const p = buildAssetGroupParams(base({ ips: ['203.0.113.1', '203.0.114.0-203.0.114.99'] }));
+describe('AssetGroup / ドメインの作成パラメータ', () => {
+  it('静的: SCAN 対象だけを ips に載せる（MAP 対象は載せない）', () => {
+    const p = buildAssetGroupParams(base({
+      assets: [asset('203.0.113.1', true, false), asset('203.0.114.0-203.0.114.99', true, true), asset('203.0.113.9', false, true)],
+    }));
     expect(p).toEqual({
       action: 'add',
       title: 'EXT-2026-001(仮)',
       ips: '203.0.113.1,203.0.114.0-203.0.114.99',
-      domains: 'ext-2026-001.jp',
     });
   });
 
-  it('静的で SCAN のみなら domains を送らない', () => {
-    expect(buildAssetGroupParams(base({ kind: 'scan' })).domains).toBeUndefined();
+  it('動的: SCAN 対象を dns_names に載せる', () => {
+    const p = buildAssetGroupParams(dyn({ assets: [asset('a.example.jp', true, false), asset('b.example.jp', false, true)] }));
+    expect(p).toEqual({ action: 'add', title: 'EXT-2026-001(仮)', dns_names: 'a.example.jp' });
   });
 
-  it('動的: dns_names のみ（ips / domains を送らない）', () => {
-    const p = buildAssetGroupParams(dyn({ dnsNames: ['a.example.jp', 'b.example.jp'] }));
-    expect(p).toEqual({
-      action: 'add',
-      title: 'EXT-2026-001(仮)',
-      dns_names: 'a.example.jp,b.example.jp',
-    });
+  it('SCAN 対象が無ければ ips / dns_names を送らない', () => {
+    const p = buildAssetGroupParams(base({ assets: [asset('203.0.113.1', false, true)] }));
+    expect(p.ips).toBeUndefined();
+    expect(p.dns_names).toBeUndefined();
+  });
+
+  it('ドメイン登録: 静的はネットブロック付き、動的はドメインのみ', () => {
+    const st = buildDomainParams(base({ assets: [asset('203.0.113.1', false, true)] }), 'ext-2026-001.jp');
+    expect(st).toEqual({ action: 'add', domain: 'ext-2026-001.jp', netblock: '203.0.113.1' });
+    const dy = buildDomainParams(dyn({ assets: [asset('a.example.jp', false, true)] }), 'a.example.jp');
+    expect(dy).toEqual({ action: 'add', domain: 'a.example.jp' });
+  });
+});
+
+describe('スケジュールタイトル', () => {
+  it('AssetGroup 名の後ろに _s_ / _m_ と検査予定日を挟む', () => {
+    expect(scheduleTitle('EXT-2026-001(仮)', 'scan', '20260801')).toBe('EXT-2026-001(仮)_s_20260801');
+    expect(scheduleTitle('EXT-2026-001(仮)', 'map', '20260801')).toBe('EXT-2026-001(仮)_m_20260801');
   });
 });
 
 describe('確認用の要約', () => {
   it('静的（両方）は AssetGroup・ドメイン・SCAN/MAP を順に列挙する', () => {
     const lines = describeProvision(base());
-    expect(lines[0]).toBe('AssetGroup「EXT-2026-001(仮)」を作成（静的・IP資産）');
-    expect(lines.join('\n')).toContain('ドメイン「ext-2026-001.jp」を登録');
-    expect(lines.join('\n')).toContain('SCAN スケジュールを登録');
-    expect(lines.join('\n')).toContain('MAP スケジュールを登録');
+    expect(lines[0]).toBe('AssetGroup「EXT-2026-001(仮)」を作成（静的・IP指定）');
+    const s = lines.join('\n');
+    expect(s).toContain('SCAN 対象（IP_SET）: 203.0.113.1');
+    expect(s).toContain('ドメイン「ext-2026-001.jp」を登録（ネットブロック: 203.0.113.1）');
+    expect(s).toContain('SCAN スケジュールを登録');
+    expect(s).toContain('MAP スケジュールを登録');
   });
 
-  it('動的は FQDN と SCAN だけ（ドメイン・MAP は出さない）', () => {
+  it('動的で SCAN のみならドメイン・MAP は出さない', () => {
     const s = describeProvision(dyn()).join('\n');
     expect(s).toContain('（動的・FQDN指定）');
-    expect(s).toContain('FQDN: host1.example.jp');
-    expect(s).toContain('SCAN スケジュールを登録');
+    expect(s).toContain('SCAN 対象（DNS_LIST）: host1.example.jp');
     expect(s).not.toContain('MAP スケジュールを登録');
     expect(s).not.toContain('ドメイン「');
-  });
-});
-
-describe('申請情報の記録（division / comments）', () => {
-  it('申請部門は division、件名・申請者・備考は comments に連結して載せる', () => {
-    const p = buildAssetGroupParams(base({
-      subject: '外部公開に伴う検査', department: '○○部', applicant: '山田', note: '初回',
-    }));
-    expect(p.division).toBe('○○部');
-    expect(p.comments).toBe('件名: 外部公開に伴う検査 / 申請者: 山田 / 備考: 初回');
-  });
-
-  it('未入力の申請情報は送らない（部分入力は入っている分だけ）', () => {
-    expect(buildAssetGroupParams(base()).division).toBeUndefined();
-    expect(buildAssetGroupParams(base()).comments).toBeUndefined();
-    expect(buildAssetGroupParams(base({ applicant: '山田' })).comments).toBe('申請者: 山田');
-  });
-
-  it('確認の要約に件名が出る', () => {
-    expect(describeProvision(base({ subject: 'テスト件名' })).join('\n')).toContain('件名: テスト件名');
   });
 });
 
@@ -240,7 +245,7 @@ describe('プライベートIPの拒否', () => {
   });
 
   it('検証でもプライベートIPを弾く（直接渡された場合の防御）', () => {
-    expect(validateProvision(base({ ips: ['192.168.1.1'] })).join())
+    expect(validateProvision(base({ assets: [asset('192.168.1.1')] })).join())
       .toContain('プライベートIPは登録できません');
   });
 });

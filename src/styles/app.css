@@ -475,3 +475,13 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 /* オプション設定のトグル（チェックボックス式） */
 .qam-prov-opttoggle { display: inline-flex; align-items: center; gap: var(--s-2);
   font-size: var(--fs-sm); color: var(--ink-3); cursor: pointer; user-select: none; }
+/* 検査資産情報: 行ごとの SCAN/MAP チェックと全選択ヘッダ */
+.qam-tok-head { display: flex; align-items: center; gap: var(--s-3); margin-top: var(--s-2);
+  padding: var(--s-1) var(--s-2); font-size: var(--fs-xs); color: var(--ink-4); }
+.qam-tok-headlbl { margin-right: auto; }
+.qam-tok-ck { display: inline-flex; align-items: center; gap: var(--s-1);
+  font-size: var(--fs-xs); color: var(--ink-3); cursor: pointer; user-select: none; }
+.qam-tok-item .qam-spacer { flex: 1; }
+/* 検査予定日＋時刻を1行に */
+.qam-sched-dt { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.qam-sched-dt .in[type="date"] { width: auto; flex: 0 1 170px; }
