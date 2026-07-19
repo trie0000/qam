@@ -723,16 +723,30 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   }));
 }
 
-// 簡易検査ビュー: 検査登録フォームをインラインで置く（Qualys への書き込み）。
-// AssetGroup 作成 → ドメイン登録 → スケジュール登録 の順に進める。
+// 簡易検査ビュー: 「検査を登録」で登録モーダルを開く（ビュー表示時にも自動で開く）。
+// 登録モーダルは入力量が多いので背景クリックでは閉じない（キャンセル/×/Esc のみ）。
 async function renderQuickInspect(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
-  const cfg = await getConfig();
   count.textContent = 'AssetGroup とドメインを払い出して検査を登録';
   clear(host);
-  const wrap = el('div', { class: 'qam-quick' });
+  const openBtn = el('button', { class: 'btn btn--primary', html: `${icon('send', 16)}<span>検査を登録</span>` });
+  openBtn.addEventListener('click', () => { openQuickInspectModal().catch((e) => toast(`検査登録でエラー: ${(e as Error).message}`, 'error')); });
+  host.append(el('div', { class: 'qam-quick' }, [
+    el('p', { class: 'qam-insp-sec-note' }, [
+      '外部接続申請にもとづき、AssetGroup／ドメインの払い出しと検査スケジュールの登録（または管理表への記録）を行います。',
+    ]),
+    el('div', { class: 'qam-quick-actions' }, [openBtn]),
+  ]));
+  await openQuickInspectModal().catch(() => undefined); // 表示と同時に開く（閉じてもボタンから再開できる）
+}
+
+async function openQuickInspectModal(): Promise<void> {
+  await ensureAuthor(); // 申請者の既定値・記録に使うので先に確定させる
+  const cfg = await getConfig();
+  const author = localStorage.getItem(LS.author) || '';
   const form = buildInspectionForm({
     today: dateOfStamp(stampNow()),
+    author,
     regions: parseRegions(cfg.regions || ''),
     defaults: {
       scanOptionProfile: cfg.scanOptionProfile || '',
@@ -742,8 +756,6 @@ async function renderQuickInspect(count: HTMLElement, host: HTMLElement): Promis
     },
     confirm: (title, lines) => confirmModal(title, lines.join('\n'), '登録する'),
     submit: async (mode, p, scanInput, mapInput) => {
-      await ensureAuthor(); // 記録にも作業者を残すので先に確定させる
-      const author = localStorage.getItem(LS.author) || '';
       if (mode === 'ledger') return recordLedger(author, p, scanInput, mapInput);
       const creds = await resolveQualysCreds();
       if (!creds) throw new Error('Qualys の接続先/認証情報が未設定です');
@@ -751,13 +763,13 @@ async function renderQuickInspect(count: HTMLElement, host: HTMLElement): Promis
     },
     onDone: () => { refresh(); },
   });
-  const go = el('button', { class: 'btn btn--primary', html: `${icon('send', 16)}<span>内容を確認して登録</span>` });
-  go.addEventListener('click', () => {
-    go.setAttribute('disabled', 'true');
-    form.submit().finally(() => go.removeAttribute('disabled'));
+  openModal({
+    title: '検査の登録',
+    body: form.node,
+    primaryLabel: '内容を確認して登録',
+    dismissBackdrop: false, // 誤クリックで入力を失わせない
+    onPrimary: () => form.submit(),
   });
-  wrap.append(form.node, el('div', { class: 'qam-quick-actions' }, [go]));
-  host.append(wrap);
 }
 
 // 既に同じものがある場合の選択肢。破壊的な既定を持たせず、必ず利用者に選ばせる。
@@ -806,6 +818,7 @@ async function recordLedger(
     await appendManualInspection(backend, {
       ts, author, kind: 'scan', title: scanInput.title,
       nextLaunch: at(scanInput), assetGroups: [plan.title], domains: [],
+      subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
     });
     steps.push(`SCAN 予定を管理表に記録（${plan.title}）`);
   }
@@ -813,6 +826,7 @@ async function recordLedger(
     await appendManualInspection(backend, {
       ts, author, kind: 'map', title: mapInput.title,
       nextLaunch: at(mapInput), assetGroups: [plan.title], domains: [plan.domain],
+      subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
     });
     steps.push(`MAP 予定を管理表に記録（${plan.domain}）`);
   }
@@ -1550,6 +1564,10 @@ function openHelp(): void {
           <b>登録モード</b>で「管理表のみ更新」を選ぶと、Qualys へは登録せずに予定だけを管理表へ記録します
           （検査一覧に状態「管理表のみ」で表示され、四半期判定にも予定として乗ります）。
           スキャナー・オプションプロファイルは「オプション設定」（折りたたみ）にあります。
+          登録モーダルは<b>背景クリックでは閉じません</b>（キャンセル／×／Esc のみ）。
+          入力は「申請情報（申請番号・件名・申請部門・地域区分・申請者）」「検査対象」「検査スケジュール」
+          「その他（備考）」のセクション構成で、申請部門は AssetGroup の Division、
+          件名・申請者・備考は Comments に記録されます。
           <b>同名が既にある場合は「既存を使う／別名で作る／中止」を確認</b>します。
           登録内容は操作履歴に残り、<b>実行者・発行したAPI・パラメータは api-audit.log にも記録</b>されます。</li>
       <li><b>検査一覧</b>：取得した<b>実行履歴</b>と<b>予約済み</b>を1つの表で確認できます。「区分」列で

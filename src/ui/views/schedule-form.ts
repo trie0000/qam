@@ -26,12 +26,16 @@ export type RegisterMode = 'qualys' | 'ledger';
 
 export interface InspectionFormOpts {
   today: string;
+  author: string;          // 申請者の既定値（記入者名）
   defaults: ScheduleDefaults;
   regions: RegionOption[];
   confirm: (title: string, lines: string[]) => Promise<boolean>;
   submit: (mode: RegisterMode, p: ProvisionInput, scan: ScheduleInput, map: ScheduleInput) => Promise<ProvisionResult>;
   onDone: () => void;
 }
+
+// セクション見出し（申請情報 / 検査対象 / 検査スケジュール / その他）。
+const section = (title: string): HTMLElement => el('div', { class: 'qam-form-sec' }, [title]);
 
 const field = (label: string, node: Node, note = ''): HTMLElement =>
   el('div', { class: 'qam-field' }, [
@@ -98,6 +102,10 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     el('option', { value: 'dynamic' }, ['動的（FQDN 指定）']),
   );
   const appNo = el('input', { class: 'in', placeholder: '例: EXT-2026-001' }) as HTMLInputElement;
+  const subject = el('input', { class: 'in', placeholder: '例: ○○システム 外部公開に伴う検査' }) as HTMLInputElement;
+  const department = el('input', { class: 'in', placeholder: '例: ○○部' }) as HTMLInputElement;
+  const applicant = el('input', { class: 'in', value: o.author }) as HTMLInputElement;
+  const note = el('textarea', { class: 'in qam-prov-note', rows: '3', placeholder: '補足があれば記入' }) as HTMLTextAreaElement;
   const region = el('select', { class: 'in' }) as HTMLSelectElement;
   regions.forEach((r) => region.append(el('option', { value: r.code }, [`${r.label}（${r.code}）`])));
   const kind = el('select', { class: 'in' }) as HTMLSelectElement;
@@ -163,6 +171,10 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     kind: kind.value as InspectKind,
     ips: ipRows.map((r) => r.read()),
     dnsNames: fqdnRows.map((r) => r.read()),
+    subject: subject.value,
+    department: department.value,
+    applicant: applicant.value,
+    note: note.value,
   });
 
   // スケジュールタイトルの既定値: AssetGroup 名 + "_" + 検査予定日(YYYYMMDD)。
@@ -217,16 +229,29 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
       'AssetGroup（とドメイン）を作成し、続けて検査スケジュールを登録します。検査は検査予定日に1回だけ実行されます。作成後の変更・削除は Qualys の画面で行ってください。',
     ]),
     field('登録モード', regMode, '「管理表のみ更新」は Qualys へ一切登録せず、QAM の検査一覧・四半期判定に予定として記録します。'),
-    field('資産種別', assetType, '静的=IP 資産（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は登録しません）。'),
+
+    section('申請情報'),
     field('外部接続申請番号', appNo, 'AssetGroup 名は「申請番号(仮)」、ドメイン名は「小文字の申請番号.地域コード」になります。'),
-    rowKind,
+    field('件名', subject),
+    field('申請部門', department, 'AssetGroup の Division に記録されます。'),
     rowRegion,
+    field('申請者', applicant, '既定は記入者名です。'),
+
+    section('検査対象'),
+    field('資産種別', assetType, '静的=IP 資産（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は登録しません）。'),
+    rowKind,
     rowIp,
     rowFqdn,
     field('作成される内容', preview),
-    field('スケジュールのタイトル', title, '既定は「AssetGroup名_検査予定日(YYYYMMDD)」。書き換えるとその値を使います。'),
+
+    section('検査スケジュール'),
     field('検査予定日', startDate, 'この日に1回だけ実行されます（繰り返しはありません）。'),
     field('開始時刻（時／分）', el('div', { class: 'qam-sched-time' }, [startHour, startMinute])),
+    field('スケジュールのタイトル', title, '既定は「AssetGroup名_検査予定日(YYYYMMDD)」。書き換えるとその値を使います。'),
+
+    section('その他'),
+    field('備考欄', note, '件名・申請者・備考は AssetGroup の Comments に記録されます。'),
+
     optSection,
     rowState,
     err,

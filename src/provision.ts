@@ -107,6 +107,11 @@ export interface ProvisionInput {
   kind: InspectKind;       // 静的のとき: scan のみ / map のみ / 両方。動的は scan 固定
   ips: IpEntry[];          // 静的の検査資産情報（動的では使わない）
   dnsNames: string[];      // 動的の検査資産情報=FQDN（静的では使わない）
+  // 申請情報（任意）。Qualys へは AssetGroup の division / comments として記録する。
+  subject?: string;        // 件名
+  department?: string;     // 申請部門
+  applicant?: string;      // 申請者（既定は記入者名）
+  note?: string;           // 備考（複数行）
 }
 
 // 動的は MAP を実施できない（IP ネットブロックを持たない）ため、種別は常に scan として扱う。
@@ -178,6 +183,15 @@ export function buildAssetGroupParams(i: ProvisionInput): Record<string, string>
   if (p.ips.length) params.ips = p.ips.join(',');
   if (p.dnsNames.length) params.dns_names = p.dnsNames.join(',');
   if (p.withMap && p.domain) params.domains = p.domain;
+  // 申請情報を Qualys 側にも残す（division=申請部門 / comments=件名・申請者・備考の連結）。
+  const dep = (i.department ?? '').trim();
+  if (dep) params.division = dep;
+  const comments = [
+    (i.subject ?? '').trim() && `件名: ${(i.subject ?? '').trim()}`,
+    (i.applicant ?? '').trim() && `申請者: ${(i.applicant ?? '').trim()}`,
+    (i.note ?? '').trim() && `備考: ${(i.note ?? '').trim()}`,
+  ].filter(Boolean).join(' / ');
+  if (comments) params.comments = comments;
   return params;
 }
 
@@ -185,6 +199,7 @@ export function buildAssetGroupParams(i: ProvisionInput): Record<string, string>
 export function describeProvision(i: ProvisionInput): string[] {
   const p = planProvision(i);
   const lines = [`AssetGroup「${p.title}」を作成（${i.assetType === 'dynamic' ? '動的・FQDN指定' : '静的・IP資産'}）`];
+  if ((i.subject ?? '').trim()) lines.push(`　件名: ${(i.subject ?? '').trim()}`);
   if (p.ips.length) lines.push(`　IP: ${p.ips.join(', ')}`);
   if (p.dnsNames.length) lines.push(`　FQDN: ${p.dnsNames.join(', ')}`);
   if (p.withMap) lines.push(`ドメイン「${p.domain}」を登録`);

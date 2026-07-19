@@ -176,6 +176,8 @@ export interface QamManualInspection {
   nextLaunch: string;      // 検査予定日時(ISO・ローカル)
   assetGroups: string[];   // AssetGroup タイトル
   domains: string[];       // MAP 対象ドメイン（scan は空）
+  // 申請情報（任意・記録用）。
+  subject?: string; department?: string; applicant?: string; note?: string;
 }
 const MANUAL_INSPECTION = 'inspection/manual.jsonl';
 export const appendManualInspection = (b: FileBackend, m: QamManualInspection): Promise<void> =>

@@ -169,3 +169,23 @@ describe('確認用の要約', () => {
     expect(s).not.toContain('ドメイン「');
   });
 });
+
+describe('申請情報の記録（division / comments）', () => {
+  it('申請部門は division、件名・申請者・備考は comments に連結して載せる', () => {
+    const p = buildAssetGroupParams(base({
+      subject: '外部公開に伴う検査', department: '○○部', applicant: '山田', note: '初回',
+    }));
+    expect(p.division).toBe('○○部');
+    expect(p.comments).toBe('件名: 外部公開に伴う検査 / 申請者: 山田 / 備考: 初回');
+  });
+
+  it('未入力の申請情報は送らない（部分入力は入っている分だけ）', () => {
+    expect(buildAssetGroupParams(base()).division).toBeUndefined();
+    expect(buildAssetGroupParams(base()).comments).toBeUndefined();
+    expect(buildAssetGroupParams(base({ applicant: '山田' })).comments).toBe('申請者: 山田');
+  });
+
+  it('確認の要約に件名が出る', () => {
+    expect(describeProvision(base({ subject: 'テスト件名' })).join('\n')).toContain('件名: テスト件名');
+  });
+});

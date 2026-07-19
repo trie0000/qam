@@ -453,3 +453,7 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-prov-opt { margin-bottom: var(--s-5); }
 .qam-prov-optbody { margin-top: var(--s-4); padding: var(--s-4) var(--s-4) 0;
   border-left: 3px solid var(--line); }
+/* 簡易検査: フォームのセクション見出しと備考欄 */
+.qam-form-sec { font-size: var(--fs-md); font-weight: 600; margin: var(--s-6) 0 var(--s-4);
+  padding-top: var(--s-4); border-top: 1px solid var(--line); }
+.qam-prov-note { resize: vertical; min-height: 64px; }

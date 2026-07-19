@@ -9,7 +9,14 @@ export interface ModalOpts {
   primaryLabel?: string;
   onPrimary?: () => boolean | Promise<boolean>;
   onClose?: () => void;
+  // false にすると背景クリックでは閉じない（キャンセル/×/Esc のみ）。
+  // 入力量の多いフォームで誤クリック全損を防ぐ。既定 true（従来どおり）。
+  dismissBackdrop?: boolean;
 }
+
+// 開いているモーダルのスタック。Esc は最前面の 1 枚だけを閉じる
+// （確認モーダルの Esc で下のフォームまで一緒に閉じるのを防ぐ）。
+const stack: symbol[] = [];
 
 export function openModal(opts: ModalOpts): { close: () => void } {
   const backdrop = el('div', { class: 'qam-backdrop' });
@@ -35,15 +42,25 @@ export function openModal(opts: ModalOpts): { close: () => void } {
     box.append(el('div', { class: 'qam-modal-foot' }, [cancel, primaryBtn]));
   }
 
-  let downOnBackdrop = false;
-  backdrop.addEventListener('mousedown', (e) => { downOnBackdrop = e.target === backdrop; });
-  backdrop.addEventListener('mouseup', (e) => { if (downOnBackdrop && e.target === backdrop) close(); });
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+  const token = Symbol('modal');
+  stack.push(token);
+  if (opts.dismissBackdrop !== false) {
+    let downOnBackdrop = false;
+    backdrop.addEventListener('mousedown', (e) => { downOnBackdrop = e.target === backdrop; });
+    backdrop.addEventListener('mouseup', (e) => { if (downOnBackdrop && e.target === backdrop) close(); });
+  }
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && stack[stack.length - 1] === token) close();
+  };
   document.addEventListener('keydown', onKey);
   closeBtn.addEventListener('click', () => close());
 
   let closed = false;
-  function close(): void { if (closed) return; closed = true; backdrop.remove(); document.removeEventListener('keydown', onKey); opts.onClose?.(); }
+  function close(): void {
+    if (closed) return; closed = true;
+    const i = stack.indexOf(token); if (i >= 0) stack.splice(i, 1);
+    backdrop.remove(); document.removeEventListener('keydown', onKey); opts.onClose?.();
+  }
 
   backdrop.append(box);
   document.body.append(backdrop);
