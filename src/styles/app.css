@@ -315,6 +315,8 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
   display: flex; align-items: center; justify-content: center; z-index: var(--z-modal); }
 .qam-modal { background: var(--paper); border-radius: var(--r-4); box-shadow: var(--shadow-modal);
   width: min(680px, calc(100vw - 80px)); max-height: calc(100vh - 80px); display: flex; flex-direction: column; overflow: hidden; }
+/* 入力フォーム用の広いモーダル（2〜3段組が窮屈にならない幅） */
+.qam-modal--wide { width: min(880px, calc(100vw - 80px)); }
 .qam-modal-head { display: flex; align-items: center; padding: var(--s-6) var(--s-7); border-bottom: 1px solid var(--line); }
 .qam-modal-head .qam-modal-title { font-size: var(--fs-lg); font-weight: 600; margin-right: auto; }
 .qam-modal-body { padding: var(--s-7); overflow: auto; }
@@ -481,9 +483,10 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-prov-opttoggle { display: inline-flex; align-items: center; gap: var(--s-2);
   font-size: var(--fs-sm); color: var(--ink-3); cursor: pointer; user-select: none; }
 /* 検査資産情報: 行ごとの SCAN/MAP チェックと全選択ヘッダ */
-.qam-tok-head { display: flex; align-items: center; gap: var(--s-3); margin-top: var(--s-2);
+.qam-tok-head { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-2);
   padding: var(--s-1) var(--s-2); font-size: var(--fs-xs); color: var(--ink-4); }
-.qam-tok-headlbl { margin-right: auto; }
+/* 行のチェック位置に合わせて右寄せ（左端に「すべて」だけ浮かないように） */
+.qam-tok-headlbl { margin-left: auto; margin-right: var(--s-2); }
 .qam-tok-ck { display: inline-flex; align-items: center; gap: var(--s-1);
   font-size: var(--fs-xs); color: var(--ink-3); cursor: pointer; user-select: none; }
 /* 対象外（動的資産の MAP）。押せないことを見た目でも示す */

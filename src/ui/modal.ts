@@ -12,6 +12,8 @@ export interface ModalOpts {
   // false にすると背景クリックでは閉じない（キャンセル/×/Esc のみ）。
   // 入力量の多いフォームで誤クリック全損を防ぐ。既定 true（従来どおり）。
   dismissBackdrop?: boolean;
+  // 2〜3段組を持つ入力フォーム用に横幅を広げる（確認・警告の短いモーダルは既定のまま）。
+  wide?: boolean;
 }
 
 // 開いているモーダルのスタック。Esc は最前面の 1 枚だけを閉じる
@@ -20,7 +22,7 @@ const stack: symbol[] = [];
 
 export function openModal(opts: ModalOpts): { close: () => void } {
   const backdrop = el('div', { class: 'qam-backdrop' });
-  const box = el('div', { class: 'qam-modal', role: 'dialog', 'aria-modal': 'true' });
+  const box = el('div', { class: `qam-modal${opts.wide ? ' qam-modal--wide' : ''}`, role: 'dialog', 'aria-modal': 'true' });
 
   const closeBtn = el('button', { class: 'btn btn--icon', 'aria-label': '閉じる', html: icon('x', 16) });
   const head = el('div', { class: 'qam-modal-head' }, [

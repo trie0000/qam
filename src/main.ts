@@ -818,6 +818,7 @@ async function openQuickInspectModal(initial?: ProvisionInput): Promise<void> {
     body: form.node,
     primaryLabel: '内容を確認して登録',
     dismissBackdrop: false, // 誤クリックで入力を失わせない
+    wide: true,             // 2〜3段組の入力があるので横幅を広く取る
     onPrimary: () => form.submit(),
   });
 }
