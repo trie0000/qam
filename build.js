@@ -41,3 +41,22 @@ esbuild.buildSync({
 });
 fs.writeFileSync('dist/version.txt', BUILD_ID);
 console.log('[qam] built dist/qam.bundle.js  version=' + BUILD_ID + '  built=' + BUILD_TIME);
+
+// PowerShell 5.1 は BOM 無しの .ps1 を ANSI(CP932) として読むため、日本語のコメントや
+// 文字列が壊れ、構文エラーにもなる。ビルド時に見つけて落とす（配布してから気づくと痛い）。
+{
+  const { readdirSync, readFileSync, statSync } = require('fs');
+  const { join } = require('path');
+  const walk = (dir) => readdirSync(dir).flatMap((n) => {
+    if (n === 'node_modules' || n === 'dist' || n === '.git') return [];
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? walk(p) : [p];
+  });
+  const bad = walk(__dirname).filter((p) => p.endsWith('.ps1'))
+    .filter((p) => { const b = readFileSync(p); return !(b[0] === 0xef && b[1] === 0xbb && b[2] === 0xbf); });
+  if (bad.length) {
+    console.error('[qam] BOM の無い .ps1 があります（PowerShell 5.1 が文字化けします）:');
+    for (const p of bad) console.error('  ' + p);
+    process.exit(1);
+  }
+}

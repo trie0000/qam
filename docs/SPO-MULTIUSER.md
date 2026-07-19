@@ -313,8 +313,12 @@ src/api/
 - **CORS をテナント限定**: `QAM_SP_SITE_URL` のオリジンに限定（未設定時のみ `*`）
 - **アプリの自己配置**: 設定 → 開発者 →「アプリを SharePoint に配置」で、バンドルを
   `QamData/app/qam.bundle.js` へ置く。更新はここを差し替えるだけで全員に反映される
-- **CDP ランチャ**（`server/qam-launch.ps1` / `.bat`）: relay 起動 → 専用プロファイルの Edge 起動
+- **CDP ランチャ**（`server/qam-launch.ps1`）: relay 起動 → 専用プロファイルの Edge 起動
   → サインイン完了を待つ → CDP でローダを注入。失敗時は既定ブラウザで SP を開いて手動起動へ
+- **入口は `qam-start.bat` 1 つ**。`QAM_STORAGE_MODE` を見て、`local` なら従来どおりローカル画面、
+  `sp` ならランチャへ委譲する。**利用者にどちらを叩くか選ばせない**（既存のショートカットもそのまま使える）
+- **`.ps1` は BOM 付き UTF-8 で保存する**。PowerShell 5.1 は BOM 無しを ANSI(CP932) として読むため、
+  日本語のコメント・文字列が壊れ、構文エラーにもなる。`npm run build` で BOM の無い `.ps1` を検出して落とす
 
 **Windows 実機（PowerShell 5.1 / Win11 / Edge）での確認結果**
 
