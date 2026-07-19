@@ -21,6 +21,9 @@ import type { QamComment, QamEntity } from '../types';
 
 export interface AnnotationUpdate { id: string; field: string; value: string }
 
+/** 取込の排他クレーム。保持者と、いつから・いつまでを持つ。 */
+export interface IngestLock { owner: string; since: string; expiresAt: string }
+
 export interface RecordRepo {
   readComments(e?: QamEntity, id?: string): Promise<QamComment[]>;
   addComment(c: QamComment): Promise<void>;
@@ -40,6 +43,15 @@ export interface RecordRepo {
 
   readLicenses(): Promise<QamLicenseSample[]>;
   recordLicense(ts: string, ips: number, scanned: number): Promise<void>;
+
+  /**
+   * 取込の排他。取れたら null、他の人が取込中ならその保持者を返す。
+   * 全員が取り込む運用なので、防ぎたいのはデータ破損ではなく**重複取込**
+   * （同一イベントの二重記録・スナップショット二重作成・Qualys の二重取得）。
+   * ブラウザを閉じたまま放置されても詰まらないよう TTL で自動失効させる。
+   */
+  acquireIngestLock(owner: string, ttlMin: number): Promise<IngestLock | null>;
+  releaseIngestLock(owner: string): Promise<void>;
 }
 
 /** 従来どおりファイル(JSONL)に持つ実装。store.ts へそのまま委譲する（挙動は変えない）。 */
@@ -56,6 +68,10 @@ export const fileRepo = (b: FileBackend): RecordRepo => ({
   appendManualInspection: (m) => appendManualInspection(b, m),
   readLicenses: () => readLicenses(b),
   recordLicense: (ts, ips, scanned) => recordLicense(b, ts, ips, scanned),
+  // ファイル保管は 1 人用（共有フォルダでも原子的な排他手段が無い）ので素通しにする。
+  // 排他が要るのは複数人が同じ SPO を見る構成で、そちらはリスト側で実装する。
+  acquireIngestLock: async () => null,
+  releaseIngestLock: async () => undefined,
 });
 
 // 実体は起動時に決まる（既定はファイル）。呼び出し側は `repo` を使い続けられるよう委譲にする。
@@ -74,4 +90,6 @@ export const repo: RecordRepo = {
   appendManualInspection: (m) => impl.appendManualInspection(m),
   readLicenses: () => impl.readLicenses(),
   recordLicense: (ts, ips, scanned) => impl.recordLicense(ts, ips, scanned),
+  acquireIngestLock: (owner, ttlMin) => impl.acquireIngestLock(owner, ttlMin),
+  releaseIngestLock: (owner) => impl.releaseIngestLock(owner),
 };

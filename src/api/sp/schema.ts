@@ -14,6 +14,7 @@ export const LIST_ANNOTATIONS = 'QamAnnotations';
 export const LIST_OPS = 'QamOps';
 export const LIST_INSPECTIONS = 'QamInspections';
 export const LIST_LICENSES = 'QamLicenses';
+export const LIST_SETTINGS = 'QamSettings';
 
 // Title は SP の必須列。一覧で何の行か分かる値を入れておく（検索・並び替えにも効く）。
 export const commentFields: FieldSpec[] = [
@@ -63,13 +64,26 @@ export const licenseFields: FieldSpec[] = [
   { name: 'Scanned', type: 'Number' },
 ];
 
+// 共有設定と「排他クレーム行」を兼ねる。SettingKey の一意制約が、複数人が同時に取りに来ても
+// 1 人だけが行を作れる原子的な mutex になる（取込ロックの土台）。
+export const settingsFields: FieldSpec[] = [
+  { name: 'SettingKey', type: 'Text', indexed: true, enforceUnique: true },
+  { name: 'Value', type: 'Note' },
+  { name: 'Owner', type: 'Text' },
+  { name: 'ExpiresAt', type: 'Text' },
+];
+
 export const ALL_LISTS: { title: string; fields: FieldSpec[] }[] = [
   { title: LIST_COMMENTS, fields: commentFields },
   { title: LIST_ANNOTATIONS, fields: annotationFields },
   { title: LIST_OPS, fields: opFields },
   { title: LIST_INSPECTIONS, fields: inspectionFields },
   { title: LIST_LICENSES, fields: licenseFields },
+  { title: LIST_SETTINGS, fields: settingsFields },
 ];
+
+/** 取込の排他クレーム行のキー。 */
+export const LOCK_INGEST = 'lock:ingest';
 
 const str = (v: unknown): string => (v == null ? '' : String(v));
 const num = (v: unknown): number => { const n = Number(v); return Number.isFinite(n) ? n : 0; };

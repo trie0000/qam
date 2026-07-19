@@ -861,6 +861,32 @@ async function confirmResolve(rows: ResolveEntry[]): Promise<boolean> {
   });
 }
 
+// 取込は全員が行う運用なので、直前に誰かが取り込んでいたら確認する。
+// 防ぎたいのは破損ではなく重複取込（同一イベントの二重記録・Qualys の二重取得）。
+const RECENT_INGEST_MIN = 30;
+async function confirmRecentIngest(): Promise<boolean> {
+  try {
+    const last = (await repo.readOps())
+      .filter((o) => o.action === '取込' || o.action === '自動取込')
+      .sort((a, b) => b.ts.localeCompare(a.ts))[0];
+    if (!last) return true;
+    const min = (Date.now() - Date.parse(last.ts)) / 60_000;
+    if (!(min >= 0 && min < RECENT_INGEST_MIN)) return true;
+    return await confirmModal('最近の取込があります',
+      `最新の取込は ${fmtJst(last.ts)}（${last.author || '記入者名なし'}）です。`
+      + '誰かが取り込めば全員に反映されるので、通常は画面の更新だけで足ります。取り込み直しますか？', '取り込む');
+  } catch { return true; } // 判定できないことを理由に取込を止めない
+}
+
+// 取込の排他。取れなければ保持者を知らせて false。ファイル保管では常に取れる（1人用）。
+const INGEST_LOCK_MIN = 15;
+async function claimIngest(author: string): Promise<boolean> {
+  const held = await repo.acquireIngestLock(author, INGEST_LOCK_MIN);
+  if (!held) return true;
+  toast(`${held.owner || '他の利用者'} が取込中です（${fmtJst(held.since)} 開始）。完了後に画面を更新してください`, 'error');
+  return false;
+}
+
 // 事前チェック用の取り込み済みデータ（最新スナップショット）。
 // 未取込のエンティティは載せない（載せないと「判定不可」表示になる）。
 async function loadRegistry(): Promise<AssetRegistry> {
@@ -1347,6 +1373,8 @@ function openIngest(): void {
     go.addEventListener('click', async () => {
       await ensureAuthor(); // 取込（更新作業）の直前に記入者名が未設定なら促す
       go.setAttribute('disabled', 'true'); sel.setAttribute('disabled', 'true');
+      const ingestOwner = localStorage.getItem(LS.author) || '';
+      let locked = false;
       try {
         const cfg = await getConfig();
         // アカウント・パスワードは個人設定(ブラウザ保持)。旧 env 設定があれば後方互換でフォールバック。
@@ -1371,6 +1399,9 @@ function openIngest(): void {
           if (!ok) { setProg('取込を中止しました', false); toast('取込を中止しました', 'info'); return; }
           dup.decided = true; dup.proceed = true; // 確認済み → 各 commit では再確認しない
         }
+        if (!(await confirmRecentIngest())) { setProg('取込を中止しました', false); return; }
+        if (!(await claimIngest(ingestOwner))) { setProg('他の利用者が取込中です', false); return; }
+        locked = true;
         // 取得は Basic 認証のみ（セッションCookieは環境により 401 で拒否されるため使わない）。
         setRelayBusy(true); // 取得中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
         // host を取り込むなら IPs in Subscription（登録IP総数）も取得（best-effort）。
@@ -1391,7 +1422,10 @@ function openIngest(): void {
         setProg('完了しました', false);
         refresh();
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
-      finally { setRelayBusy(false); go.removeAttribute('disabled'); sel.removeAttribute('disabled'); }
+      finally {
+        if (locked) await repo.releaseIngestLock(ingestOwner).catch(() => undefined);
+        setRelayBusy(false); go.removeAttribute('disabled'); sel.removeAttribute('disabled');
+      }
     });
     panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['取得対象']), sel]), go);
   }
@@ -1840,6 +1874,8 @@ async function maybeBackup(): Promise<void> {
 // 当日スナップショットが既にある種別はスキップ。認証情報はこのブラウザプロファイルの localStorage を使う。
 async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
   recordOp('自動取込開始', kinds.join(','));
+  const owner0 = localStorage.getItem(LS.author) || '自動取込';
+  let locked = false;
   try {
     const cfg = await getConfig();
     const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
@@ -1849,6 +1885,11 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
     const pending: QamEntity[] = [];
     for (const k of kinds) { if (!(await todayDone(k))) pending.push(k); }
     if (!pending.length) { recordOp('自動取込スキップ', '本日分は取込済み'); return; }
+    // 無人実行でも排他は掛ける（誰かが手動で取込中に走ると二重取得になる）。
+    // 非対話なので確認は出さず、取れなければ静かに諦めて記録だけ残す。
+    const held = await repo.acquireIngestLock(owner0, INGEST_LOCK_MIN);
+    if (held) { recordOp('自動取込スキップ', `${held.owner || '他の利用者'} が取込中`); return; }
+    locked = true;
     setRelayBusy(true);
     let ipCount: number | null = null;
     if (pending.includes('host')) {
@@ -1861,7 +1902,10 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
     }
     recordOp('自動取込完了', pending.join(','));
   } catch (e) { recordOp('自動取込エラー', (e as Error).message); }
-  finally { setRelayBusy(false); }
+  finally {
+    if (locked) await repo.releaseIngestLock(owner0).catch(() => undefined);
+    setRelayBusy(false);
+  }
 }
 
 // 管理データの保管先を設定に従って切り替える（local = relay のファイル / sp = SharePoint ライブラリ）。

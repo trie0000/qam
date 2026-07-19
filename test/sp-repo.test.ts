@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createSpRepo } from '../src/api/sp-repo';
 import { createSpListClient, type SpItem, type SpListClient } from '../src/api/sp/list';
-import { LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, annotKey } from '../src/api/sp/schema';
+import { LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, LIST_SETTINGS, LOCK_INGEST, annotKey } from '../src/api/sp/schema';
 
 // リストを模した最小の実装。行の追加/更新/削除がそのまま観測できる。
 function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: Record<string, SpItem[]>; ensured: string[] } {
@@ -30,7 +30,8 @@ function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: 
   };
 }
 
-const repoOf = (lists: SpListClient) => createSpRepo({ siteUrl: 'https://example.sharepoint.com/sites/qa', listClient: lists });
+const repoOf = (lists: SpListClient, now?: () => number) =>
+  createSpRepo({ siteUrl: 'https://example.sharepoint.com/sites/qa', listClient: lists, now });
 
 describe('SharePoint リスト実装（記録系）', () => {
   it('必要なリストを作る', async () => {
@@ -38,7 +39,8 @@ describe('SharePoint リスト実装（記録系）', () => {
     await repoOf(lists).ensureLists();
     expect(lists.ensured).toContain(LIST_COMMENTS);
     expect(lists.ensured).toContain(LIST_ANNOTATIONS);
-    expect(lists.ensured).toHaveLength(5);
+    expect(lists.ensured).toContain(LIST_SETTINGS); // 共有設定＋排他クレーム行
+    expect(lists.ensured).toHaveLength(6);
   });
 
   it('メモは行として足され、entity+id で絞れる', async () => {
@@ -211,5 +213,63 @@ describe('SharePoint リストクライアント', () => {
     });
     await client.ensureList('QamOps', [{ name: 'Ts', type: 'Text', indexed: true }, { name: 'Detail', type: 'Note' }]);
     expect(created).toEqual(['list', 'Ts', 'Detail']);
+  });
+});
+
+describe('取込ロック（重複取込の抑止）', () => {
+  const T0 = Date.parse('2026-07-19T10:00:00Z');
+
+  it('誰も取っていなければ取れる（行が1本できる）', async () => {
+    const lists = fakeLists();
+    expect(await repoOf(lists, () => T0).acquireIngestLock('田中', 15)).toBeNull();
+    const row = lists.rows[LIST_SETTINGS][0];
+    expect(row.SettingKey).toBe(LOCK_INGEST);
+    expect(row.Owner).toBe('田中');
+  });
+
+  it('他の人が取込中なら保持者を返す（取れない）', async () => {
+    const lists = fakeLists();
+    await repoOf(lists, () => T0).acquireIngestLock('田中', 15);
+    const held = await repoOf(lists, () => T0 + 60_000).acquireIngestLock('鈴木', 15);
+    expect(held).toMatchObject({ owner: '田中' });
+    expect(lists.rows[LIST_SETTINGS]).toHaveLength(1); // 行は増えない
+  });
+
+  it('同時に取りに来ても、行を作れるのは1人だけ（一意制約）', async () => {
+    const lists = fakeLists();
+    // 2人とも「行が無い」と見えた状態から add する
+    const a = repoOf(lists, () => T0);
+    const b = repoOf(lists, () => T0);
+    const [r1, r2] = [await a.acquireIngestLock('田中', 15), await b.acquireIngestLock('鈴木', 15)];
+    expect(lists.rows[LIST_SETTINGS]).toHaveLength(1);
+    // 先に取れた方が null、もう片方は保持者を受け取る
+    expect([r1, r2].filter((x) => x === null)).toHaveLength(1);
+    expect([r1, r2].find((x) => x !== null)).toMatchObject({ owner: '田中' });
+  });
+
+  it('期限切れの行は引き継げる（閉じっぱなしで詰まらない）', async () => {
+    const lists = fakeLists();
+    await repoOf(lists, () => T0).acquireIngestLock('田中', 15);
+    const later = T0 + 16 * 60_000; // TTL 経過後
+    expect(await repoOf(lists, () => later).acquireIngestLock('鈴木', 15)).toBeNull();
+    expect(lists.rows[LIST_SETTINGS][0].Owner).toBe('鈴木');
+  });
+
+  it('解放は自分の行だけ。引き継がれた後は他人の行を消さない', async () => {
+    const lists = fakeLists();
+    const tanaka = repoOf(lists, () => T0);
+    await tanaka.acquireIngestLock('田中', 15);
+    await repoOf(lists, () => T0 + 16 * 60_000).acquireIngestLock('鈴木', 15); // 期限切れで引き継ぎ
+    await tanaka.releaseIngestLock('田中'); // 遅れて田中が解放しにくる
+    expect(lists.rows[LIST_SETTINGS]).toHaveLength(1);
+    expect(lists.rows[LIST_SETTINGS][0].Owner).toBe('鈴木'); // 鈴木のロックは残る
+  });
+
+  it('自分の行は解放できる', async () => {
+    const lists = fakeLists();
+    const r = repoOf(lists, () => T0);
+    await r.acquireIngestLock('田中', 15);
+    await r.releaseIngestLock('田中');
+    expect(lists.rows[LIST_SETTINGS]).toHaveLength(0);
   });
 });

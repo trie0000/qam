@@ -7,10 +7,11 @@ import { createSpListClient, type SpItem, type SpListClient } from './sp/list';
 import { createSpHttp, type SpHttp, type SpHttpOptions } from './sp/http';
 import {
   ALL_LISTS, LIST_ANNOTATIONS, LIST_COMMENTS, LIST_INSPECTIONS, LIST_LICENSES, LIST_OPS,
+  LIST_SETTINGS, LOCK_INGEST,
   annotKey, annotToRow, commentToRow, inspectionToRow, licenseToRow, opToRow,
   rowToComment, rowToInspection, rowToLicense, rowToOp,
 } from './sp/schema';
-import type { AnnotationUpdate, RecordRepo } from './repo';
+import type { AnnotationUpdate, IngestLock, RecordRepo } from './repo';
 import type { QamComment, QamEntity } from '../types';
 import type { QamLicenseSample, QamManualInspection, QamOp } from '../store';
 
@@ -23,6 +24,21 @@ export interface SpRepoOptions extends SpHttpOptions {
 
 export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Promise<void> } {
   const lists = o.listClient ?? createSpListClient({ http: o.http ?? createSpHttp(o) });
+  const now = o.now ?? (() => Date.now());
+
+  // 取込ロック: SettingKey='lock:ingest' の 1 行を claim する。
+  // SettingKey に一意制約が張ってあるので、同時に取りに来ても **行を作れるのは 1 人だけ**。
+  // 期限切れの行は If-Match 付きの更新で奪う（これも同時なら片方だけ成功する）。
+  const lockRow = async (): Promise<SpItem | undefined> =>
+    (await lists.all(LIST_SETTINGS, ['SettingKey', 'Value', 'Owner', 'ExpiresAt']))
+      .find((r) => String(r.SettingKey ?? '') === LOCK_INGEST);
+  const asLock = (r: SpItem): IngestLock =>
+    ({ owner: String(r.Owner ?? ''), since: String(r.Value ?? ''), expiresAt: String(r.ExpiresAt ?? '') });
+  const alive = (r: SpItem | undefined): boolean => {
+    if (!r) return false;
+    const exp = Date.parse(String(r.ExpiresAt ?? ''));
+    return Number.isFinite(exp) && exp > now();
+  };
 
   // 注釈: 「資産×項目」で 1 行。DedupKey で既存行を引き当て、あれば更新・無ければ追加する。
   async function annotItems(e: QamEntity): Promise<Map<string, SpItem>> {
@@ -124,5 +140,35 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       return [...map.values()];
     },
     recordLicense: (ts, ips, scanned) => lists.add(LIST_LICENSES, licenseToRow({ ts, ips, scanned })),
+
+    async acquireIngestLock(owner, ttlMin) {
+      const cur = await lockRow();
+      if (alive(cur)) return asLock(cur!); // 他の人が取込中
+      const t = now();
+      const row = {
+        Title: LOCK_INGEST, SettingKey: LOCK_INGEST, Owner: owner,
+        Value: new Date(t).toISOString(), ExpiresAt: new Date(t + Math.max(1, ttlMin) * 60_000).toISOString(),
+      };
+      if (!cur) {
+        try {
+          await lists.add(LIST_SETTINGS, row);
+          return null;
+        } catch {
+          // 一意制約で弾かれた＝同時に他の人が取った。誰が持っているかを返す。
+          const other = await lockRow();
+          return other ? asLock(other) : null;
+        }
+      }
+      // 期限切れの行を引き継ぐ。奪えなければ（412）他の人が先に引き継いだということ。
+      if (await lists.update(LIST_SETTINGS, cur.Id, row, cur.__etag)) return null;
+      const other = await lockRow();
+      return other && alive(other) ? asLock(other) : null;
+    },
+
+    async releaseIngestLock(owner) {
+      const cur = await lockRow();
+      // 期限切れで他の人が引き継いだ後なら、その行は消さない。
+      if (cur && String(cur.Owner ?? '') === owner) await lists.remove(LIST_SETTINGS, cur.Id);
+    },
   };
 }
