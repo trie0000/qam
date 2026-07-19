@@ -31,8 +31,15 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProfileDir = Join-Path $env:LOCALAPPDATA 'qam-edge'   # ユーザーごと・マシンローカル
 
-function Write-Step { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Cyan }
-function Write-Warn { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Yellow }
+# 画面はすぐ流れるので、同じ内容をログにも残す（失敗の理由を後から追えるように）。
+$LogPath = Join-Path $Root 'qam-launch.log'
+function Write-Log {
+    param([string]$Msg)
+    $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Msg
+    try { Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8 } catch { }
+}
+function Write-Step { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Cyan; Write-Log "INFO  $Msg" }
+function Write-Warn { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Yellow; Write-Log "WARN  $Msg" }
 
 # 設定ファイルから既定値を拾う（引数 > qam.env）。
 function Get-EnvValue {
@@ -83,20 +90,26 @@ function Start-QamEdge {
     # 二重起動ガード: 既にデバッグポートが応答するなら、そのまま使う。
     if (Test-Url "http://127.0.0.1:$Port/json/version") { Write-Step "専用ブラウザは起動済み"; return $true }
     $edge = Get-EdgePath
-    if (-not $edge) { Write-Warn 'Microsoft Edge が見つかりません'; return $false }
+    if (-not $edge) { Write-Warn 'Microsoft Edge が見つかりません（既定の場所に msedge.exe がありません）'; return $false }
+    Write-Step "Edge: $edge"
     if (-not (Test-Path -LiteralPath $ProfilePath)) { New-Item -ItemType Directory -Path $ProfilePath -Force | Out-Null }
-    Write-Step "専用プロファイルの Edge を起動します"
-    Start-Process -FilePath $edge -ArgumentList @(
-        "--user-data-dir=$ProfilePath",
+    Write-Step "専用プロファイル: $ProfilePath"
+    # パスに空白が含まれると引数が途中で切れるので、値を引用符で囲む。
+    $argList = @(
+        "--user-data-dir=`"$ProfilePath`"",
         "--remote-debugging-port=$Port",
         '--remote-allow-origins=*',      # 無いと CDP の WebSocket 接続が拒否される
         '--no-first-run', '--no-default-browser-check',
-        $Url
+        "`"$Url`""
     )
+    Write-Step ("起動します: msedge " + ($argList -join ' '))
+    try { Start-Process -FilePath $edge -ArgumentList $argList }
+    catch { Write-Warn "Edge の起動に失敗しました: $($_.Exception.Message)"; return $false }
     for ($i = 0; $i -lt 60; $i++) {
         Start-Sleep -Milliseconds 500
-        if (Test-Url "http://127.0.0.1:$Port/json/version") { return $true }
+        if (Test-Url "http://127.0.0.1:$Port/json/version") { Write-Step "デバッグポート応答あり (port $Port)"; return $true }
     }
+    Write-Warn "Edge は起動しましたが、デバッグポート $Port が応答しませんでした（別プロファイルの Edge が既に動いている場合、--remote-debugging-port が無視されることがあります）"
     return $false
 }
 
@@ -104,38 +117,84 @@ function Start-QamEdge {
 # 対象タブの WebSocket URL を得る。SharePoint のタブを優先する。
 function Get-CdpTarget {
     param([int]$Port, [string]$UrlLike)
-    try { $list = Invoke-RestMethod -UseBasicParsing -Uri "http://127.0.0.1:$Port/json/list" -TimeoutSec 3 } catch { return $null }
-    $pages = @($list | Where-Object { $_.type -eq 'page' -and $_.webSocketDebuggerUrl })
+    try { $list = Invoke-RestMethod -UseBasicParsing -Uri "http://127.0.0.1:$Port/json/list" -TimeoutSec 3 }
+    catch { Write-Warn "CDP のタブ一覧を取得できません (port $Port): $($_.Exception.Message)"; return $null }
+    $all = @($list | Where-Object { $_.type -eq 'page' })
+    $pages = @($all | Where-Object { $_.webSocketDebuggerUrl })
+    if ($all.Count -gt 0 -and $pages.Count -eq 0) {
+        # webSocketDebuggerUrl は「既に別の DevTools クライアントが繋がっている」と返らない。
+        # F12 を開いたままにしている場合や、前回の接続が残っている場合に起きる。
+        Write-Warn 'タブに接続できません（開発者ツール(F12)が開いていると接続できません。閉じてから再実行してください）'
+        return $null
+    }
     $hit = $pages | Where-Object { $_.url -like "$UrlLike*" } | Select-Object -First 1
     if (-not $hit) { $hit = $pages | Select-Object -First 1 }
     return $hit
 }
 
-# ページ内で JS を評価して結果(JSON文字列)を返す。失敗時は $null。
-function Invoke-CdpEvaluate {
-    param([string]$WsUrl, [string]$Expression, [int]$TimeoutSec = 30)
+# CDP のセッション。ポーリングのたびに繋ぎ直すと接続が溜まるので、1 本を使い回す。
+function New-CdpSession {
+    param([string]$WsUrl, [int]$TimeoutSec = 20)
     $ws = New-Object System.Net.WebSockets.ClientWebSocket
     $cts = New-Object System.Threading.CancellationTokenSource
     $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
     try {
         $ws.ConnectAsync([Uri]$WsUrl, $cts.Token).Wait()
+        return [pscustomobject]@{ Ws = $ws; Id = 0 }
+    } catch {
+        # ここを黙って握りつぶすと「Edge は出たのに何も起きない」になる。理由を必ず残す。
+        $ex = $_.Exception; while ($ex.InnerException) { $ex = $ex.InnerException }
+        Write-Warn "CDP に接続できません: $($ex.Message)"
+        Write-Warn '（Edge の起動オプションに --remote-allow-origins=* が要ります）'
+        try { $ws.Dispose() } catch { }
+        return $null
+    } finally { $cts.Dispose() }
+}
+
+function Close-CdpSession {
+    param($Session)
+    if (-not $Session) { return }
+    try {
+        $cts = New-Object System.Threading.CancellationTokenSource
+        $cts.CancelAfter([TimeSpan]::FromSeconds(3))
+        $Session.Ws.CloseAsync('NormalClosure', 'bye', $cts.Token).Wait()
+        $cts.Dispose()
+    } catch { }
+    try { $Session.Ws.Dispose() } catch { }
+}
+
+# ページ内で JS を評価して結果(JSON文字列)を返す。失敗時は $null。
+function Invoke-CdpEvaluate {
+    param($Session, [string]$Expression, [int]$TimeoutSec = 30)
+    if (-not $Session -or $Session.Ws.State -ne 'Open') { return $null }
+    $cts = New-Object System.Threading.CancellationTokenSource
+    $cts.CancelAfter([TimeSpan]::FromSeconds($TimeoutSec))
+    try {
+        $Session.Id++
         $msg = @{
-            id = 1; method = 'Runtime.evaluate'
+            id = $Session.Id; method = 'Runtime.evaluate'
             params = @{ expression = $Expression; awaitPromise = $true; returnByValue = $true }
         } | ConvertTo-Json -Depth 6 -Compress
         $bytes = [Text.Encoding]::UTF8.GetBytes($msg)
-        $ws.SendAsync([ArraySegment[byte]]::new($bytes), 'Text', $true, $cts.Token).Wait()
-        # 応答は分割して届くことがあるので EndOfMessage まで読む。
-        $sb = New-Object Text.StringBuilder
-        $buf = New-Object byte[] 8192
-        do {
-            $res = $ws.ReceiveAsync([ArraySegment[byte]]::new($buf), $cts.Token)
-            $res.Wait()
-            [void]$sb.Append([Text.Encoding]::UTF8.GetString($buf, 0, $res.Result.Count))
-        } while (-not $res.Result.EndOfMessage)
-        return $sb.ToString()
-    } catch { return $null }
-    finally { try { $ws.Dispose() } catch { } ; $cts.Dispose() }
+        $Session.Ws.SendAsync([ArraySegment[byte]]::new($bytes), 'Text', $true, $cts.Token).Wait()
+        # 目的の id が返るまで読む（イベントが混ざっても取り違えない）。
+        $buf = New-Object byte[] 16384
+        for ($try = 0; $try -lt 50; $try++) {
+            $sb = New-Object Text.StringBuilder
+            do {
+                $res = $Session.Ws.ReceiveAsync([ArraySegment[byte]]::new($buf), $cts.Token)
+                $res.Wait()
+                [void]$sb.Append([Text.Encoding]::UTF8.GetString($buf, 0, $res.Result.Count))
+            } while (-not $res.Result.EndOfMessage)
+            $text = $sb.ToString()
+            if ($text -match ('"id"\s*:\s*' + $Session.Id + '\b')) { return $text }
+        }
+        return $null
+    } catch {
+        $ex = $_.Exception; while ($ex.InnerException) { $ex = $ex.InnerException }
+        Write-Warn "CDP の評価に失敗: $($ex.Message)"
+        return $null
+    } finally { $cts.Dispose() }
 }
 
 # ─── 4) ローダ（SharePoint のライブラリからアプリ本体を取って起動する）──────
@@ -172,12 +231,20 @@ $AuthProbeJs = @'
 '@
 
 # ─── 実行 ────────────────────────────────────────────────────────────────────
+Write-Log '--- 起動 ---'
 if (-not $SiteUrl) { $SiteUrl = Get-EnvValue 'QAM_SP_SITE_URL' }
 if (-not $SiteUrl) {
-    Write-Warn 'SharePoint サイト URL が分かりません（-SiteUrl か qam.env の QAM_SP_SITE_URL を設定してください）'
+    # ★ここで終わると「ブラウザが何も出ない」うえ、サイト URL を設定する画面にも辿り着けない
+    #   （設定画面はアプリの中にあるため）。ローカルの画面を開いて、そこで入力してもらう。
+    Write-Warn 'SharePoint サイト URL が未設定です（server\qam.env の QAM_SP_SITE_URL）'
+    Write-Warn '設定用にローカルの画面を開きます。表示される画面でサイト URL を入力し、保存してから、もう一度 qam-start.bat を実行してください'
+    if (-not (Start-QamRelay -Port $RelayPort)) { Write-Warn '中継サーバを起動できませんでした' }
+    try { Start-Process "http://127.0.0.1:$RelayPort/" } catch { Write-Warn "手動で開いてください: http://127.0.0.1:$RelayPort/" }
     if ($KeepOpen) { Read-Host '終了するには Enter' }
     exit 1
 }
+Write-Step "接続先: $SiteUrl"
+Write-Step "中継サーバ: http://127.0.0.1:$RelayPort/  デバッグポート: $DebugPort" 
 
 $ok = $false
 try {
@@ -187,20 +254,38 @@ try {
     Write-Step 'サインインの完了を待っています（ブラウザの画面で普段どおりサインインしてください）'
     $deadline = (Get-Date).AddSeconds($AuthTimeoutSec)
     $authed = $false
+    $session = $null
+    $lastUrl = ''
     while ((Get-Date) -lt $deadline) {
         $t = Get-CdpTarget -Port $DebugPort -UrlLike $SiteUrl
-        if ($t) {
-            $res = Invoke-CdpEvaluate -WsUrl $t.webSocketDebuggerUrl -Expression $AuthProbeJs -TimeoutSec 20
-            if ($res -and $res -match '"value"\s*:\s*"ok"') { $authed = $true; break }
+        if (-not $t) { Write-Step 'ブラウザのタブを探しています…'; Start-Sleep -Seconds 2; continue }
+        # 対象タブが変わったら（サインイン→SharePoint 等）繋ぎ直す。
+        if ($t.url -ne $lastUrl) {
+            Write-Step ("現在のページ: " + $t.url)
+            Close-CdpSession $session
+            $session = New-CdpSession -WsUrl $t.webSocketDebuggerUrl
+            $lastUrl = $t.url
         }
-        Start-Sleep -Seconds 2
+        if (-not $session) { Start-Sleep -Seconds 2; continue }
+        $res = Invoke-CdpEvaluate -Session $session -Expression $AuthProbeJs -TimeoutSec 20
+        if ($res -and $res -match '"value"\s*:\s*"ok"') { $authed = $true; break }
+        if ($res -and $res -match '"value"\s*:\s*"status:(\d+)"') {
+            Write-Step ("SharePoint の応答待ち (HTTP " + $Matches[1] + ") — サインインが完了すると進みます")
+        } else {
+            Write-Step 'サインイン待ち…'
+        }
+        Start-Sleep -Seconds 3
     }
-    if (-not $authed) { throw 'サインインを確認できませんでした（時間切れ）' }
+    if (-not $authed) {
+        Close-CdpSession $session
+        throw "サインインを確認できませんでした（$AuthTimeoutSec 秒で時間切れ。最後に見えていたページ: $lastUrl）"
+    }
 
     Write-Step 'アプリを起動します'
-    $t = Get-CdpTarget -Port $DebugPort -UrlLike $SiteUrl
-    $res = Invoke-CdpEvaluate -WsUrl $t.webSocketDebuggerUrl -Expression $LoaderJs -TimeoutSec 60
-    if (-not $res) { throw 'アプリの注入に失敗しました' }
+    $res = Invoke-CdpEvaluate -Session $session -Expression $LoaderJs -TimeoutSec 60
+    Close-CdpSession $session
+    if (-not $res) { throw 'アプリの注入に失敗しました（CDP の応答がありません）' }
+    Write-Log ("LOADER 応答: " + $res)
     if ($res -match 'bundle-missing') {
         throw 'アプリ本体を取得できません（SharePoint にも中継サーバにも見つかりません）'
     }
@@ -211,9 +296,11 @@ try {
     Write-Step '起動しました'
     $ok = $true
 } catch {
-    Write-Warn $_.Exception.Message
-    # フォールバック: 既定ブラウザで SharePoint を開き、手動起動（ブックマークレット）に案内する。
-    Write-Warn '既定のブラウザで SharePoint を開きます。ブックマークレットから起動してください'
+    Write-Warn "起動に失敗しました: $($_.Exception.Message)"
+    Write-Warn "詳しい経過はログを確認してください: $LogPath"
+    # フォールバック: 既定ブラウザで SharePoint を開く。
+    # ★ここで普通のブラウザが開くので「専用 Edge が上がらない」ように見える。理由を先に出しておく。
+    Write-Warn '代わりに既定のブラウザで SharePoint を開きます（専用ブラウザではありません）'
     try { Start-Process $SiteUrl } catch { }
 }
 if ($KeepOpen -and -not $ok) { Read-Host '終了するには Enter' }
