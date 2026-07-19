@@ -22,15 +22,18 @@ import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, appendManualInspection, readManualInspections, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
 } from './store';
+// メモ・注釈・操作履歴・管理表・ライセンス推移は「複数人が同時に足す」記録なので repo 経由。
+// 保管先（ファイル / SharePoint リスト）は起動時に決まる。
+import { repo, setRepo, fileRepo } from './api/repo';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords } from './types';
 
 // 操作履歴記録: 作業者(個人設定の記入者名)＋時刻で登録/削除/変更を残す。失敗しても本処理は止めない。
 function recordOp(action: string, detail: string, entity?: QamEntity): void {
   const op: QamOp = { ts: new Date().toISOString(), author: localStorage.getItem(LS.author) || '', action, entity, detail };
-  logOp(backend, op).catch(() => undefined);
+  repo.logOp(op).catch(() => undefined);
 }
 
 const GUARD_RATIO = 0.5;
@@ -61,7 +64,7 @@ function uniqueHostsScanned(records: QamRecords): number {
 // ips（IPs in Subscription）は host 一覧から算出できないので licenses.jsonl の記録値を使う。
 async function buildLicenseSamples(): Promise<LicenseSample[]> {
   const map = new Map<string, LicenseSample>();
-  for (const s of await readLicenses(backend)) map.set(s.ts, s);
+  for (const s of await repo.readLicenses()) map.set(s.ts, s);
   for (const stamp of await getSnapshotStamps(backend, 'host')) {
     const snap = await readSnapshot(backend, 'host', stamp);
     if (snap) map.set(stamp, { ts: stamp, ips: map.get(stamp)?.ips ?? 0, scanned: uniqueHostsScanned(snap.records) });
@@ -129,7 +132,7 @@ exportAllBtn.addEventListener('click', () => { Promise.resolve().then(exportAllA
 const licenseBadge = el('button', { class: 'qam-license', title: 'Unique Hosts Scanned（スキャン済み一意ホスト数）/ IPs in Subscription（契約の登録IP数・設定で入力）。クリックで推移を表示' });
 licenseBadge.addEventListener('click', () => { state.mode = 'licenses'; state.selected.clear(); refresh(); });
 async function updateLicenseBadge(): Promise<void> {
-  const [stamps, lic] = await Promise.all([getSnapshotStamps(backend, 'host'), readLicenses(backend)]);
+  const [stamps, lic] = await Promise.all([getSnapshotStamps(backend, 'host'), repo.readLicenses()]);
   const stamp = resolveAsof(stamps);
   const snap = stamp ? await readSnapshot(backend, 'host', stamp) : null;
   const scanned = snap ? uniqueHostsScanned(snap.records) : null;
@@ -343,12 +346,12 @@ async function buildIdResolver(entity: QamEntity): Promise<(rawName: string) => 
 // 手入力メタ情報（Function/Location 等）の窓口。現状は group のみ。
 async function buildAnnot(entity: QamEntity): Promise<AnnotApi | undefined> {
   if (entity !== 'group') return undefined;
-  const map = await readAnnotations(backend, entity);
+  const map = await repo.readAnnotations(entity);
   return {
     get: (id, field) => map[id]?.[field] ?? '',
     save: async (id, field, v) => {
       await ensureAuthor(); // 記載の直前に記入者名が未設定なら促す
-      await setAnnotation(backend, entity, id, field, v);
+      await repo.setAnnotation(entity, id, field, v);
       const rec = (map[id] ??= {}); if (v) rec[field] = v; else delete rec[field];
       recordOp(`${field}編集`, `${id}: ${v || '(クリア)'}`, entity);
     },
@@ -397,7 +400,7 @@ async function importAssetValues(text: string, onProgress?: (done: number, total
   }
   onProgress?.(total, total, 'scan');
   onProgress?.(updated, updated, 'save');
-  await setAnnotationsBulk(backend, 'group', updates); // ← 1回だけ書き込み
+  await repo.setAnnotationsBulk('group', updates); // ← 1回だけ書き込み
   return { updated, unmatched, fields: fieldCols.map(([f]) => f) };
 }
 
@@ -472,16 +475,16 @@ function addExportButtons(toolbar: HTMLElement, sheetName: string, exportRef: { 
 
 async function commentApi(entity: QamEntity): Promise<CommentApi> {
   const byId: Record<string, QamComment[]> = {};
-  for (const c of await readComments(backend, entity)) (byId[c.id] ??= []).push(c);
+  for (const c of await repo.readComments(entity)) (byId[c.id] ??= []).push(c);
   for (const id of Object.keys(byId)) byId[id].sort((a, b) => a.ts.localeCompare(b.ts));
   return {
     byId,
     save: async (e, id, ts, text) => {
       await ensureAuthor(); // 記載の直前に記入者名が未設定なら促す
-      if (ts) await editComment(backend, e, id, ts, text);
-      else await addComment(backend, { ts: new Date().toISOString(), entity: e, id, author: localStorage.getItem(LS.author) || '', text });
+      if (ts) await repo.editComment(e, id, ts, text);
+      else await repo.addComment({ ts: new Date().toISOString(), entity: e, id, author: localStorage.getItem(LS.author) || '', text });
       recordOp(ts ? 'メモ編集' : 'メモ追加', `${id}`, e);
-      return (await readComments(backend, e, id)).sort((a, b) => a.ts.localeCompare(b.ts));
+      return (await repo.readComments(e, id)).sort((a, b) => a.ts.localeCompare(b.ts));
     },
   };
 }
@@ -612,7 +615,7 @@ async function renderHistory(subbar: HTMLElement, count: HTMLElement, toolbar: H
 async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
   const entLabel = (k?: QamEntity): string => (k ? ENTITIES.find((e) => e.key === k)?.label ?? k : '');
-  const rows = (await readOps(backend)).reverse() // 新しい順
+  const rows = (await repo.readOps()).reverse() // 新しい順
     .filter((o) => matchQ([o.author, o.action, o.entity, o.detail, o.ts]));
   count.textContent = `${rows.length} 件`;
   const cols: Column[] = [
@@ -702,7 +705,7 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   const pattern = cfg.inspectionAgPattern || DEFAULT_AG_PATTERN;
   // 管理表（Qualys 未登録の予定）もスケジュールとして合流させる。
   // mode='qualys'（実登録の履歴）は Qualys から取得したスケジュールと二重計上になるので外す。
-  const manual = (await readManualInspections(backend)).filter((m) => m.mode !== 'qualys');
+  const manual = (await repo.readManualInspections()).filter((m) => m.mode !== 'qualys');
   const manualRows = {
     scan: manual.filter((m) => m.kind === 'scan').map((m) => ({
       id: `manual-${m.ts}`, title: m.title, active: true, nextLaunch: m.nextLaunch,
@@ -731,7 +734,7 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
 // 登録モーダルを開く。行クリックでその内容をプリフィルして再登録できる。
 async function renderQuickInspect(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
-  const rows = (await readManualInspections(backend)).slice().reverse(); // 新しい順
+  const rows = (await repo.readManualInspections()).slice().reverse(); // 新しい順
   count.textContent = `${rows.length} 件`;
   clear(host);
 
@@ -911,7 +914,7 @@ async function recordLedger(
   const at = (i: ScheduleInput): string =>
     `${i.startDate}T${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}:00`;
   if (plan.withMap) {
-    await appendManualInspection(backend, {
+    await repo.appendManualInspection({
       ts, author, mode: 'ledger', kind: 'map', title: mapInput.title,
       nextLaunch: at(mapInput), assetGroups: [plan.title], domains: plan.domains,
       subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
@@ -920,7 +923,7 @@ async function recordLedger(
     steps.push(`MAP 予定を管理表に記録（${plan.domains.join(', ')}）`);
   }
   if (plan.withScan) {
-    await appendManualInspection(backend, {
+    await repo.appendManualInspection({
       ts, author, mode: 'ledger', kind: 'scan', title: scanInput.title,
       nextLaunch: at(scanInput), assetGroups: [plan.title], domains: [],
       subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
@@ -983,7 +986,7 @@ async function runProvision(
     const at = (i: ScheduleInput): string =>
       `${i.startDate}T${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}:00`;
     if (plan.withMap) {
-      await appendManualInspection(backend, {
+      await repo.appendManualInspection({
         ts, author, mode: 'qualys', kind: 'map', title: mapInput.title,
         nextLaunch: at(mapInput), assetGroups: [agTitle], domains,
         subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
@@ -991,7 +994,7 @@ async function runProvision(
       }).catch(() => undefined); // 履歴の記録失敗で登録自体は失敗にしない
     }
     if (plan.withScan) {
-      await appendManualInspection(backend, {
+      await repo.appendManualInspection({
         ts, author, mode: 'qualys', kind: 'scan', title: scanInput.title,
         nextLaunch: at(scanInput), assetGroups: [agTitle], domains: [],
         subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
@@ -1201,7 +1204,7 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   recordOp(auto ? '自動取込' : '取込', `${fmtStamp(res.stamp)}: ${res.currCount.toLocaleString()}件 (${sum})`, snap.entity);
   // Host 取込ごとに、その時点の使用ライセンス数(登録IP数)を日時(stamp)つきで記録（推移グラフ用）。
   // host 取込ごとに Unique Hosts Scanned を記録。IPs in Subscription(ipCount)は API取得時のみ（XMLは null→0）。
-  if (res.committed && snap.entity === 'host') await recordLicense(backend, res.stamp, ipCount ?? 0, uniqueHostsScanned(snap.records as QamRecords)).catch(() => undefined);
+  if (res.committed && snap.entity === 'host') await repo.recordLicense(res.stamp, ipCount ?? 0, uniqueHostsScanned(snap.records as QamRecords)).catch(() => undefined);
 }
 
 // Qualys アカウント/パスワード未登録時の登録モーダル。保存して {user,pass} を返す。取消は null。
