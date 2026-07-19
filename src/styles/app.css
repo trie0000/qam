@@ -519,3 +519,12 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-track-item { padding: var(--s-3) var(--s-4); background: var(--paper-2); border-radius: var(--r-2);
   border-left: 3px solid var(--warn); font-size: var(--fs-sm); user-select: text; }
 .qam-track-note { margin: var(--s-4) 0; font-size: var(--fs-sm); color: var(--danger); }
+
+/* overlay 注入時のコンテナ。ホストページ（SharePoint）の CSS を受けないよう遮蔽し、
+   画面全体を覆う。単体ページのときはこのクラスが付かないので影響しない。 */
+#qam-root.qam-overlay {
+  position: fixed; inset: 0; z-index: 9000;
+  background: var(--paper); color: var(--ink);
+  font-family: var(--font-sans); font-size: var(--fs-base); line-height: var(--lh-base);
+  overflow: auto;
+}

@@ -1,6 +1,7 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
-import { BUILD, BUILDTIME, ENTITIES, LS, fmtStamp, datetimeToStamp, stampNow, today } from './config';
+import { scopeCss } from './ui/scope-css';
+import { BUILD, BUILDTIME, ENTITIES, IS_OVERLAY, LS, fmtStamp, datetimeToStamp, stampNow, today } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -104,7 +105,11 @@ function matchAsset(r: QamRecord, q: string): boolean {
 }
 
 // ---- shell ----
-const style = document.createElement('style'); style.textContent = css; document.head.append(style);
+// SharePoint ページへ overlay として注入されたときは、既存ページを壊さないよう
+// スタイルを #qam-root 配下に閉じ込める（単体ページのときは従来どおり全体に効かせる）。
+const style = document.createElement('style');
+style.textContent = IS_OVERLAY ? scopeCss(css) : css;
+document.head.append(style);
 document.documentElement.dataset.theme = localStorage.getItem(LS.theme) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 document.documentElement.dataset.fontsize = localStorage.getItem(LS.fontsize) || 'md'; // 文字サイズ 大中小
 
@@ -114,7 +119,15 @@ function callout(text: string): HTMLElement {
 }
 
 
-const root = document.getElementById('qam-root')!;
+const root = document.getElementById('qam-root') ?? (() => {
+  // overlay: 画面全体を覆う専用コンテナを自前で作る。SP 側の CSS を受けないよう
+  // all:initial でリセットしてから、自前のトークンを効かせる。
+  const d = document.createElement('div');
+  d.id = 'qam-root';
+  d.className = 'qam-overlay';
+  document.body.append(d);
+  return d;
+})();
 const main = el('div', { class: 'qam-main' });
 const left = el('div', { class: 'qam-left' });
 const topbar = el('div', { class: 'qam-topbar' });
@@ -1936,7 +1949,12 @@ async function applyStorageMode(): Promise<void> {
 
 async function start(): Promise<void> {
   startRelayPolling(); // 30秒間隔で中継サーバを死活監視（落ちたら警告・復帰で自動クローズ）
-  if (!(await checkRelay())) { showRelayDownModal(); return; }
+  if (!(await checkRelay())) {
+    // SharePoint ページ上（overlay）では relay は Qualys の取得・登録にしか要らない。
+    // 保管が SPO なら参照は relay 無しで成立するので、起動自体は止めない。
+    if (!IS_OVERLAY) { showRelayDownModal(); return; }
+    toast('中継サーバに接続できません。Qualys の取得・登録はできませんが、保存済みデータは参照できます', 'error');
+  }
   await applyStorageMode(); // 以降の store 呼び出しはすべてこの保管先に向く
   // 起動時に記入者名を強制入力させない。更新作業（取込/メモ・注釈の記載/削除）の直前に未設定なら促す。
   refresh();

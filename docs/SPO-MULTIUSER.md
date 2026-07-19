@@ -249,7 +249,7 @@ src/api/
 | 0 | 保管先の差し替え口（`setBackend`）＋ ライブラリ実装（`api/sp-file.ts`）。設定 `storageMode` で local / sp を切替。接続できなければ起動時にローカルへ自動フォールバック | **実装済み** |
 | 1 | リスト実装（`sp/schema.ts` ＋ `ensureLists`）。コメント / 注釈 / 操作履歴 / 管理表 / ライセンス推移をリストへ移す（共有設定は Phase 2 で取込ロックと同時に） | **実装済み** |
 | 2 | 取込ロック（一意キー行 + TTL）＋ 直近取込ガード | **実装済み**（ローカル→SPO 移送は未着手） |
-| 3 | 配布（バンドルを SPO へ、ローダ、CDP ランチャ）＋ relay の痩せ替え ＋ DPAPI 秘密管理 | 未着手 |
+| 3 | overlay 化（SP ページへ注入）＋ relay 非依存起動 | **実装済み**（ローダ・CDP ランチャ・DPAPI は未着手） |
 
 ### Phase 0 で入った範囲
 
@@ -295,6 +295,19 @@ src/api/
 
 **共有設定の SPO 移行（`getConfig`/`setConfig` の置き換え）とローカル→SPO 移送は未着手。**
 
+### Phase 3 で入った範囲
+
+- **overlay 化**: `#qam-root` が無ければ自前で作り、CSS を `#qam-root` 配下へ閉じ込める
+  （`ui/scope-css.ts`）。ホストページ（SharePoint）のレイアウトを壊さない
+- **relay の場所**: 単体ページなら同一オリジン、overlay ではローカル relay を絶対 URL で指す
+  （`IS_OVERLAY`）。ここを間違えると SP 自身へ API を投げてしまう
+- **relay 非依存の起動**: overlay かつ SPO 保管なら、relay が落ちていても参照は動く
+  （設定は直近値を localStorage に控えて代用。Qualys の取得・登録だけができない旨を出す）
+- **ライブラリの自動作成**（`ensureLibrary`）
+
+**未着手**: ローダ（バンドルを SPO ライブラリから配信）、CDP ランチャ、DPAPI 秘密管理、
+relay の CORS 限定。DPAPI は Windows 実機で `ConvertFrom-SecureString` の往復を確認済み。
+
 ---
 
 ## 7. 着手前に潰す検証
@@ -312,6 +325,13 @@ src/api/
 > | ファイルの `$value` PUT の `If-Match` | **無視される**（§3.1 参照） |
 > | 未存在フォルダの `?$select=Exists` | **200 + `Exists:false`**（404 ではない） |
 > | `Files/add(overwrite=false)` の既存衝突 | 400 で弾かれる |
+> | **列名 `Author`** | **SP 組み込みの User 型列と衝突**。列は「既にある」で素通りするのに書き込みだけ 400 で失敗する → `RecordedBy` へ改名（SCHEMA_VERSION 2） |
+> | 列作成直後のアイテム追加 | 反映が数秒遅れることがある（作成と同時の書き込みは見えないことがある） |
+> | **SP ページ → `http://127.0.0.1` の fetch** | **通る**（CORS・混在コンテンツ・Private Network Access いずれも問題なし） |
+> | ライブラリ自体の作成（BaseTemplate 101） | 可。`ensureLibrary` で自動化 |
+>
+> **アプリを実際の SharePoint ページへ注入し、overlay 表示 → リスト作成 → 書き込み → アプリ画面での
+> 読み取り、までの往復を確認済み。**
 
 1. **SP ページのオリジンから `http://127.0.0.1:<port>` への fetch が通るか。**
    CORS に加え Private Network Access のプリフライトが要るかを実機で確認する。

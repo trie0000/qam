@@ -6,7 +6,16 @@ export const BUILD = typeof __QAM_BUILD__ !== 'undefined' ? __QAM_BUILD__ : 'dev
 declare const __QAM_BUILDTIME__: string;
 export const BUILDTIME = typeof __QAM_BUILDTIME__ !== 'undefined' ? __QAM_BUILDTIME__ : '';
 
-export const RELAY = location.origin; // relay が配信しているので同一オリジン
+// 単体ページ（relay が配信）には #qam-root がある。SharePoint ページへ overlay 注入
+// されたときは無いので、そこで判別する。
+export const IS_OVERLAY = typeof document !== 'undefined' && !document.getElementById('qam-root');
+// relay の場所。単体ページなら同一オリジン。overlay のときはホストが SharePoint なので、
+// ローカル relay を絶対 URL で指す（ここを間違えると SP 自身へ API を投げてしまう）。
+// localStorage は環境によって参照時点で使えないことがあるので、失敗しても既定値で動かす。
+const relayOverride = (): string => {
+  try { return localStorage.getItem('qam:relayUrl') ?? ''; } catch { return ''; }
+};
+export const RELAY = IS_OVERLAY ? (relayOverride() || 'http://127.0.0.1:18090') : location.origin;
 
 export const LS = {
   theme: 'qam.theme',

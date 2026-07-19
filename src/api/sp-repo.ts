@@ -81,14 +81,14 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     },
 
     async readComments(e, id) {
-      const rows = await lists.all(LIST_COMMENTS, ['Entity', 'TargetId', 'Ts', 'Author', 'Body']);
+      const rows = await lists.all(LIST_COMMENTS, ['Entity', 'TargetId', 'Ts', 'RecordedBy', 'Body']);
       return rows.map(rowToComment).filter((c) => (!e || c.entity === e) && (!id || c.id === id));
     },
     addComment: (c: QamComment) => lists.add(LIST_COMMENTS, commentToRow(c)),
     async editComment(e, id, ts, text) {
       // ファイル実装は全文書き戻しだったが、リストでは該当行だけを更新する（他の行に触らない）。
       for (let i = 0; i <= MAX_RETRY; i++) {
-        const rows = await lists.all(LIST_COMMENTS, ['Entity', 'TargetId', 'Ts', 'Author', 'Body']);
+        const rows = await lists.all(LIST_COMMENTS, ['Entity', 'TargetId', 'Ts', 'RecordedBy', 'Body']);
         const hit = rows.find((r) => String(r.Entity ?? '') === e && String(r.TargetId ?? '') === id && String(r.Ts ?? '') === ts);
         if (!hit) return; // 見つからなければ何もしない（ファイル実装と同じ）
         if (await lists.update(LIST_COMMENTS, hit.Id, { Body: text }, hit.__etag)) return;
@@ -116,13 +116,13 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     },
 
     async readOps(): Promise<QamOp[]> {
-      return (await lists.all(LIST_OPS, ['Ts', 'Author', 'Action', 'Entity', 'Detail'])).map(rowToOp);
+      return (await lists.all(LIST_OPS, ['Ts', 'RecordedBy', 'Action', 'Entity', 'Detail'])).map(rowToOp);
     },
     logOp: (op) => lists.add(LIST_OPS, opToRow(op)),
 
     async readManualInspections(): Promise<QamManualInspection[]> {
       const rows = await lists.all(LIST_INSPECTIONS, [
-        'Ts', 'Author', 'Mode', 'Kind', 'ScheduleTitle', 'NextLaunch', 'AssetGroups', 'Domains',
+        'Ts', 'RecordedBy', 'Mode', 'Kind', 'ScheduleTitle', 'NextLaunch', 'AssetGroups', 'Domains',
         'Subject', 'Department', 'Applicant', 'Remarks', 'Provision',
       ]);
       return rows.map(rowToInspection);

@@ -7,7 +7,9 @@ import type { FieldSpec } from './list';
 import type { QamComment, QamEntity } from '../../types';
 import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 
-export const SCHEMA_VERSION = 1;
+// 2: Author 列を RecordedBy へ改名（Author は SharePoint 組み込みの User 型列と衝突し、
+//    列は作られたことになるのに書き込みだけが 400 で失敗する）
+export const SCHEMA_VERSION = 2;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -21,7 +23,7 @@ export const commentFields: FieldSpec[] = [
   { name: 'Entity', type: 'Text', indexed: true },
   { name: 'TargetId', type: 'Text', indexed: true },
   { name: 'Ts', type: 'Text' },
-  { name: 'Author', type: 'Text' },
+  { name: 'RecordedBy', type: 'Text' }, // Author は SP 組み込み（作成者・User 型）なので使えない
   { name: 'Body', type: 'Note' },
 ];
 
@@ -36,7 +38,7 @@ export const annotationFields: FieldSpec[] = [
 
 export const opFields: FieldSpec[] = [
   { name: 'Ts', type: 'Text', indexed: true },
-  { name: 'Author', type: 'Text' },
+  { name: 'RecordedBy', type: 'Text' },
   { name: 'Action', type: 'Text' },
   { name: 'Entity', type: 'Text' },
   { name: 'Detail', type: 'Note' },
@@ -44,7 +46,7 @@ export const opFields: FieldSpec[] = [
 
 export const inspectionFields: FieldSpec[] = [
   { name: 'Ts', type: 'Text', indexed: true },
-  { name: 'Author', type: 'Text' },
+  { name: 'RecordedBy', type: 'Text' },
   { name: 'Mode', type: 'Text' },
   { name: 'Kind', type: 'Text' },
   { name: 'ScheduleTitle', type: 'Text' },
@@ -93,9 +95,9 @@ const unpackList = (v: unknown): string[] => str(v).split('\n').map((s) => s.tri
 
 // --- comments ---
 export const commentToRow = (c: QamComment): Record<string, unknown> =>
-  ({ Title: c.id, Entity: c.entity, TargetId: c.id, Ts: c.ts, Author: c.author, Body: c.text });
+  ({ Title: c.id, Entity: c.entity, TargetId: c.id, Ts: c.ts, RecordedBy: c.author, Body: c.text });
 export const rowToComment = (r: Record<string, unknown>): QamComment =>
-  ({ ts: str(r.Ts), entity: str(r.Entity) as QamEntity, id: str(r.TargetId), author: str(r.Author), text: str(r.Body) });
+  ({ ts: str(r.Ts), entity: str(r.Entity) as QamEntity, id: str(r.TargetId), author: str(r.RecordedBy), text: str(r.Body) });
 
 // --- annotations ---
 export const annotKey = (e: QamEntity, id: string, field: string): string => `${e}|${id}|${field}`;
@@ -104,16 +106,16 @@ export const annotToRow = (e: QamEntity, id: string, field: string, value: strin
 
 // --- ops ---
 export const opToRow = (o: QamOp): Record<string, unknown> =>
-  ({ Title: o.action, Ts: o.ts, Author: o.author, Action: o.action, Entity: o.entity ?? '', Detail: o.detail });
+  ({ Title: o.action, Ts: o.ts, RecordedBy: o.author, Action: o.action, Entity: o.entity ?? '', Detail: o.detail });
 export const rowToOp = (r: Record<string, unknown>): QamOp => {
   const entity = str(r.Entity);
-  return { ts: str(r.Ts), author: str(r.Author), action: str(r.Action), detail: str(r.Detail), ...(entity ? { entity: entity as QamEntity } : {}) };
+  return { ts: str(r.Ts), author: str(r.RecordedBy), action: str(r.Action), detail: str(r.Detail), ...(entity ? { entity: entity as QamEntity } : {}) };
 };
 
 // --- 簡易検査の管理表 ---
 export function inspectionToRow(m: QamManualInspection): Record<string, unknown> {
   return {
-    Title: m.title, Ts: m.ts, Author: m.author, Mode: m.mode, Kind: m.kind,
+    Title: m.title, Ts: m.ts, RecordedBy: m.author, Mode: m.mode, Kind: m.kind,
     ScheduleTitle: m.title, NextLaunch: m.nextLaunch,
     AssetGroups: packList(m.assetGroups), Domains: packList(m.domains),
     Subject: m.subject ?? '', Department: m.department ?? '', Applicant: m.applicant ?? '',
@@ -124,7 +126,7 @@ export function rowToInspection(r: Record<string, unknown>): QamManualInspection
   let provision: unknown;
   try { provision = r.Provision ? JSON.parse(str(r.Provision)) : undefined; } catch { provision = undefined; }
   return {
-    ts: str(r.Ts), author: str(r.Author),
+    ts: str(r.Ts), author: str(r.RecordedBy),
     mode: (str(r.Mode) === 'qualys' ? 'qualys' : 'ledger'),
     kind: (str(r.Kind) === 'map' ? 'map' : 'scan'),
     title: str(r.ScheduleTitle), nextLaunch: str(r.NextLaunch),

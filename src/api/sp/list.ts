@@ -17,6 +17,8 @@ export interface FieldSpec {
 
 // SP.FieldType の数値。Note は複数行テキスト（Text の 255 文字制限を超えるもの）。
 const FIELD_KIND: Record<FieldType, number> = { Text: 2, Note: 3, Number: 9 };
+// 既存列との型突き合わせ用（SP が返す TypeAsString）。
+const TYPE_NAME: Record<FieldType, string> = { Text: 'Text', Note: 'Note', Number: 'Number' };
 
 export interface SpItem extends Record<string, unknown> { Id: number; __etag: string }
 
@@ -50,12 +52,20 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
     JSON.stringify({ __metadata: { type }, ...row });
 
   async function ensureFields(title: string, fields: FieldSpec[]): Promise<void> {
-    const r = await http.get(`${listApi(title)}/fields?$select=InternalName,Indexed,EnforceUniqueValues&$top=500`);
+    const r = await http.get(`${listApi(title)}/fields?$select=InternalName,TypeAsString,CanBeDeleted,Indexed,EnforceUniqueValues&$top=500`);
     if (!r.ok) throw new Error(`列の一覧取得に失敗 (${title}): HTTP ${r.status}${await errText(r)}`);
-    const rows = ((await http.json(r)).results ?? []) as { InternalName?: string; EnforceUniqueValues?: boolean }[];
-    const have = new Map(rows.map((x) => [String(x.InternalName ?? ''), !!x.EnforceUniqueValues]));
+    type Row = { InternalName?: string; TypeAsString?: string; CanBeDeleted?: boolean; EnforceUniqueValues?: boolean };
+    const rows = ((await http.json(r)).results ?? []) as Row[];
+    const have = new Map(rows.map((x) => [String(x.InternalName ?? ''), x]));
     for (const f of fields) {
-      if (!have.has(f.name)) {
+      const cur = have.get(f.name);
+      // ★列名が SP の組み込み列と衝突していると、作成は「既にある」で素通りするのに
+      //   書き込みだけが必ず失敗する（例: Author は組み込みの User 型）。
+      //   黙って壊れるより、ここで名前を指して止める。
+      if (cur && (cur.CanBeDeleted === false || (cur.TypeAsString && cur.TypeAsString !== TYPE_NAME[f.type]))) {
+        throw new Error(`列名が SharePoint の既存列と衝突しています (${title}.${f.name} は ${cur.TypeAsString}${cur.CanBeDeleted === false ? '・組み込み列' : ''})。別の列名にしてください`);
+      }
+      if (!cur) {
         // 空白を含まない ASCII 名にしているので、内部名は表示名と一致する（_x0020_ 化されない）。
         const add = await http.post(`${listApi(title)}/fields`, {
           headers: { 'Content-Type': V },
@@ -67,7 +77,7 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
         if (!add.ok) throw new Error(`列の作成に失敗 (${title}.${f.name}): HTTP ${add.status}${await errText(add)}`);
       }
       // 一意制約は作成後に MERGE で立てる（既存環境にも後から効かせるため）。
-      if (f.enforceUnique && !have.get(f.name)) {
+      if (f.enforceUnique && !cur?.EnforceUniqueValues) {
         const upd = await http.post(`${listApi(title)}/fields/getbyinternalnameortitle('${q(f.name)}')`, {
           headers: { 'Content-Type': V, 'X-HTTP-Method': 'MERGE', 'If-Match': '*' },
           body: JSON.stringify({ __metadata: { type: 'SP.Field' }, Indexed: true, EnforceUniqueValues: true }),

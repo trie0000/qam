@@ -100,7 +100,20 @@ export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/
 //   sp は「アプリが SharePoint ページのオリジンで動いている」ことが前提（同一オリジン Cookie 認証）。
 // spSiteUrl / spLibrary: sp のときの接続先。どちらも SPO を読む前に要るのでローカル設定に置く。
 export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; backupIntervalMin: number; backupRetentionDays: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string; storageMode: 'local' | 'sp'; spSiteUrl: string; spLibrary: string }
-export const getConfig = (): Promise<RelayConfig> => fetch(`${RELAY}/qam/config`).then((r) => r.json());
+// 設定は relay が持つが、SharePoint ページ上で動くとき relay は Qualys 取得にしか要らない。
+// relay が落ちていても保管先の判断はできるよう、直近値を控えておいて代用する。
+const CFG_CACHE = 'qam:config-cache';
+export const getConfig = async (): Promise<RelayConfig> => {
+  try {
+    const cfg = (await (await fetch(`${RELAY}/qam/config`)).json()) as RelayConfig;
+    try { localStorage.setItem(CFG_CACHE, JSON.stringify(cfg)); } catch { /* 保存できなくても動かす */ }
+    return cfg;
+  } catch (e) {
+    const cached = localStorage.getItem(CFG_CACHE);
+    if (cached) return JSON.parse(cached) as RelayConfig;
+    throw e;
+  }
+};
 export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfig> => {
   const r = await fetch(`${RELAY}/qam/config`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
   const d = await r.json().catch(() => ({} as any));
