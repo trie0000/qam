@@ -177,16 +177,20 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const rowFqdn = field('検査資産情報（FQDN）', fqdnEditor.node,
     '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
     + 'AssetGroup の DNS_LIST に登録されます。');
-  const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, '共通設定の既定値が入っています。');
-  const rowMapOpt = field('MAP のオプションプロファイル', mapOpt, '共通設定の既定値が入っています。');
-  const rowScanner = field('スキャナー', scanner, '共通設定の既定値が入っています。');
-  // 通常は触らない項目なので折りたたんでおく（開いた状態は保持しない＝毎回閉じる）。
+  // 既定値は共通設定から来る。何が入るのかを具体値で示す（未設定なら Qualys 側の既定に委ねる旨）。
+  const defNote = (v: string): string =>
+    (v.trim() ? `共通設定の既定値: ${v.trim()}` : '共通設定が未設定のため、Qualys アカウントの既定プロファイルが適用されます。');
+  const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, defNote(o.defaults.scanOptionProfile));
+  const rowMapOpt = field('MAP のオプションプロファイル', mapOpt, defNote(o.defaults.mapOptionProfile));
+  const rowScanner = field('スキャナー', scanner, `共通設定の既定値: ${o.defaults.scannerAppliance || 'External'}`);
+  // 通常は触らない項目なのでトグルで畳んでおく（開いた状態は保持しない＝毎回閉じる）。
   const optBody = el('div', { class: 'qam-prov-optbody', hidden: true }, [rowScanner, rowScanOpt, rowMapOpt]);
-  const optToggle = el('button', { class: 'btn btn--sm', type: 'button' }, ['オプション設定 ▸']);
-  optToggle.addEventListener('click', () => {
-    optBody.hidden = !optBody.hidden;
-    optToggle.textContent = optBody.hidden ? 'オプション設定 ▸' : 'オプション設定 ▾';
-  });
+  const optCb = el('input', { type: 'checkbox', id: 'qam-opt-toggle' }) as HTMLInputElement;
+  optCb.addEventListener('change', () => { optBody.hidden = !optCb.checked; });
+  const optToggle = el('label', { class: 'qam-prov-opttoggle', for: 'qam-opt-toggle' }, [
+    optCb,
+    el('span', {}, ['オプション設定（スキャナー・オプションプロファイル）']),
+  ]);
   const optSection = el('div', { class: 'qam-prov-opt' }, [optToggle, optBody]);
 
   const readProvision = (): ProvisionInput => ({
