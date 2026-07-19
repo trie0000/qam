@@ -55,6 +55,32 @@ const isCidr = (s: string): boolean => {
   return isIpv4(s.slice(0, i)) && Number.isInteger(bits) && bits >= 0 && bits <= 32;
 };
 
+// プライベートIP（RFC1918）判定。外部接続申請にもとづく検査対象は
+// グローバルIPが前提なので、プライベートIPは登録させない。
+const ipToInt = (s: string): number => s.split('.').reduce((n, o) => n * 256 + Number(o), 0);
+const PRIVATE_RANGES: [number, number][] = [
+  [ipToInt('10.0.0.0'), ipToInt('10.255.255.255')],
+  [ipToInt('172.16.0.0'), ipToInt('172.31.255.255')],
+  [ipToInt('192.168.0.0'), ipToInt('192.168.255.255')],
+];
+const isPrivateIpv4 = (s: string): boolean => {
+  const n = ipToInt(s);
+  return PRIVATE_RANGES.some(([lo, hi]) => n >= lo && n <= hi);
+};
+
+// トークンがプライベートIPを含むか（レンジは両端、CIDR はネットワークアドレスで判定）。
+export function containsPrivateIp(raw: string): boolean {
+  const t = normalizeIpToken(raw);
+  const kind = classifyIpToken(t);
+  if (kind === 'single') return isPrivateIpv4(t);
+  if (kind === 'cidr') return isPrivateIpv4(t.slice(0, t.indexOf('/')));
+  if (kind === 'range') {
+    const i = t.indexOf('-');
+    return isPrivateIpv4(t.slice(0, i)) || isPrivateIpv4(t.slice(i + 1));
+  }
+  return false;
+}
+
 // レンジの "-" は両端に半角スペースがあっても受ける。前後の余計な空白は落とす。
 export const normalizeIpToken = (raw: string): string => raw.trim().replace(/\s*-\s*/g, '-');
 
@@ -72,7 +98,7 @@ const FQDN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/
 export const isFqdn = (raw: string): boolean => FQDN.test(raw.trim());
 
 // 入力欄に薄く出す書式ガイド（そのまま placeholder に使う）。
-export const IP_INPUT_HINT = '10.0.0.1 / 10.0.0.0/24 / 10.0.0.1-10.0.0.99（カンマ区切りで複数可）';
+export const IP_INPUT_HINT = '203.0.113.1 / 203.0.113.0/24 / 203.0.113.1-203.0.113.99（カンマ区切りで複数可・プライベートIP不可）';
 export const FQDN_INPUT_HINT = 'host1.example.jp（www. は付けない・カンマ区切りで複数可）';
 
 export interface TokenParse { tokens: string[]; errors: string[] }
@@ -84,7 +110,10 @@ export function parseIpInput(raw: string): TokenParse {
   for (const part of (raw || '').split(',')) {
     const t = normalizeIpToken(part);
     if (!t) continue;
-    if (classifyIpToken(t)) tokens.push(t); else errors.push(t);
+    if (!classifyIpToken(t)) { errors.push(t); continue; }
+    // プライベートIPは検査対象にしない（グローバルIP前提の外部接続申請のため）。
+    if (containsPrivateIp(t)) { errors.push(`${t}（プライベートIP）`); continue; }
+    tokens.push(t);
   }
   return { tokens, errors };
 }
@@ -180,7 +209,10 @@ export function validateProvision(i: ProvisionInput): string[] {
   }
   if (i.assetType === 'static') {
     // 追加時に検証済みだが、念のためここでも形式を確認する。
-    for (const t of p.ips) if (!classifyIpToken(t)) e.push(`IP の表記が不正です: ${t}`);
+    for (const t of p.ips) {
+      if (!classifyIpToken(t)) e.push(`IP の表記が不正です: ${t}`);
+      else if (containsPrivateIp(t)) e.push(`プライベートIPは登録できません: ${t}`);
+    }
     if (!p.ips.length) e.push('検査資産情報の IP を1つ以上入力してください');
   } else {
     if (!p.dnsNames.length) e.push('検査資産情報の FQDN を1つ以上入力してください');

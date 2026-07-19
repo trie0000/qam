@@ -267,7 +267,10 @@ qam/
   「既存を使う / 別名で作る / 中止」を必ず選ばせる（破壊的な既定を置かない）。途中失敗時は
   完了済みの手順を添えて返し、操作履歴にも中断として残す。
 - **relay の許可パス**: schedule/scan・scheduled_scans.php・asset/group・asset_domain.php の 4 つのみ。
-- **資産種別**: 静的（IP 資産）= 検査種別を両方/SCAN/MAP から選択、検査資産情報は IP のみ（IP_SET へ）。
+- **資産種別**: 静的（IP 指定）= 検査種別を両方/SCAN/MAP から選択、検査資産情報は IP のみ（IP_SET へ）。
+  IP は **プライベートIP（RFC1918）を拒否**（`containsPrivateIp`。単体・CIDR のネットワークアドレス・
+  レンジの両端すべてを見る）。動的では IP エディタを `setEnabled(false)` で無効化し、値も保持しない
+  （隠すだけだと種別を戻したとき等に残ってしまうため）。
   動的（FQDN 指定）= SCAN 固定・MAP 不可、検査資産情報は FQDN のみ（DNS_LIST へ）。`effectiveKind` が
   動的を常に scan へ矯正し、planProvision がもう一方の入力を捨てる（意図しない登録を防ぐ）。
 - **1回のみ実行**: スケジュールは周期を持たず「検査予定日＋開始時刻」だけ指定する。API 上は

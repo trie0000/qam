@@ -54,7 +54,7 @@ const numInput = (value: number, min: number, max: number): HTMLInputElement =>
 // 検査資産情報のエディタ: テキスト欄に直接入力 →「追加」でリストへ。
 // カンマ区切りは分割して複数行として登録する（レンジは展開しない）。
 // 書式違反が1つでもあれば何も追加せず警告し、入力はそのまま残して修正を促す。
-interface TokenEditor { node: HTMLElement; read: () => string[]; add: (tokens: string[]) => void }
+interface TokenEditor { node: HTMLElement; read: () => string[]; add: (tokens: string[]) => void; setEnabled: (on: boolean) => void }
 function tokenEditor(
   hint: string,
   parse: (raw: string) => TokenParse,
@@ -90,6 +90,12 @@ function tokenEditor(
     node,
     read: () => [...tokens],
     add: (init) => { for (const t of init) if (t && !tokens.includes(t)) tokens.push(t); draw(); },
+    // 資産種別で使わない側は入力自体を止める（見えていても打てない状態にしない）。
+    setEnabled: (on) => {
+      input.disabled = !on;
+      addBtn.toggleAttribute('disabled', !on);
+      if (!on) { tokens.length = 0; input.value = ''; draw(); } // 使わない入力は残さない
+    },
   };
 }
 
@@ -109,7 +115,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   // ---- 資産種別・払い出し（AssetGroup / ドメイン）----
   const assetType = el('select', { class: 'in' }) as HTMLSelectElement;
   assetType.append(
-    el('option', { value: 'static' }, ['静的（IP 資産）']),
+    el('option', { value: 'static' }, ['静的（IP 指定）']),
     el('option', { value: 'dynamic' }, ['動的（FQDN 指定）']),
   );
   const appNo = el('input', { class: 'in', placeholder: '例: EXT-2026-001' }) as HTMLInputElement;
@@ -151,7 +157,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const rowState = field('作成時の状態', active);
   const rowRegion = field('地域区分', region, 'ドメイン名の末尾に付く地域コードです。');
   const rowIp = field('検査資産情報（IP）', ipEditor.node,
-    '入力して「追加」（Enter でも可）。カンマ区切りで複数まとめて追加できます。AssetGroup の IP_SET に登録されます。');
+    '入力して「追加」（Enter でも可）。カンマ区切りで複数まとめて追加できます。AssetGroup の IP_SET に登録されます。'
+    + 'プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
   const rowFqdn = field('検査資産情報（FQDN）', fqdnEditor.node,
     '入力して「追加」（Enter でも可）。カンマ区切りで複数まとめて追加できます。AssetGroup の DNS_LIST に登録されます。');
   const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, '共通設定の既定値が入っています。');
@@ -208,6 +215,9 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     show(rowRegion, p.withMap);
     show(rowIp, !isDyn);
     show(rowFqdn, isDyn);
+    // 動的では IP を入力させない（隠すだけでなく無効化して値も残さない）。
+    ipEditor.setEnabled(!isDyn);
+    fqdnEditor.setEnabled(isDyn);
     const isLedger = regMode.value === 'ledger';
     // 管理表のみ更新では Qualys へ送る項目（スキャナー/プロファイル/作成時の状態）は無関係なので隠す。
     show(optSection, !isLedger);
@@ -240,7 +250,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     field('申請部門担当者', applicant, '検査を依頼してきた部門の担当者名です（このツールの利用者ではありません）。'),
 
     section('検査対象'),
-    field('資産種別', assetType, '静的=IP 資産（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は登録しません）。'),
+    field('資産種別', assetType, '静的=IP 指定（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は入力できません）。'),
     rowKind,
     rowIp,
     rowFqdn,
@@ -268,10 +278,12 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     assetType.value = init.assetType;
     kind.value = init.kind;
     if ([...region.options].some((op) => op.value === init.regionCode)) region.value = init.regionCode;
-    ipEditor.add(init.ips);
-    fqdnEditor.add(init.dnsNames);
   }
-  syncRows();
+  syncRows(); // 先に資産種別を反映（使わない側を無効化）してから値を入れる
+  if (init) {
+    if (init.assetType === 'dynamic') fqdnEditor.add(init.dnsNames);
+    else ipEditor.add(init.ips);
+  }
 
   // 共通のスケジュール項目を組み立て、種別ごとに対象とプロファイルだけ差し替える。
   // タイムゾーンは共通設定の既定値を使う（画面では設定しない）。
