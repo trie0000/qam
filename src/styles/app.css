@@ -468,3 +468,7 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 /* 検査資産情報: 複数行入力（改行区切り） */
 .qam-tok-ta { resize: vertical; min-height: 62px; font-family: var(--font-mono); font-size: var(--fs-sm); }
 .qam-tok-input { align-items: flex-start; }
+/* フォームの2段組。片方を hidden にしたら、もう片方が幅いっぱいに広がる（flex:1）。
+   狭い画面では折り返して縦積みになる。 */
+.qam-form-pair { display: flex; flex-wrap: wrap; gap: 0 var(--s-5); }
+.qam-form-pair > * { flex: 1 1 240px; min-width: 0; }

@@ -41,6 +41,9 @@ export interface InspectionFormOpts {
 // セクション見出し（申請情報 / 検査対象 / 検査スケジュール / その他）。
 const section = (title: string): HTMLElement => el('div', { class: 'qam-form-sec' }, [title]);
 
+// 2 つの field を 1 行に並べる（狭い画面では自動で縦積みになる）。
+const pair = (a: HTMLElement, b: HTMLElement): HTMLElement => el('div', { class: 'qam-form-pair' }, [a, b]);
+
 const field = (label: string, node: Node, note = ''): HTMLElement =>
   el('div', { class: 'qam-field' }, [
     el('label', {}, [label]),
@@ -160,7 +163,12 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const startHour = numInput(2, 0, 23);
   const startMinute = numInput(0, 0, 59);
 
+  const rowAssetType = field('資産種別', assetType, '静的=IP 指定（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は入力できません）。');
   const rowKind = field('検査種別', kind, 'MAP と SCAN の両方／MAP 単体／SCAN 単体。');
+  const rowDepartment = field('申請部門', department, 'AssetGroup の Division に記録されます。');
+  const rowApplicant = field('申請部門担当者', applicant, '検査を依頼してきた部門の担当者名です（このツールの利用者ではありません）。');
+  const rowStartDate = field('検査予定日', startDate, 'この日に1回だけ実行されます（繰り返しはありません）。');
+  const rowStartTime = field('開始時刻（時／分）', el('div', { class: 'qam-sched-time' }, [startHour, startMinute]));
   const rowState = field('作成時の状態', active);
   const rowRegion = field('地域区分', region, 'ドメイン名の末尾に付く地域コードです。');
   const rowIp = field('検査資産情報（IP）', ipEditor.node,
@@ -253,20 +261,17 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     section('申請情報'),
     field('外部接続申請番号', appNo, 'AssetGroup 名は「申請番号(仮)」、ドメイン名は「小文字の申請番号.地域コード」になります。'),
     field('件名', subject),
-    field('申請部門', department, 'AssetGroup の Division に記録されます。'),
+    pair(rowDepartment, rowApplicant),
     rowRegion,
-    field('申請部門担当者', applicant, '検査を依頼してきた部門の担当者名です（このツールの利用者ではありません）。'),
 
     section('検査対象'),
-    field('資産種別', assetType, '静的=IP 指定（SCAN/MAP を選択可）。動的=FQDN 指定（SCAN のみ・IP は入力できません）。'),
-    rowKind,
+    pair(rowAssetType, rowKind),
     rowIp,
     rowFqdn,
     field('作成される内容', preview),
 
     section('検査スケジュール'),
-    field('検査予定日', startDate, 'この日に1回だけ実行されます（繰り返しはありません）。'),
-    field('開始時刻（時／分）', el('div', { class: 'qam-sched-time' }, [startHour, startMinute])),
+    pair(rowStartDate, rowStartTime),
     field('スケジュールのタイトル', title, '既定は「AssetGroup名_検査予定日(YYYYMMDD)」。書き換えるとその値を使います。'),
 
     section('その他'),
