@@ -3,7 +3,6 @@ import { parseQualysXml } from '../src/ingest/parse';
 import {
   FileBackend, getSnapshotStamps, resolveAsof, ingestSnapshot, deleteSnapshot,
   prune, addComment, editComment, readComments, readHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, importHistory,
-  backupSlot, listBackups, hasBackup, pruneBackups,
   writeInspection, getInspectionDates, readInspectionAt, readInspectionLegacy,
   appendManualInspection, readManualInspections,
 } from '../src/store';
@@ -196,38 +195,6 @@ describe('store ingest (取込日時 stamp ごと)', () => {
     // 空文字はクリア
     await setAnnotationsBulk(b, 'group', [{ id: 'g0', field: 'DIVISION', value: '' }]);
     expect((await readAnnotations(b, 'group'))['g0'].DIVISION).toBeUndefined();
-  });
-});
-
-describe('backup（slot計算・zip一覧・保管剪定）', () => {
-  let b: MemBackend;
-  beforeEach(() => { b = new MemBackend(); });
-
-  it('backupSlot は保存間隔で時刻を丸める（同間隔内は同一 slot）', () => {
-    const d1 = new Date('2026-06-18T14:05:00');
-    const d2 = new Date('2026-06-18T14:55:00');
-    const d3 = new Date('2026-06-18T15:01:00');
-    expect(backupSlot(d1, 60)).toBe(backupSlot(d2, 60)); // 同じ1時間枠
-    expect(backupSlot(d1, 60)).not.toBe(backupSlot(d3, 60));
-    expect(backupSlot(d1, 60).slice(11)).toBe('14-00-00');
-  });
-
-  it('listBackups は backups/*.zip を slot 名（新しい順）で返す。無関係なファイルは無視', async () => {
-    await b.write('backups/2026-06-01T08-00-00.zip', 'ZIP');
-    await b.write('backups/2026-06-17T08-00-00.zip', 'ZIP');
-    await b.write('backups/relay.log', 'x'); // .zip でないものは対象外
-    expect(await listBackups(b)).toEqual(['2026-06-17T08-00-00', '2026-06-01T08-00-00']);
-    expect(await hasBackup(b, '2026-06-01T08-00-00')).toBe(true);
-    expect(await hasBackup(b, '2026-06-02T08-00-00')).toBe(false);
-  });
-
-  it('pruneBackups は保管日数を超えた zip を削除する', async () => {
-    await b.write('backups/2026-06-01T08-00-00.zip', 'ZIP'); // 古い
-    await b.write('backups/2026-06-17T08-00-00.zip', 'ZIP'); // 新しい
-    const removed = await pruneBackups(b, 7, '2026-06-18');
-    expect(removed).toEqual(['2026-06-01T08-00-00']);
-    expect(await listBackups(b)).toEqual(['2026-06-17T08-00-00']);
-    expect(await b.read('backups/2026-06-01T08-00-00.zip')).toBeNull();
   });
 });
 

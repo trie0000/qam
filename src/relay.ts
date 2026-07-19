@@ -103,10 +103,8 @@ export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/
 // scanOptionProfile / mapOptionProfile: 検査登録時に既定で適用するオプションプロファイル（種別ごと）。
 // scannerAppliance: 既定スキャナー（既定 External）。scheduleTimeZone: 既定タイムゾーン（既定 JP）。
 // regions: 地域区分「ラベル=コード」のカンマ区切り（空なら既定6区分）。ドメイン名の末尾に使う。
-// storageMode: 管理データの保管先。local=relay のデータディレクトリ / sp=SharePoint ライブラリ。
-//   sp は「アプリが SharePoint ページのオリジンで動いている」ことが前提（同一オリジン Cookie 認証）。
-// spSiteUrl / spLibrary: sp のときの接続先。どちらも SPO を読む前に要るのでローカル設定に置く。
-export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; backupIntervalMin: number; backupRetentionDays: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string; storageMode: 'local' | 'sp'; spSiteUrl: string; spLibrary: string }
+// spSiteUrl / spLibrary: 管理データの保管先（SharePoint）。SPO を読む前に要るのでローカル設定に置く。
+export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string; spSiteUrl: string; spLibrary: string }
 // 設定は relay が持つが、SharePoint ページ上で動くとき relay は Qualys 取得にしか要らない。
 // relay が落ちていても保管先の判断はできるよう、直近値を控えておいて代用する。
 const CFG_CACHE = 'qam:config-cache';
@@ -129,10 +127,6 @@ export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfi
 };
 export const shutdownRelay = (): Promise<unknown> => postJson('/qam/shutdown', {});
 
-// バックアップ（データディレクトリ全体の zip 退避/展開）。zip化・展開はファイルの所在地である relay 側で行う。
-export interface BackupResult { ok: boolean; files?: number; error?: string }
-export const backupNow = (slot: string): Promise<BackupResult> => postJson('/qam/backup', { slot });
-export const restoreNow = (slot: string): Promise<BackupResult> => postJson('/qam/restore', { slot });
 
 // 中継サーバの死活確認。起動していない/到達不能なら false（数秒でタイムアウト）。
 export async function checkRelay(timeoutMs = 3000): Promise<boolean> {

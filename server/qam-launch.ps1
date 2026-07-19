@@ -140,18 +140,24 @@ function Invoke-CdpEvaluate {
 
 # ─── 4) ローダ（SharePoint のライブラリからアプリ本体を取って起動する）──────
 # バンドルは SP のライブラリに置いてあるので、更新はそこを差し替えるだけで全員に反映される。
+# ★初回は SharePoint にまだアプリ本体が無い（配置はアプリの画面から行うため）。
+#   そこで「SP のライブラリ → 無ければローカル relay」の順に取りに行く。
+#   これで最初の1回も起動でき、配置後は全員が SP 側の最新を使う。
 $LoaderJs = @'
 (async () => {
   if (document.getElementById('qam-root')) return 'already';
   const m = location.pathname.match(/^\/(?:sites|teams)\/[^\/]+/);
   const web = location.origin + (m ? m[0] : '');
-  const url = web + '/QamData/app/qam.bundle.js?t=' + Date.now();
-  const r = await fetch(url, { credentials: 'include' });
-  if (!r.ok) return 'bundle-missing:' + r.status;
-  (0, eval)(await r.text());
-  return 'started';
+  const tryFetch = async (u, opt) => { try { const r = await fetch(u, opt); return r.ok ? await r.text() : null; } catch (e) { return null; } };
+  let js = await tryFetch(web + '/QamData/app/qam.bundle.js?t=' + Date.now(), { credentials: 'include' });
+  let from = 'sharepoint';
+  if (!js) { js = await tryFetch('http://127.0.0.1:__RELAY_PORT__/qam/bundle/qam.bundle.js', {}); from = 'relay'; }
+  if (!js) return 'bundle-missing';
+  (0, eval)(js);
+  return 'started:' + from;
 })()
 '@
+$LoaderJs = $LoaderJs.Replace('__RELAY_PORT__', [string]$RelayPort)
 
 # 認証が通ったかの判定（SP の API が引けるか）。
 $AuthProbeJs = @'
@@ -196,7 +202,11 @@ try {
     $res = Invoke-CdpEvaluate -WsUrl $t.webSocketDebuggerUrl -Expression $LoaderJs -TimeoutSec 60
     if (-not $res) { throw 'アプリの注入に失敗しました' }
     if ($res -match 'bundle-missing') {
-        throw 'SharePoint にアプリ本体がありません。QAM の設定画面で「アプリを SharePoint に配置」を実行してください'
+        throw 'アプリ本体を取得できません（SharePoint にも中継サーバにも見つかりません）'
+    }
+    if ($res -match 'started:relay') {
+        Write-Warn 'SharePoint にアプリ本体がまだありません。中継サーバから起動しました'
+        Write-Warn '設定 → 開発者 →「アプリを SharePoint に配置」を一度実行してください'
     }
     Write-Step '起動しました'
     $ok = $true

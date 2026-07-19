@@ -10,7 +10,7 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts, protectSecret } from './relay';
+import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, resolveHosts, protectSecret } from './relay';
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
@@ -25,7 +25,7 @@ import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, type QamOp,
 } from './store';
 // メモ・注釈・操作履歴・管理表・ライセンス推移は「複数人が同時に足す」記録なので repo 経由。
 // 保管先（ファイル / SharePoint リスト）は起動時に決まる。
@@ -1053,11 +1053,89 @@ async function runProvision(
 }
 
 // 接続先と認証情報を解決（未設定ならその場で入力を促す）。取得・登録で共有する。
+// ローカル（relay のデータディレクトリ）に残っている既存データを SharePoint へ移す。
+// SharePoint 一本化にあたっての引っ越し用。何度実行してもよいよう、
+// **同名が既にあるものは上書きしない**（後から取り込んだ SharePoint 側を壊さない）。
+//   ファイル（スナップショット・履歴・生XML）→ ライブラリ
+//   記録（メモ・注釈・操作履歴・管理表・ライセンス推移）→ リスト
+async function migrateLocalToSharePoint(onProgress: (msg: string) => void): Promise<string[]> {
+  const done: string[] = [];
+  const local = fileRepo(relayBackend);
+
+  // 1) ファイル系: ディレクトリを辿って写す
+  const copyDir = async (dir: string): Promise<number> => {
+    let n = 0;
+    let names: string[] = [];
+    try { names = await relayBackend.list(dir); } catch { return 0; }
+    for (const name of names) {
+      const path = dir ? `${dir}/${name}` : name;
+      if (!name.includes('.')) { n += await copyDir(path); continue; } // 拡張子が無ければフォルダ扱い
+      if (await backend.read(path) !== null) continue;                  // 既にある物は触らない
+      const body = await relayBackend.read(path);
+      if (body === null) continue;
+      onProgress(`ファイルを移送中: ${path}`);
+      await backend.write(path, body);
+      n++;
+    }
+    return n;
+  };
+  for (const dir of ['snapshots', 'history', 'raw', 'inspection']) {
+    const n = await copyDir(dir);
+    if (n) done.push(`${dir}: ${n} ファイル`);
+  }
+  const runs = await relayBackend.read('runs.jsonl');
+  if (runs && await backend.read('runs.jsonl') === null) { await backend.write('runs.jsonl', runs); done.push('runs.jsonl'); }
+
+  // 2) 記録系: リストへ入れ直す（ts をキーに、既にある行は飛ばす）
+  onProgress('メモ・注釈・操作履歴を移送中…');
+  const existingComments = new Set((await repo.readComments()).map((c) => `${c.entity}|${c.id}|${c.ts}`));
+  let nc = 0;
+  for (const c of await local.readComments()) {
+    if (existingComments.has(`${c.entity}|${c.id}|${c.ts}`)) continue;
+    await repo.addComment(c); nc++;
+  }
+  if (nc) done.push(`メモ: ${nc} 件`);
+
+  let na = 0;
+  for (const e of ENTITIES.map((x) => x.key)) {
+    const all = await local.readAnnotations(e);
+    const updates = Object.entries(all).flatMap(([id, fields]) =>
+      Object.entries(fields).map(([field, value]) => ({ id, field, value })));
+    if (!updates.length) continue;
+    await repo.setAnnotationsBulk(e, updates); na += updates.length;
+  }
+  if (na) done.push(`注釈: ${na} 件`);
+
+  const existingOps = new Set((await repo.readOps()).map((o) => `${o.ts}|${o.action}`));
+  let no = 0;
+  for (const o of await local.readOps()) {
+    if (existingOps.has(`${o.ts}|${o.action}`)) continue;
+    await repo.logOp(o); no++;
+  }
+  if (no) done.push(`操作履歴: ${no} 件`);
+
+  const existingIns = new Set((await repo.readManualInspections()).map((m) => `${m.ts}|${m.kind}`));
+  let ni = 0;
+  for (const m of await local.readManualInspections()) {
+    if (existingIns.has(`${m.ts}|${m.kind}`)) continue;
+    await repo.appendManualInspection(m); ni++;
+  }
+  if (ni) done.push(`簡易検査の管理表: ${ni} 件`);
+
+  const existingLic = new Set((await repo.readLicenses()).map((l) => l.ts));
+  let nl = 0;
+  for (const l of await local.readLicenses()) {
+    if (existingLic.has(l.ts)) continue;
+    await repo.recordLicense(l.ts, l.ips, l.scanned); nl++;
+  }
+  if (nl) done.push(`ライセンス推移: ${nl} 件`);
+
+  return done;
+}
+
 // アプリ本体（バンドル）を SharePoint のライブラリへ置く。
 // ローダはここから読むので、更新はこの配置を実行するだけで全員に反映される。
 async function deployBundleToSharePoint(): Promise<void> {
-  const cfg = await getConfig();
-  if (cfg.storageMode !== 'sp') throw new Error('保管先が SharePoint のときだけ配置できます');
   const r = await fetch(`${RELAY}/qam/bundle/qam.bundle.js`);
   if (!r.ok) throw new Error(`アプリ本体を取得できません（中継サーバ）: HTTP ${r.status}`);
   const js = await r.text();
@@ -1582,8 +1660,6 @@ async function openSettings(): Promise<void> {
   const proxy = el('input', { class: 'in', value: cfg.proxy || '', placeholder: 'http://proxy:8080' }) as HTMLInputElement;
   const ret = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.retentionDays || 90) }) as HTMLInputElement;
   const licLimit = el('input', { class: 'in', type: 'number', min: '0', value: String(cfg.licenseLimit || 0) }) as HTMLInputElement;
-  const bkInterval = el('input', { class: 'in', type: 'number', min: '0', value: String(cfg.backupIntervalMin ?? 60) }) as HTMLInputElement;
-  const bkRetention = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.backupRetentionDays ?? 7) }) as HTMLInputElement;
   const userBu = el('input', { class: 'in', value: cfg.userBusinessUnit || 'Unassigned', placeholder: 'Unassigned' }) as HTMLInputElement;
   const userCountry = el('input', { class: 'in', value: cfg.userCountry || '', placeholder: '例: Japan' }) as HTMLInputElement;
   const fiscalMonth = el('input', { class: 'in', type: 'number', min: '1', max: '12', value: String(cfg.fiscalStartMonth || 4) }) as HTMLInputElement;
@@ -1593,9 +1669,6 @@ async function openSettings(): Promise<void> {
   const scannerAp = el('input', { class: 'in', value: cfg.scannerAppliance || 'External', placeholder: 'External' }) as HTMLInputElement;
   const schedTz = el('input', { class: 'in', value: cfg.scheduleTimeZone || 'JP', placeholder: 'JP' }) as HTMLInputElement;
   const regionsIn = el('input', { class: 'in', value: cfg.regions || formatRegions(DEFAULT_REGIONS), placeholder: formatRegions(DEFAULT_REGIONS) }) as HTMLInputElement;
-  const storageMode = el('select', { class: 'in' }) as HTMLSelectElement;
-  ([['local', 'ローカル（relay のデータディレクトリ）'], ['sp', 'SharePoint（複数人で共有）']] as [string, string][])
-    .forEach(([v, t]) => storageMode.append(el('option', { value: v, selected: (cfg.storageMode || 'local') === v }, [t])));
   const spSite = el('input', { class: 'in', value: cfg.spSiteUrl || '', placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE' }) as HTMLInputElement;
   const spLib = el('input', { class: 'in', value: cfg.spLibrary || 'QamData', placeholder: 'QamData' }) as HTMLInputElement;
   // 暗号文は復号口が無いので画面へは戻せない。保存済みなら「入力済み」を示すだけにする。
@@ -1628,6 +1701,25 @@ async function openSettings(): Promise<void> {
     finally { deployBtn.removeAttribute('disabled'); }
   });
 
+  // ローカルに残っている既存データを SharePoint へ引っ越す（一度きりの想定・再実行しても安全）
+  const migrateBtn = el('button', { class: 'btn btn--sm' }, ['ローカルのデータを SharePoint へ移送']);
+  const migrateMsg = el('div', { class: 'qam-insp-sec-note' });
+  migrateBtn.addEventListener('click', async () => {
+    if (!(await confirmModal('ローカルのデータを移送', '中継サーバのデータディレクトリに残っている既存データ（スナップショット・変更履歴・メモ・注釈・操作履歴・管理表）を SharePoint へ写します。同じものが既にあれば上書きしません。よろしいですか？', '移送する'))) return;
+    migrateBtn.setAttribute('disabled', 'true');
+    try {
+      const done = await migrateLocalToSharePoint((m) => { migrateMsg.textContent = m; });
+      migrateMsg.textContent = done.length ? `移送しました: ${done.join(' / ')}` : '移送するものはありませんでした';
+      recordOp('データ移送', done.join(' / ') || '対象なし');
+      toast('移送が完了しました', 'ok');
+      refresh();
+    } catch (e) {
+      migrateMsg.textContent = `移送に失敗: ${(e as Error).message}`;
+      toast('移送に失敗しました', 'error');
+    } finally { migrateBtn.removeAttribute('disabled'); }
+  });
+  const migrateBox = el('div', {}, [migrateBtn, migrateMsg]);
+
   const dataResetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['選択したデータをリセット']);
   dataResetBtn.addEventListener('click', async () => {
     const opts = { snapshots: ckSnap.checked, history: ckHist.checked, comments: ckCmt.checked };
@@ -1659,44 +1751,13 @@ async function openSettings(): Promise<void> {
     } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
   });
 
-  // 共通設定: バックアップからの復元（メモ・注釈・変更履歴・ライセンス推移を退避時点へ戻す）。
-  const bkSelect = el('select', { class: 'in' }) as HTMLSelectElement;
-  const fillBackups = async (selectSlot?: string) => {
-    clear(bkSelect);
-    const list = await listBackups(backend);
-    if (list.length) list.forEach((s) => bkSelect.append(el('option', { value: s, selected: s === selectSlot }, [fmtStamp(s)])));
-    else bkSelect.append(el('option', { value: '' }, ['(バックアップなし)']));
-  };
-  await fillBackups();
-  // 今すぐバックアップ（動作確認用）: 自動取得を待たず手動で1回退避し、結果を表示する。
-  const bkNowBtn = el('button', { class: 'btn btn--sm' }, ['今すぐバックアップ']);
-  bkNowBtn.addEventListener('click', async () => {
-    bkNowBtn.setAttribute('disabled', 'true');
-    try {
-      const interval = Math.max(0, parseInt(bkInterval.value, 10) || 0) || 60;
-      const slot = backupSlot(new Date(), interval);
-      const res = await backupNow(slot);
-      if (!res.ok) throw new Error(res.error || 'バックアップに失敗しました');
-      await fillBackups(slot);
-      toast(`バックアップしました（${res.files ?? 0}ファイル / ${fmtStamp(slot)}）`, 'ok');
-    } catch (e) { toast('バックアップに失敗: ' + (e as Error).message, 'error'); }
-    finally { bkNowBtn.removeAttribute('disabled'); }
-  });
-  const bkRestoreBtn = el('button', { class: 'btn btn--sm' }, ['選択したバックアップから復元']);
-  bkRestoreBtn.addEventListener('click', async () => {
-    const slot = bkSelect.value;
-    if (!slot) { toast('復元するバックアップを選択してください', 'error'); return; }
-    if (!(await confirmModal('バックアップから復元', `${fmtStamp(slot)} 時点の状態に戻します（全データ＝資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）。この時点以降に追加したメモ・取込なども取り除かれ、退避時点と同じ状態になります。よろしいですか？`, '復元'))) return;
-    try { const res = await restoreNow(slot); if (!res.ok) throw new Error(res.error || '復元に失敗しました'); toast(`復元しました（${res.files ?? 0}ファイル）`, 'ok'); refresh(); }
-    catch (e) { toast('復元に失敗: ' + (e as Error).message, 'error'); }
-  });
-  const bkRestoreBox = el('div', {}, [bkSelect, el('div', { style: 'margin-top:var(--s-3)' }, [bkRestoreBtn])]);
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('管理データの保管先', storageMode, 'ローカル＝relay のデータディレクトリ（1人用）。SharePoint＝リストとライブラリで複数人が同じデータを見る。SharePoint はアプリが SP ページ上で動いている必要があります（接続できない場合は自動でローカルに戻ります）。'), field('SharePoint サイト URL', spSite, '例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE。既存サイトに相乗りできます。'), field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'), field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('SharePoint サイト URL', spSite, '例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE。既存サイトに相乗りできます。'), field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'), field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
     { id: 'dev', label: '開発者', pane: () => [
-      field('アプリを SharePoint に配置', deployBtn, 'アプリ本体を SharePoint のライブラリ（QamData/app/）へ置きます。起動アイコンはここから読むので、更新はこの配置を実行するだけで全員に反映されます。保管先が SharePoint のときだけ使えます。'),
+      field('アプリを SharePoint に配置', deployBtn, 'アプリ本体を SharePoint のライブラリ（QamData/app/）へ置きます。起動アイコンはここから読むので、更新はこの配置を実行するだけで全員に反映されます。'),
+      field('ローカルのデータを移送', migrateBox, '以前ローカル保管で使っていたデータを SharePoint へ写します。同じものが既にあれば上書きしません（何度実行しても安全）。'),
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
       field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [`${BUILD}${BUILDTIME ? '  (' + BUILDTIME + ')' : ''}`])),
@@ -1716,7 +1777,7 @@ async function openSettings(): Promise<void> {
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
-        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)), storageMode: (storageMode.value === 'sp' ? 'sp' : 'local'), spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' });
+        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)), spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
         await storeQualysPassword(pass.value); // 平文は保存しない（DPAPI 暗号文にする）
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
@@ -1923,22 +1984,6 @@ function ensureAuthor(): Promise<void> {
 //   ・slot = 保存間隔で丸めた時刻。同 slot のバックアップが既にあればスキップ（＝1時間に1回）。
 //   ・ランダムなジッタ後に再確認して未取得なら作成 → 同時起動でも実質「ランダムな1名」だけが取得。
 //   ・誰もツールを上げていない時間帯は作成されない（起動時のみ実行のため自然にスキップ）。
-//   ・期限切れ（保管日数超過）は自動削除。失敗・作業ログ出力はしない（本処理を止めない）。
-async function maybeBackup(): Promise<void> {
-  try {
-    const cfg = await getConfig();
-    const interval = cfg.backupIntervalMin ?? 60;
-    const retention = cfg.backupRetentionDays ?? 7;
-    if (interval <= 0) return; // 0 で無効
-    const slot = backupSlot(new Date(), interval);
-    if (await hasBackup(backend, slot)) { await pruneBackups(backend, retention, today()); return; }
-    // ランダムジッタ（0〜5秒）で同時起動の競合を散らし、再確認して未取得の1名だけが作成する。
-    await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 5000)));
-    if (await hasBackup(backend, slot)) return;
-    const res = await backupNow(slot);
-    if (res.ok) await pruneBackups(backend, retention, today());
-  } catch { /* バックアップ失敗は本処理に影響させない */ }
-}
 
 // 無人取込（Edge ヘッドレス等から ?autoingest=<種別CSV> で起動）。確認ダイアログは出さない。
 // 当日スナップショットが既にある種別はスキップ。認証情報はこのブラウザプロファイルの localStorage を使う。
@@ -1978,50 +2023,58 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
   }
 }
 
-// 管理データの保管先を設定に従って切り替える（local = relay のファイル / sp = SharePoint ライブラリ）。
-// 失敗しても起動は止めず、ローカルのまま警告する。切替ミスで「データが空」に見える事故を防ぐため、
-// 起動時に一度だけ疎通を確かめてから採用する。
-async function applyStorageMode(): Promise<void> {
+// 管理データの保管先は SharePoint（リスト＋ライブラリ）で固定。
+// 繋がらないときに黙ってローカルで動くと「自分だけ違うものを見ている」事故になるので、
+// 失敗は隠さずに止める。
+async function initStorage(): Promise<{ ok: true } | { ok: false; reason: string }> {
   const cfg = await getConfig();
-  if (cfg.storageMode !== 'sp') return;
   const siteUrl = (cfg.spSiteUrl || '').trim();
   const library = (cfg.spLibrary || '').trim() || 'QamData';
-  if (!siteUrl) { toast('保管先が SharePoint ですが、サイト URL が未設定です。ローカル保管で起動します', 'error'); return; }
+  if (!siteUrl) return { ok: false, reason: 'SharePoint サイト URL が未設定です（設定 → 共通設定）' };
   try {
     const http = createSpHttp({ siteUrl }); // ダイジェストをライブラリ/リストで共有する
-    await ensureLibrary(http, library); // 無ければ作る（無いと配下の書き込みが全部 404 になる）
+    await ensureLibrary(http, library);     // 無ければ作る
     setBackend(createSpBackend({ siteUrl, library, http }));
-    await backend.list(''); // 同一オリジン Cookie が要る。SP のオリジンで動いていなければここで落ちる
+    await backend.list('');                 // 同一オリジン Cookie が要る。疎通確認を兼ねる
     const spRepo = createSpRepo({ siteUrl, http });
-    await spRepo.ensureLists(); // 初回はリストと列を自動作成する
+    await spRepo.ensureLists();             // 初回はリストと列を自動作成する
     setRepo(spRepo);
-    recordOp('保管先', `SharePoint (${library})`);
+    return { ok: true };
   } catch (e) {
-    // 片方だけ切り替わった状態を残さない（両方ローカルへ戻す）。
-    setBackend(relayBackend);
-    setRepo(fileRepo(backend));
-    toast(`SharePoint に接続できないため、ローカル保管で起動しました: ${(e as Error).message}`, 'error');
+    return { ok: false, reason: (e as Error).message };
   }
 }
 
+// 保管先に繋がらないときの案内。ここで止める（読み書きの当てが無いまま画面を出さない）。
+function showStorageDownModal(reason: string): void {
+  const body = el('div', {}, [
+    el('div', { style: 'display:flex;gap:var(--s-3);align-items:flex-start' }, [
+      el('span', { style: 'color:var(--danger);flex:none', html: icon('alert', 20) }),
+      el('div', {}, ['SharePoint の保管先に接続できません。データの読み書きができないため、起動を中止しました。']),
+    ]),
+    el('div', { style: 'margin-top:var(--s-4)' }, [callout(reason)]),
+    el('div', { style: 'margin-top:var(--s-4)' }, [callout(
+      'このアプリは SharePoint のページ上で動かす必要があります（サインイン情報を使うため）。'
+      + 'qam-start.bat から起動してください。サイト URL は設定 → 共通設定で確認できます。',
+    )]),
+  ]);
+  openModal({ title: '保管先に接続できません', body });
+}
+
 async function start(): Promise<void> {
-  startRelayPolling(); // 30秒間隔で中継サーバを死活監視（落ちたら警告・復帰で自動クローズ）
+  startRelayPolling(); // 30秒間隔で中継サーバを死活監視（Qualys の取得・登録に要る）
   if (!(await checkRelay())) {
-    // SharePoint ページ上（overlay）では relay は Qualys の取得・登録にしか要らない。
-    // 保管が SPO なら参照は relay 無しで成立するので、起動自体は止めない。
-    if (!IS_OVERLAY) { showRelayDownModal(); return; }
+    // relay は Qualys の取得・登録にしか要らない。保管先は SharePoint なので参照は成立する。
     toast('中継サーバに接続できません。Qualys の取得・登録はできませんが、保存済みデータは参照できます', 'error');
   }
-  await applyStorageMode(); // 以降の store 呼び出しはすべてこの保管先に向く
-  // 起動時に記入者名を強制入力させない。更新作業（取込/メモ・注釈の記載/削除）の直前に未設定なら促す。
+  const storage = await initStorage();
+  if (!storage.ok) { showStorageDownModal(storage.reason); return; }
   refresh();
   const ai = new URLSearchParams(location.search).get('autoingest');
   if (ai !== null) {
     // 無人モード: バックアップ→取込 の順に実行し、終わったらウィンドウを閉じる（ヘッドレス用）。
     const kinds = (ai || 'host,group,domain,user').split(',').map((s) => s.trim()).filter(Boolean) as QamEntity[];
-    void (async () => { await maybeBackup(); await runAutoIngest(kinds); try { window.close(); } catch { /* 通常ブラウザでは閉じない */ } })();
-  } else {
-    void maybeBackup(); // 起動時バックアップ（バックグラウンドで実行。UI はブロックしない）
+    void (async () => { await runAutoIngest(kinds); try { window.close(); } catch { /* 通常ブラウザでは閉じない */ } })();
   }
 }
 start();

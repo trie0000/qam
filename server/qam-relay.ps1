@@ -135,75 +135,6 @@ function Resolve-SafePath { param([string]$Rel)
 }
 
 # ─── バックアップ（データディレクトリ全体を zip 退避/展開） ───────────────────
-# 退避対象から外すトップ階層/ファイル: raw(再取得可・巨大)・backups(再帰)・ログ・env(環境固有設定)・.bak。
-function Test-QamBackupExcluded { param([string]$Rel)
-    $top = ($Rel -split '[\\/]')[0]
-    if ($top -ieq 'backups' -or $top -ieq 'raw') { return $true }
-    $leaf = Split-Path $Rel -Leaf
-    if ($leaf -ieq '.qam.env') { return $true }
-    if ($leaf -match '\.(log|bak)$') { return $true }
-    return $false
-}
-# データディレクトリ全体を backups/<slot>.zip へ圧縮。退避したファイル数を返す。
-function Invoke-QamBackup { param([string]$Slot)
-    if ($Slot -notmatch '^\d{4}-\d{2}-\d{2}T[\d-]+$') { throw "不正な slot: $Slot" }
-    $zipPath = Resolve-SafePath "backups\$Slot.zip"
-    $bdir = Split-Path $zipPath -Parent
-    if (-not (Test-Path -LiteralPath $bdir)) { New-Item -ItemType Directory -Path $bdir -Force | Out-Null }
-    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-    $count = 0
-    $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
-    try {
-        foreach ($f in (Get-ChildItem -LiteralPath $DataFull -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-            $rel = $f.FullName.Substring($DataFull.Length).TrimStart('\', '/')
-            if (Test-QamBackupExcluded $rel) { continue }
-            $entryName = $rel -replace '\\', '/'
-            # 共有ロック中でも読めるよう、CreateEntryFromFile ではなく明示的に共有読みで取り込む。
-            $entry = $zip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
-            $es = $entry.Open()
-            try {
-                $fsr = New-Object System.IO.FileStream($f.FullName, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-                try { $fsr.CopyTo($es) } finally { $fsr.Dispose() }
-            } finally { $es.Dispose() }
-            $count++
-        }
-    } finally { $zip.Dispose() }
-    Add-QamLog "BACKUP $Slot files=$count"
-    return $count
-}
-# backups/<slot>.zip を展開してデータディレクトリへ「その時点の状態」に復元。復元したファイル数を返す。
-# 真の時点復元: 退避対象スコープ内で zip に無い現ファイルは削除する（退避後に追加したメモ/注釈/
-# スナップショット等を取り除き、退避時点と同じ状態に戻す）。除外スコープ(raw/backups/ログ/設定)は対象外。
-function Invoke-QamRestore { param([string]$Slot)
-    if ($Slot -notmatch '^\d{4}-\d{2}-\d{2}T[\d-]+$') { throw "不正な slot: $Slot" }
-    $zipPath = Resolve-SafePath "backups\$Slot.zip"
-    if (-not (Test-Path -LiteralPath $zipPath)) { throw "バックアップが見つかりません: $Slot" }
-    $count = 0
-    $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-    try {
-        # zip に含まれるエントリ名（DataDir 相対・スラッシュ区切り）の集合。
-        $keep = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
-        foreach ($entry in $zip.Entries) { if ($entry.Name) { [void]$keep.Add($entry.FullName) } }
-        # スコープ内で zip に無い現ファイルを削除（メモ削除等を反映＝退避時点へ巻き戻す）。
-        foreach ($f in (Get-ChildItem -LiteralPath $DataFull -Recurse -File -Force -ErrorAction SilentlyContinue)) {
-            $rel = $f.FullName.Substring($DataFull.Length).TrimStart('\', '/')
-            if (Test-QamBackupExcluded $rel) { continue }
-            if (-not $keep.Contains(($rel -replace '\\', '/'))) { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction SilentlyContinue }
-        }
-        foreach ($entry in $zip.Entries) {
-            if (-not $entry.Name) { continue } # ディレクトリエントリは無視
-            # zip-slip 対策: エントリ名も DataDir 配下に閉じ込めて解決（.. を拒否）。
-            $dest = Resolve-SafePath $entry.FullName
-            $ddir = Split-Path $dest -Parent
-            if (-not (Test-Path -LiteralPath $ddir)) { New-Item -ItemType Directory -Path $ddir -Force | Out-Null }
-            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
-            $count++
-        }
-    } finally { $zip.Dispose() }
-    Add-QamLog "RESTORE $Slot files=$count"
-    return $count
-}
-
 # ─── Qualys プロキシ取得 ─────────────────────────────────────────────────────
 function Get-QamText1 { param([string]$Xml, [string]$Pattern)
     $m = [regex]::Match($Xml, $Pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
@@ -644,8 +575,6 @@ function Invoke-Route { param($Ctx)
                 $b = Get-Body $req | ConvertFrom-Json
                 if ($b.PSObject.Properties.Name -contains 'retentionDays') { Set-QamEnvValue $EnvFile 'QAM_RAW_RETENTION_DAYS' ([int]$b.retentionDays) }
                 if ($b.PSObject.Properties.Name -contains 'licenseLimit') { Set-QamEnvValue $EnvFile 'QAM_LICENSE_LIMIT' ([int]$b.licenseLimit) }
-                if ($b.PSObject.Properties.Name -contains 'backupIntervalMin') { Set-QamEnvValue $EnvFile 'QAM_BACKUP_INTERVAL_MIN' ([int]$b.backupIntervalMin) }
-                if ($b.PSObject.Properties.Name -contains 'backupRetentionDays') { Set-QamEnvValue $EnvFile 'QAM_BACKUP_RETENTION_DAYS' ([int]$b.backupRetentionDays) }
                 if ($b.PSObject.Properties.Name -contains 'userBusinessUnit') { Set-QamEnvValue $EnvFile 'QAM_USER_BUSINESS_UNIT' $b.userBusinessUnit }
                 if ($b.PSObject.Properties.Name -contains 'userCountry') { Set-QamEnvValue $EnvFile 'QAM_USER_COUNTRY' $b.userCountry }
                 if ($b.PSObject.Properties.Name -contains 'fiscalStartMonth') { Set-QamEnvValue $EnvFile 'QAM_FISCAL_START_MONTH' ([int]$b.fiscalStartMonth) }
@@ -655,7 +584,6 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'scannerAppliance') { Set-QamEnvValue $EnvFile 'QAM_SCANNER_APPLIANCE' $b.scannerAppliance }
                 if ($b.PSObject.Properties.Name -contains 'scheduleTimeZone') { Set-QamEnvValue $EnvFile 'QAM_SCHEDULE_TIME_ZONE' $b.scheduleTimeZone }
                 if ($b.PSObject.Properties.Name -contains 'regions') { Set-QamEnvValue $EnvFile 'QAM_REGIONS' $b.regions }
-                if ($b.PSObject.Properties.Name -contains 'storageMode') { Set-QamEnvValue $EnvFile 'QAM_STORAGE_MODE' $b.storageMode }
                 if ($b.PSObject.Properties.Name -contains 'spSiteUrl') { Set-QamEnvValue $EnvFile 'QAM_SP_SITE_URL' $b.spSiteUrl }
                 if ($b.PSObject.Properties.Name -contains 'spLibrary') { Set-QamEnvValue $EnvFile 'QAM_SP_LIBRARY' $b.spLibrary }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
@@ -672,8 +600,6 @@ function Invoke-Route { param($Ctx)
                 qualysBase = $baseV; qualysUser = $userV; proxy = $proxyV; port = $Port
                 retentionDays = if ($env:QAM_RAW_RETENTION_DAYS) { [int]$env:QAM_RAW_RETENTION_DAYS } else { 90 }
                 licenseLimit = if ($env:QAM_LICENSE_LIMIT) { [int]$env:QAM_LICENSE_LIMIT } else { 0 }
-                backupIntervalMin = if ($null -ne $env:QAM_BACKUP_INTERVAL_MIN -and $env:QAM_BACKUP_INTERVAL_MIN -ne '') { [int]$env:QAM_BACKUP_INTERVAL_MIN } else { 60 }
-                backupRetentionDays = if ($null -ne $env:QAM_BACKUP_RETENTION_DAYS -and $env:QAM_BACKUP_RETENTION_DAYS -ne '') { [int]$env:QAM_BACKUP_RETENTION_DAYS } else { 7 }
                 userBusinessUnit = if ($env:QAM_USER_BUSINESS_UNIT) { $env:QAM_USER_BUSINESS_UNIT } else { 'Unassigned' }
                 userCountry = $env:QAM_USER_COUNTRY
                 fiscalStartMonth = if ($null -ne $env:QAM_FISCAL_START_MONTH -and $env:QAM_FISCAL_START_MONTH -ne '') { [int]$env:QAM_FISCAL_START_MONTH } else { 4 }
@@ -682,21 +608,10 @@ function Invoke-Route { param($Ctx)
                 mapOptionProfile = $env:QAM_MAP_OPTION_PROFILE
                 scannerAppliance = if ($env:QAM_SCANNER_APPLIANCE) { $env:QAM_SCANNER_APPLIANCE } else { 'External' }
                 scheduleTimeZone = if ($env:QAM_SCHEDULE_TIME_ZONE) { $env:QAM_SCHEDULE_TIME_ZONE } else { 'JP' }
-                storageMode = if ($env:QAM_STORAGE_MODE -eq 'sp') { 'sp' } else { 'local' }
                 spSiteUrl = $env:QAM_SP_SITE_URL
                 spLibrary = if ($env:QAM_SP_LIBRARY) { $env:QAM_SP_LIBRARY } else { 'QamData' }
                 regions = $env:QAM_REGIONS
             }; return
-        }
-        '^/qam/backup$' {
-            try { $n = Invoke-QamBackup (Get-Body $req | ConvertFrom-Json).slot; Send-Json $Ctx @{ ok = $true; files = $n } }
-            catch { Add-QamLog "BACKUP error: $($_.Exception.Message)"; Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 500 }
-            return
-        }
-        '^/qam/restore$' {
-            try { $n = Invoke-QamRestore (Get-Body $req | ConvertFrom-Json).slot; Send-Json $Ctx @{ ok = $true; files = $n } }
-            catch { Add-QamLog "RESTORE error: $($_.Exception.Message)"; Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 500 }
-            return
         }
         '^/qam/shutdown$' { Send-Json $Ctx @{ ok = $true }; $script:QamStop = $true; return }
         default { Send-Json $Ctx @{ error = "no route: $path" } 404; return }

@@ -275,38 +275,9 @@ export async function prune(b: FileBackend, retentionDays: number, refDate: stri
 }
 
 // --- バックアップ（データディレクトリ全体の定期退避・復元） ---
-// バックアップ実体は backups/<slot>.zip（データディレクトリ全体を圧縮したもの。raw/backups/ログ/設定は除外）。
-// zip 化・展開はファイルの所在地である relay 側で行う（relay.ts の backupNow/restoreNow）。
 // store 側は slot 計算・一覧・保管期間の剪定だけを担う（FileBackend だけで完結＝単体テスト可能）。
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
-// 保存間隔(分)で丸めたローカル時刻を 'YYYY-MM-DDTHH-mm-ss' で返す。同一スロットは同名＝重複退避を防ぐ。
-export function backupSlot(date: Date, intervalMin: number): string {
-  const ms = Math.max(1, intervalMin) * 60000;
-  const d = new Date(Math.floor(date.getTime() / ms) * ms);
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}-${pad2(d.getMinutes())}-${pad2(d.getSeconds())}`;
-}
-
-// 既存バックアップの slot 一覧（新しい順）。backups/<slot>.zip の .zip を除いた名前。
-export async function listBackups(b: FileBackend): Promise<string[]> {
-  return (await b.list('backups'))
-    .filter((n) => /^\d{4}-\d{2}-\d{2}T.*\.zip$/.test(n))
-    .map((n) => n.replace(/\.zip$/, ''))
-    .sort().reverse();
-}
-export const hasBackup = async (b: FileBackend, slot: string): Promise<boolean> =>
-  (await listBackups(b)).includes(slot);
-
-// 保管日数を超えた古いバックアップ(zip)を削除。削除した slot を返す。
-export async function pruneBackups(b: FileBackend, retentionDays: number, refDate: string): Promise<string[]> {
-  if (retentionDays <= 0) return [];
-  const cutoff = cutoffDate(refDate, retentionDays);
-  const removed: string[] = [];
-  for (const slot of await listBackups(b)) {
-    if (slot.slice(0, 10) < cutoff) { await b.remove(`backups/${slot}.zip`); removed.push(slot); }
-  }
-  return removed;
-}
 
 // --- 取込確定（取込日時 stamp ごとに 1 スナップショット。直前取込との差分を履歴へ） ---
 export interface IngestOptions { stamp: string; guardRatio: number; retentionDays: number; force?: boolean; rawXml?: string }
