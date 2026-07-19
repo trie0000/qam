@@ -46,8 +46,10 @@ export interface InspectionFormOpts {
 // セクション見出し（申請情報 / 検査対象 / 検査スケジュール / その他）。
 const section = (title: string): HTMLElement => el('div', { class: 'qam-form-sec' }, [title]);
 
-// 2 つの field を 1 行に並べる（狭い画面では自動で縦積みになる）。
+// 複数の field を 1 行に並べる（狭い画面では自動で縦積みになる）。
 const pair = (a: HTMLElement, b: HTMLElement): HTMLElement => el('div', { class: 'qam-form-pair' }, [a, b]);
+const triple = (a: HTMLElement, b: HTMLElement, c: HTMLElement): HTMLElement =>
+  el('div', { class: 'qam-form-pair qam-form-pair--3' }, [a, b, c]);
 
 const field = (label: string, node: Node, note = ''): HTMLElement =>
   el('div', { class: 'qam-field' }, [
@@ -91,7 +93,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const appNo = el('input', { class: 'in', placeholder: '例: EXT-2026-001' }) as HTMLInputElement;
   const subject = el('input', { class: 'in', placeholder: '例: ○○システム 外部公開に伴う検査' }) as HTMLInputElement;
   const department = el('input', { class: 'in', placeholder: '例: ○○部' }) as HTMLInputElement;
-  const applicant = el('input', { class: 'in', placeholder: '検査を依頼してきた部門の担当者名' }) as HTMLInputElement;
+  const applicant = el('input', { class: 'in', placeholder: '例: 担当者名' }) as HTMLInputElement;
   const note = el('textarea', { class: 'in qam-prov-note', rows: '3', placeholder: '補足があれば記入' }) as HTMLTextAreaElement;
   const region = el('select', { class: 'in' }) as HTMLSelectElement;
   // 既定は未選択。MAP を実施する場合のみ必須（ドメイン名の末尾に使う）。
@@ -138,9 +140,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
 
   const rowAssetType = field('資産種別', assetType, '静的=IP 指定。動的=FQDN 指定（IP は入力できません）。');
   const rowDepartment = field('申請部門', department, 'AssetGroup の Division に記録されます。');
-  const rowApplicant = field('申請部門担当者', applicant, '検査を依頼してきた部門の担当者名です（このツールの利用者ではありません）。');
-  const rowRegion = field('地域区分', region,
-    'MAP 用ドメイン名の末尾に付く地域コードです。MAP を実施する資産がある場合は必須です。');
+  const rowApplicant = field('申請部門担当者', applicant, '検査を依頼してきた部門の担当者名（ツールの利用者ではありません）。');
+  const rowRegion = field('地域区分', region, 'MAP 用ドメイン名の末尾に付きます。MAP を実施する場合は必須。');
   const rowIp = field('検査資産情報（IP）', ipEditor.node,
     '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
     + '行ごとに MAP / SCAN を選べます（両方可）。プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
@@ -260,10 +261,11 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     field('登録モード', regMode, '「管理表のみ更新」は Qualys へ一切登録せず、QAM の検査一覧・四半期判定に予定として記録します。'),
 
     section('申請情報'),
-    field('外部接続申請番号', appNo, 'AssetGroup 名は「申請番号(仮)」になります。'),
-    field('件名', subject),
-    pair(rowDepartment, rowApplicant),
-    rowRegion,
+    pair(
+      field('外部接続申請番号', appNo, 'AssetGroup 名は「申請番号(仮)」になります。'),
+      field('件名', subject),
+    ),
+    triple(rowDepartment, rowApplicant, rowRegion),
 
     section('検査対象'),
     rowAssetType,

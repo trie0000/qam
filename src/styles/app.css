@@ -475,6 +475,8 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
    狭い画面では折り返して縦積みになる。 */
 .qam-form-pair { display: flex; flex-wrap: wrap; gap: 0 var(--s-5); }
 .qam-form-pair > * { flex: 1 1 240px; min-width: 0; }
+/* 3段組は 1 列あたりを狭くして 1 行に収める（狭い画面では従来どおり折り返す） */
+.qam-form-pair--3 > * { flex: 1 1 180px; }
 /* オプション設定のトグル（チェックボックス式） */
 .qam-prov-opttoggle { display: inline-flex; align-items: center; gap: var(--s-2);
   font-size: var(--fs-sm); color: var(--ink-3); cursor: pointer; user-select: none; }
