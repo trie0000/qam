@@ -465,3 +465,6 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-tok-item { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) var(--s-2);
   background: var(--paper-2); border-radius: var(--r-1); }
 .qam-tok-val { font-family: var(--font-mono); font-size: var(--fs-sm); user-select: text; }
+/* 検査資産情報: 複数行入力（改行区切り） */
+.qam-tok-ta { resize: vertical; min-height: 62px; font-family: var(--font-mono); font-size: var(--fs-sm); }
+.qam-tok-input { align-items: flex-start; }

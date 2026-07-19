@@ -4,7 +4,7 @@
 // 左ペインの独立ビューにインラインで置くので、本体（node）と送信処理（submit）を返す。
 // 本番 Qualys への書き込みなので、送信前に「何が作られるか」を必ず確認させる。
 // 命名・パラメータ組立・検証は provision.ts / schedule.ts（純粋関数）に委ねる。
-import { el, clear, onEnter } from '../dom';
+import { el, clear } from '../dom';
 import { icon } from '../../icons';
 import { defaultScheduleInput, validateSchedule, type ScheduleInput } from '../../schedule';
 import {
@@ -62,7 +62,9 @@ function tokenEditor(
   onChange: () => void,
 ): TokenEditor {
   const tokens: string[] = [];
-  const input = el('input', { class: 'in', placeholder: hint }) as HTMLInputElement;
+  // 複数行入力（改行区切り）を受けるため textarea。Enter は改行なので、
+  // 追加はボタンまたは Ctrl/Cmd+Enter で行う。
+  const input = el('textarea', { class: 'in qam-tok-ta', rows: '3', placeholder: hint }) as HTMLTextAreaElement;
   const addBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['追加']);
   const list = el('div', { class: 'qam-tok-list' });
 
@@ -83,7 +85,12 @@ function tokenEditor(
     draw();
   };
   addBtn.addEventListener('click', commit);
-  onEnter(input, commit); // IME 変換中の Enter は無視される
+  // Ctrl/Cmd+Enter で追加（素の Enter は改行として使う）。IME 変換中は無視する。
+  input.addEventListener('keydown', (ev) => {
+    const e = ev as KeyboardEvent;
+    if (e.isComposing || e.keyCode === 229) return;
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); }
+  });
 
   const node = el('div', {}, [el('div', { class: 'qam-tok-input' }, [input, addBtn]), list]);
   return {
@@ -157,10 +164,11 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const rowState = field('作成時の状態', active);
   const rowRegion = field('地域区分', region, 'ドメイン名の末尾に付く地域コードです。');
   const rowIp = field('検査資産情報（IP）', ipEditor.node,
-    '入力して「追加」（Enter でも可）。カンマ区切りで複数まとめて追加できます。AssetGroup の IP_SET に登録されます。'
-    + 'プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
+    '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
+    + 'AssetGroup の IP_SET に登録されます。プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
   const rowFqdn = field('検査資産情報（FQDN）', fqdnEditor.node,
-    '入力して「追加」（Enter でも可）。カンマ区切りで複数まとめて追加できます。AssetGroup の DNS_LIST に登録されます。');
+    '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
+    + 'AssetGroup の DNS_LIST に登録されます。');
   const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, '共通設定の既定値が入っています。');
   const rowMapOpt = field('MAP のオプションプロファイル', mapOpt, '共通設定の既定値が入っています。');
   const rowScanner = field('スキャナー', scanner, '共通設定の既定値が入っています。');

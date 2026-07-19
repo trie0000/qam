@@ -259,7 +259,8 @@ qam/
   変更可。不正行は捨て、全滅なら既定へ戻す。
 - **検査資産情報の入力**: テキスト欄に直接入力し「追加」でトークン配列へ積む（`ProvisionInput.ips` は
   正規化済み文字列の配列）。`parseIpInput` / `parseFqdnInput` がカンマ分割・トリミング・書式判定を行い、
-  `{tokens, errors}` を返す。errors が1つでもあれば UI は何も追加せず警告のみ（入力は残して修正を促す）。
+  `{tokens, errors}` を返す。区切りは**カンマ・改行(CR/LF)・タブ**（表計算からの貼り付けを想定）。
+  入力欄は textarea で、素の Enter は改行・追加は Ctrl/⌘+Enter とボタン（IME 変換中は無視）。errors が1つでもあれば UI は何も追加せず警告のみ（入力は残して修正を促す）。
   IP は `classifyIpToken` で single/cidr/range を判別。レンジの `-` は両端の半角スペースを許容し
   `normalizeIpToken` で詰める。**レンジは展開せず表記のまま 1 件**として `ips` へカンマ連結する。
 - **Qualys の制約**: AssetGroup 名は**一意必須**・`All` 不可。ドメインは `www.` を付けない。

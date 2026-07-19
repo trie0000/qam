@@ -93,21 +93,27 @@ export function classifyIpToken(raw: string): IpTokenKind | null {
   return null;
 }
 
-// FQDN はラベルを "." で連ねた形（先頭 www. は Qualys の指定により不可）。
+// FQDN はラベルを "." で連ねた形。www. で始まっても構わない
+// （"www. を付けない" は MAP の domain= パラメータ固有の指定であって、
+//  検査対象ホスト名である AssetGroup の DNS Names には当てはまらない）。
 const FQDN = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i;
 export const isFqdn = (raw: string): boolean => FQDN.test(raw.trim());
 
 // 入力欄に薄く出す書式ガイド（そのまま placeholder に使う）。
-export const IP_INPUT_HINT = '203.0.113.1 / 203.0.113.0/24 / 203.0.113.1-203.0.113.99（カンマ区切りで複数可・プライベートIP不可）';
-export const FQDN_INPUT_HINT = 'host1.example.jp（www. は付けない・カンマ区切りで複数可）';
+export const IP_INPUT_HINT = '203.0.113.1 / 203.0.113.0/24 / 203.0.113.1-203.0.113.99\nカンマ区切り・改行区切りで複数可（プライベートIP不可）';
+export const FQDN_INPUT_HINT = 'host1.example.jp\nカンマ区切り・改行区切りで複数可';
 
 export interface TokenParse { tokens: string[]; errors: string[] }
+
+// 入力の分割: カンマ・改行（CR/LF）・タブのいずれでも区切れる。
+// 貼り付け（Excel の1列コピー等）をそのまま受けられるようにするため。
+const splitTokens = (raw: string): string[] => (raw || '').split(/[,\r\n\t]+/);
 
 // カンマ区切りを分割して正規化する。レンジは展開しない（表記のまま 1 件として扱う）。
 // 形式に合わないものは errors に入れ、呼び出し側で警告を出して修正を促す。
 export function parseIpInput(raw: string): TokenParse {
   const tokens: string[] = []; const errors: string[] = [];
-  for (const part of (raw || '').split(',')) {
+  for (const part of splitTokens(raw)) {
     const t = normalizeIpToken(part);
     if (!t) continue;
     if (!classifyIpToken(t)) { errors.push(t); continue; }
@@ -120,10 +126,10 @@ export function parseIpInput(raw: string): TokenParse {
 
 export function parseFqdnInput(raw: string): TokenParse {
   const tokens: string[] = []; const errors: string[] = [];
-  for (const part of (raw || '').split(',')) {
+  for (const part of splitTokens(raw)) {
     const t = part.trim();
     if (!t) continue;
-    if (isFqdn(t) && !/^www\./i.test(t)) tokens.push(t); else errors.push(t);
+    if (isFqdn(t)) tokens.push(t); else errors.push(t);
   }
   return { tokens, errors };
 }
@@ -216,10 +222,7 @@ export function validateProvision(i: ProvisionInput): string[] {
     if (!p.ips.length) e.push('検査資産情報の IP を1つ以上入力してください');
   } else {
     if (!p.dnsNames.length) e.push('検査資産情報の FQDN を1つ以上入力してください');
-    for (const d of p.dnsNames) {
-      if (/^www\./i.test(d)) e.push(`FQDN の先頭に "www." は付けないでください: ${d}`);
-      else if (!isFqdn(d)) e.push(`FQDN の表記が不正です: ${d}`);
-    }
+    for (const d of p.dnsNames) if (!isFqdn(d)) e.push(`FQDN の表記が不正です: ${d}`);
   }
   return e;
 }

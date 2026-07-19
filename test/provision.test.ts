@@ -82,12 +82,20 @@ describe('検査資産情報の入力（テキスト直接入力）', () => {
     expect(r.errors).toEqual(['bad', '203.0.113.256']);
   });
 
-  it('FQDN もカンマ区切りで分割し、www. 付きや不正形式は errors にする', () => {
-    const r = parseFqdnInput(' a.example.jp , www.example.jp, bad_host, b.example.jp ');
+  it('FQDN もカンマ区切りで分割し、不正形式だけ errors にする', () => {
+    const r = parseFqdnInput(' a.example.jp , bad_host, b.example.jp ');
     expect(r.tokens).toEqual(['a.example.jp', 'b.example.jp']);
-    expect(r.errors).toEqual(['www.example.jp', 'bad_host']);
+    expect(r.errors).toEqual(['bad_host']);
     expect(isFqdn('host1.example.jp')).toBe(true);
     expect(isFqdn('nodot')).toBe(false);
+  });
+
+  // "www. を付けない" は MAP の domain= 固有の指定。検査対象ホスト名には適用しない。
+  it('www. で始まる FQDN も正当なホスト名として受け付ける', () => {
+    const r = parseFqdnInput('www.example.jp, www2.example.jp');
+    expect(r.tokens).toEqual(['www.example.jp', 'www2.example.jp']);
+    expect(r.errors).toEqual([]);
+    expect(validateProvision(dyn({ dnsNames: ['www.example.jp'] }))).toEqual([]);
   });
 });
 
@@ -134,9 +142,9 @@ describe('資産種別・検査種別と入力検証', () => {
       .toContain('検査資産情報の IP を1つ以上入力してください');
   });
 
-  it('動的は検査資産情報の FQDN が必須で、www. 付きは弾く', () => {
+  it('動的は検査資産情報の FQDN が必須で、不正形式は弾く', () => {
     expect(validateProvision(dyn({ dnsNames: [] }))).toContain('検査資産情報の FQDN を1つ以上入力してください');
-    expect(validateProvision(dyn({ dnsNames: ['www.example.jp'] })).join()).toContain('"www." は付けないでください');
+    expect(validateProvision(dyn({ dnsNames: ['bad_host'] })).join()).toContain('FQDN の表記が不正です');
   });
 
   it('不正な IP トークンはまとめて報告する（静的・防御的検証）', () => {
@@ -234,5 +242,30 @@ describe('プライベートIPの拒否', () => {
   it('検証でもプライベートIPを弾く（直接渡された場合の防御）', () => {
     expect(validateProvision(base({ ips: ['192.168.1.1'] })).join())
       .toContain('プライベートIPは登録できません');
+  });
+});
+
+describe('複数行入力（改行区切り）', () => {
+  it('改行で区切って複数の IP を登録できる', () => {
+    const r = parseIpInput('203.0.113.1\n203.0.113.0/24\n203.0.114.1-203.0.114.9');
+    expect(r.tokens).toEqual(['203.0.113.1', '203.0.113.0/24', '203.0.114.1-203.0.114.9']);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('CRLF・タブ・カンマが混在しても分割できる（貼り付け対策）', () => {
+    const r = parseIpInput('203.0.113.1,\r\n203.0.113.2\t203.0.113.3\n\n');
+    expect(r.tokens).toEqual(['203.0.113.1', '203.0.113.2', '203.0.113.3']);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('FQDN も改行区切りで登録できる', () => {
+    const r = parseFqdnInput('a.example.jp\nb.example.jp\r\nbad_host');
+    expect(r.tokens).toEqual(['a.example.jp', 'b.example.jp']);
+    expect(r.errors).toEqual(['bad_host']);
+  });
+
+  it('レンジの前後空白は改行区切りでもトリミングされる', () => {
+    const r = parseIpInput('  203.0.113.1 - 203.0.113.9  \n 203.0.113.20 ');
+    expect(r.tokens).toEqual(['203.0.113.1-203.0.113.9', '203.0.113.20']);
   });
 });
