@@ -1,10 +1,10 @@
 // トースト（右上・stack・§9）。ok/info は自動消滅、error は手動 dismiss。
-import { el, esc } from './dom';
+import { el, esc, uiHost } from './dom';
 import { icon } from '../icons';
 
 let host: HTMLElement | null = null;
 function ensure(): HTMLElement {
-  if (!host) { host = el('div', { class: 'qam-toasts' }); document.body.append(host); }
+  if (!host) { host = el('div', { class: 'qam-toasts' }); uiHost().append(host); }
   return host;
 }
 

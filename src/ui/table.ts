@@ -1,6 +1,6 @@
 // 共通テーブル（Notion §25 準拠）: 行/全件選択・ソート・列幅リサイズ・列入替（pointer 自前実装）・
 // 列幅/順序/ソートの localStorage 永続化・選択時バルクバー常設。
-import { el, clear } from './dom';
+import { el, clear, uiHost } from './dom';
 import { icon } from '../icons';
 import { LS } from '../config';
 
@@ -136,7 +136,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
   // 列表示メニュー（チェックで表示/非表示）。body 直下に1つだけ置く。
   document.getElementById('qam-colmenu')?.remove();
   const colPop = el('div', { class: 'qam-colmenu', id: 'qam-colmenu' });
-  document.body.append(colPop);
+  uiHost().append(colPop);
   const openAt = (anchor: HTMLElement): void => {
     const r = anchor.getBoundingClientRect();
     colPop.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 268))}px`;

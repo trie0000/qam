@@ -2,7 +2,7 @@
 import css from './styles/app.css';
 import { scopeCss } from './ui/scope-css';
 import { BUILD, BUILDTIME, ENTITIES, IS_OVERLAY, LS, RELAY, fmtStamp, datetimeToStamp, stampNow, today } from './config';
-import { el, esc, clear, onEnter } from './ui/dom';
+import { el, esc, clear, onEnter, uiHost } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
@@ -110,8 +110,6 @@ function matchAsset(r: QamRecord, q: string): boolean {
 const style = document.createElement('style');
 style.textContent = IS_OVERLAY ? scopeCss(css) : css;
 document.head.append(style);
-document.documentElement.dataset.theme = localStorage.getItem(LS.theme) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-document.documentElement.dataset.fontsize = localStorage.getItem(LS.fontsize) || 'md'; // 文字サイズ 大中小
 
 // 注意書きのコールアウト（小さめ・左アクセント線）。
 function callout(text: string): HTMLElement {
@@ -120,14 +118,23 @@ function callout(text: string): HTMLElement {
 
 
 const root = document.getElementById('qam-root') ?? (() => {
-  // overlay: 画面全体を覆う専用コンテナを自前で作る。SP 側の CSS を受けないよう
-  // all:initial でリセットしてから、自前のトークンを効かせる。
+  // overlay: 画面全体を覆う専用コンテナを自前で作る。
   const d = document.createElement('div');
   d.id = 'qam-root';
   d.className = 'qam-overlay';
+  // ★位置と重なり順だけは inline で持たせる。SharePoint のヘッダは z-index が
+  //   100 万台なので、スタイルシート側の値では負けて上端が帯に隠れる（取込ボタンが
+  //   見えなくなる）。inline なら後から読み込まれるホスト側 CSS にも上書きされない。
+  d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;overflow:auto';
   document.body.append(d);
   return d;
 })();
+
+// テーマ・文字サイズを載せる先。overlay ではスコープ済み CSS が #qam-root を起点に
+// 見るので、html に付けても一致しない（暗色にしても効かない）。root 自身に付ける。
+const themeHost = IS_OVERLAY ? root : document.documentElement;
+themeHost.dataset.theme = localStorage.getItem(LS.theme) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+themeHost.dataset.fontsize = localStorage.getItem(LS.fontsize) || 'md'; // 文字サイズ 大中小
 const main = el('div', { class: 'qam-main' });
 const left = el('div', { class: 'qam-left' });
 const topbar = el('div', { class: 'qam-topbar' });
@@ -269,7 +276,7 @@ function fltIcon(c: { id: string; mono?: boolean }): string {
 function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef): void {
   document.getElementById('qam-flt-pop')?.remove(); // 再描画時に前回のポップオーバーが残らないように
   const pop = el('div', { class: 'qam-flt-pop', id: 'qam-flt-pop' });
-  document.body.append(pop);
+  uiHost().append(pop);
   const chips = el('div', { class: 'qam-flt-chips' });
   filterBar.append(chips);
 
@@ -1685,7 +1692,7 @@ async function openSettings(): Promise<void> {
   ([['lg', '大'], ['md', '中'], ['sm', '小']] as [string, string][])
     .forEach(([v, t]) => fontsize.append(el('option', { value: v, selected: (localStorage.getItem(LS.fontsize) || 'md') === v }, [t])));
   // 文字サイズはその場で反映（＋保存）。保存ボタンを待たない。
-  fontsize.addEventListener('change', () => { localStorage.setItem(LS.fontsize, fontsize.value); document.documentElement.dataset.fontsize = fontsize.value; });
+  fontsize.addEventListener('change', () => { localStorage.setItem(LS.fontsize, fontsize.value); themeHost.dataset.fontsize = fontsize.value; });
 
   // 開発者: データのリセット（資産データ/履歴/メモを選んで全削除）。
   const ckSnap = el('input', { type: 'checkbox' }) as HTMLInputElement;
@@ -1782,8 +1789,8 @@ async function openSettings(): Promise<void> {
         await storeQualysPassword(pass.value); // 平文は保存しない（DPAPI 暗号文にする）
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
         if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
-        document.documentElement.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-        localStorage.setItem(LS.fontsize, fontsize.value); document.documentElement.dataset.fontsize = fontsize.value;
+        themeHost.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        localStorage.setItem(LS.fontsize, fontsize.value); themeHost.dataset.fontsize = fontsize.value;
         toast('設定を保存しました', 'ok'); return true;
       } catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
     },
@@ -2033,11 +2040,18 @@ async function initStorage(): Promise<{ ok: true } | { ok: false; reason: string
   if (!IS_OVERLAY) {
     return { ok: false, reason: 'ローカルの画面（127.0.0.1）から開いています。管理データは SharePoint にあるため、この画面からは接続できません。' };
   }
-  const cfg = await getConfig();
-  const siteUrl = (cfg.spSiteUrl || '').trim();
-  const library = (cfg.spLibrary || '').trim() || 'QamData';
-  if (!siteUrl) return { ok: false, reason: 'SharePoint サイト URL が未設定です（設定 → 共通設定）' };
   try {
+    // ★getConfig() は中継サーバが落ちていると投げる。ここを try の外に置くと
+    //   例外が start() まで抜けて、何も出ない真っ白な画面になる（原因が追えない）。
+    let cfg;
+    try {
+      cfg = await getConfig();
+    } catch {
+      return { ok: false, reason: `中継サーバ(${RELAY})に接続できません。設定を読めないため起動できません。qam-start.bat から起動しているか確認してください。` };
+    }
+    const siteUrl = (cfg.spSiteUrl || '').trim();
+    const library = (cfg.spLibrary || '').trim() || 'QamData';
+    if (!siteUrl) return { ok: false, reason: 'SharePoint サイト URL が未設定です（設定 → 共通設定）' };
     const http = createSpHttp({ siteUrl }); // ダイジェストをライブラリ/リストで共有する
     await ensureLibrary(http, library);     // 無ければ作る
     setBackend(createSpBackend({ siteUrl, library, http }));
@@ -2115,4 +2129,8 @@ async function start(): Promise<void> {
     void (async () => { await runAutoIngest(kinds); try { window.close(); } catch { /* 通常ブラウザでは閉じない */ } })();
   }
 }
-start();
+// 起動時の想定外の失敗を握り潰さない。ここで拾わないと未処理の拒否で終わり、
+// 画面には何も出ないまま止まる（何が起きたのか誰にも分からなくなる）。
+start().catch((e: unknown) => {
+  showStorageDownModal(`起動に失敗しました: ${(e as Error).message}`, () => { void start(); });
+});

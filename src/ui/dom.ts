@@ -23,6 +23,16 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs?: Attrs,
 
 export const clear = (e: Element): void => { while (e.firstChild) e.removeChild(e.firstChild); };
 
+/**
+ * 画面いっぱいに出す UI（モーダル・トースト・ポップアップ）の置き場所。
+ *
+ * overlay 注入時に document.body へ直接置くと二重に壊れる。
+ *   1. CSS は #qam-root 配下へ閉じ込めてあるので、外に置くと**素のまま**表示される
+ *   2. #qam-root は最前面に出しているので、その外側は**下に隠れて見えない**
+ * どちらのモードでも #qam-root は存在するので、常にその中へ入れる。
+ */
+export const uiHost = (): HTMLElement => document.getElementById('qam-root') ?? document.body;
+
 // Enter 確定ハンドラ。IME 変換中は必ず除外（UIルール §6）。
 export function onEnter(input: HTMLElement, fn: () => void): void {
   input.addEventListener('keydown', (ev) => {

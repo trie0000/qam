@@ -1,6 +1,6 @@
 // モーダル（§8/§19）。背景 mousedown 起点でのみ閉じる（リサイズ誤クローズ防止）。
 // primary は onPrimary が true を返すまで閉じない（送信失敗時に入力を保持）。
-import { el } from './dom';
+import { el, uiHost } from './dom';
 import { icon } from '../icons';
 
 export interface ModalOpts {
@@ -65,7 +65,7 @@ export function openModal(opts: ModalOpts): { close: () => void } {
   }
 
   backdrop.append(box);
-  document.body.append(backdrop);
+  uiHost().append(backdrop);
   (box.querySelector('input, textarea, select') as HTMLElement | null)?.focus();
   return { close };
 }
