@@ -292,7 +292,8 @@ qam/
 - **検査種別は資産ごと**: `AssetEntry { value, scan, map }` を持ち、MAP 対象は **domains**
   （申請番号ベースのドメイン1件＋対象IPを `netblock` に）、SCAN 対象は AssetGroup の `ips`/`dns_names`
   へ登録する。`planProvision` が scanTargets / mapTargets / domains / netblocks を導出する。
-  全選択チェックは行の状態に追従する。
+  全選択チェックは行の状態に追従する。新規行の既定は**静的=MAP / 動的=SCAN**（資産種別ごとに
+  通常行う検査。`asset-editor` が assetType から決める）。
 - **動的は MAP 対象外**: `planProvision` が `assetType === 'dynamic'` のとき mapTargets を空にする
   （UI で MAP チェックを無効化するのに加え、モデル側でも落とす）。古い履歴からのプリフィルに備え、
   `validateProvision` は動的＋MAP をエラーにし、`asset-editor` の `add()` も map を落とす。

@@ -135,7 +135,10 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
       foot.append(el('span', { class: 'qam-tok-foot-muted' }, ['host 一覧が未取込のため、新規登録になる資産を判定できません（資産タブで host を取り込むと表示されます）。']));
       return;
     }
-    const fresh = newHostAssets(rows.filter((r) => r.scan).map((r) => checkOf(r.value)));
+    // host list に載るのは SCAN 対象だけ。SCAN が 1 件も無ければ言うことは無い。
+    const scanRows = rows.filter((r) => r.scan);
+    if (!scanRows.length) { foot.hidden = true; return; }
+    const fresh = newHostAssets(scanRows.map((r) => checkOf(r.value)));
     if (!fresh.length) {
       foot.append(el('span', { class: 'qam-tok-foot-muted' }, ['SCAN 対象はすべて host list に登録済みです。']));
       return;
@@ -183,11 +186,13 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
   allScan.addEventListener('change', () => setAll('scan', allScan.checked));
   allMap.addEventListener('change', () => setAll('map', allMap.checked));
 
+  // 新規行の既定: 静的（IP 指定）は MAP、動的（FQDN 指定）は SCAN にチェックを入れる
+  // （それぞれの資産で通常行う検査。もう一方は必要に応じて手で足す）。
+  const isStatic = o.assetType === 'static';
   const commit = (): void => {
     const { tokens, errors } = o.parse(input.value);
     if (errors.length) { o.onInvalid(errors); return; } // 修正できるよう入力は消さない
-    // 新規行は既定で SCAN 対象（大半が SCAN のため）。MAP は明示的に選ばせる。
-    for (const t of tokens) if (!rows.some((r) => r.value === t)) rows.push({ value: t, scan: true, map: false });
+    for (const t of tokens) if (!rows.some((r) => r.value === t)) rows.push({ value: t, map: isStatic, scan: !isStatic });
     input.value = '';
     draw();
   };
