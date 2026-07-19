@@ -11,6 +11,8 @@ import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts } from './relay';
 import { createSpBackend } from './api/sp-file';
+import { createSpHttp } from './api/sp/http';
+import { createSpRepo } from './api/sp-repo';
 import { downloadEntity, downloadIps, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
@@ -1872,11 +1874,17 @@ async function applyStorageMode(): Promise<void> {
   const library = (cfg.spLibrary || '').trim() || 'QamData';
   if (!siteUrl) { toast('保管先が SharePoint ですが、サイト URL が未設定です。ローカル保管で起動します', 'error'); return; }
   try {
-    setBackend(createSpBackend({ siteUrl, library }));
+    const http = createSpHttp({ siteUrl }); // ダイジェストをライブラリ/リストで共有する
+    setBackend(createSpBackend({ siteUrl, library, http }));
     await backend.list(''); // 同一オリジン Cookie が要る。SP のオリジンで動いていなければここで落ちる
+    const spRepo = createSpRepo({ siteUrl, http });
+    await spRepo.ensureLists(); // 初回はリストと列を自動作成する
+    setRepo(spRepo);
     recordOp('保管先', `SharePoint (${library})`);
   } catch (e) {
+    // 片方だけ切り替わった状態を残さない（両方ローカルへ戻す）。
     setBackend(relayBackend);
+    setRepo(fileRepo(backend));
     toast(`SharePoint に接続できないため、ローカル保管で起動しました: ${(e as Error).message}`, 'error');
   }
 }

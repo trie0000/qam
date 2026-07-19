@@ -11,8 +11,7 @@
 // 衝突を検出し、読み直して再適用する。追記専用なので解消は自明で、無条件リトライで
 // 収束する（docs/SPO-MULTIUSER.md §3.1）。
 import type { FileBackend } from '../store';
-
-const V = 'application/json;odata=verbose';
+import { V, errText, q, createSpHttp, type SpHttp } from './sp/http';
 
 export interface SpBackendOptions {
   siteUrl: string;              // 例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE
@@ -20,65 +19,21 @@ export interface SpBackendOptions {
   fetchImpl?: typeof fetch;     // テスト用の差し替え
   maxRetry?: number;            // 412 の再試行回数（既定 4）
   now?: () => number;           // テスト用（ダイジェストの有効期限）
+  http?: SpHttp;                // 既に作ってあれば共有する（ダイジェストを使い回すため）
 }
-
-// SP のエラー応答から理由を抜く（odata=verbose は error.message.value）。読めなければ空。
-async function errText(r: Response): Promise<string> {
-  try {
-    const t = await r.text();
-    if (!t) return '';
-    try {
-      const j = JSON.parse(t);
-      const m = j?.error?.message?.value ?? j?.error?.message ?? j?.['odata.error']?.message?.value;
-      if (m) return ` - ${String(m).slice(0, 200)}`;
-    } catch { /* JSON でなければ生テキスト */ }
-    return ` - ${t.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200)}`;
-  } catch { return ''; }
-}
-
-// ServerRelativeUrl はシングルクォートで囲むので、値の ' は '' にエスケープする。
-const q = (s: string): string => s.replace(/'/g, "''");
 
 const dirOf = (path: string): string => path.slice(0, Math.max(0, path.lastIndexOf('/')));
 const nameOf = (path: string): string => path.slice(path.lastIndexOf('/') + 1);
 
 export function createSpBackend(o: SpBackendOptions): FileBackend {
-  const f: typeof fetch = o.fetchImpl ?? ((...a) => fetch(...a));
-  const now = o.now ?? (() => Date.now());
-  const site = o.siteUrl.trim().replace(/\/+$/, '');
-  if (!/^https?:\/\//i.test(site)) throw new Error('SharePoint サイト URL は http(s) から始まる絶対 URL で指定してください');
-  // web のサーバ相対パス（例 /sites/xxx）。ルートサイトなら空文字。
-  const webPath = new URL(site).pathname.replace(/\/+$/, '');
-  const base = `${webPath}/${o.library.trim().replace(/^\/+|\/+$/g, '')}`;
+  const http = o.http ?? createSpHttp(o);
+  const base = `${http.webPath}/${o.library.trim().replace(/^\/+|\/+$/g, '')}`;
   const maxRetry = o.maxRetry ?? 4;
-
-  const api = (rel: string): string => `${site}/_api/${rel}`;
   const abs = (path: string): string => `${base}/${path}`.replace(/\/+$/, '');
   const fileApi = (path: string): string => `web/GetFileByServerRelativeUrl('${q(abs(path))}')`;
   const folderApi = (path: string): string => `web/GetFolderByServerRelativeUrl('${q(abs(path))}')`;
 
-  // ---- 要求ダイジェスト（書き込み時に必須。有効期限まで使い回す）----
-  let digest = '';
-  let digestExp = 0;
-  async function getDigest(): Promise<string> {
-    if (digest && now() < digestExp) return digest;
-    const r = await f(api('contextinfo'), { method: 'POST', headers: { Accept: V }, credentials: 'include' });
-    if (!r.ok) throw new Error(`SharePoint の要求ダイジェスト取得に失敗: HTTP ${r.status}${await errText(r)}`);
-    const j = await r.json().catch(() => ({}));
-    const info = j?.d?.GetContextWebInformation ?? j?.GetContextWebInformation ?? {};
-    digest = String(info.FormDigestValue ?? '');
-    if (!digest) throw new Error('SharePoint の要求ダイジェストを取得できませんでした（サインインを確認してください）');
-    const ttl = Number(info.FormDigestTimeoutSeconds ?? 1800);
-    digestExp = now() + Math.max(60, ttl - 60) * 1000; // 期限切れ直前で取り直す
-    return digest;
-  }
-
-  const post = async (rel: string, init: RequestInit = {}): Promise<Response> => f(api(rel), {
-    ...init,
-    method: 'POST',
-    credentials: 'include',
-    headers: { Accept: V, 'X-RequestDigest': await getDigest(), ...(init.headers ?? {}) },
-  });
+  const post = (rel: string, init: RequestInit = {}): Promise<Response> => http.post(rel, init);
 
   // ---- フォルダ（親から順に作る。存在すれば触らない）----
   const known = new Set<string>();
@@ -89,7 +44,7 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
     for (const p of parts) {
       cur = cur ? `${cur}/${p}` : p;
       if (known.has(cur)) continue;
-      const head = await f(api(`${folderApi(cur)}?$select=Exists`), { headers: { Accept: V }, credentials: 'include' });
+      const head = await http.get(`${folderApi(cur)}?$select=Exists`);
       if (head.ok) { known.add(cur); continue; }
       if (head.status !== 404) throw new Error(`フォルダの確認に失敗 (${cur}): HTTP ${head.status}${await errText(head)}`);
       const r = await post('web/folders', {
@@ -98,7 +53,7 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
       });
       // 同時に他の人が作った場合も 200 以外になり得るので、作成後に存在を確かめる。
       if (!r.ok) {
-        const again = await f(api(`${folderApi(cur)}?$select=Exists`), { headers: { Accept: V }, credentials: 'include' });
+        const again = await http.get(`${folderApi(cur)}?$select=Exists`);
         if (!again.ok) throw new Error(`フォルダの作成に失敗 (${cur}): HTTP ${r.status}${await errText(r)}`);
       }
       known.add(cur);
@@ -107,14 +62,14 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
 
   // ---- 読み取り（本文と ETag）----
   async function readMeta(path: string): Promise<{ text: string; etag: string } | null> {
-    const r = await f(api(`${fileApi(path)}/$value`), { headers: { Accept: '*/*' }, credentials: 'include' });
+    const r = await http.get(`${fileApi(path)}/$value`, '*/*');
     if (r.status === 404) return null;
     if (!r.ok) throw new Error(`読込に失敗 (${path}): HTTP ${r.status}${await errText(r)}`);
     const text = await r.text();
     let etag = r.headers.get('ETag') ?? '';
     if (!etag) {
       // $value が ETag を返さない版に備え、プロパティから取り直す（追記の If-Match に要る）。
-      const p = await f(api(`${fileApi(path)}?$select=ETag`), { headers: { Accept: V }, credentials: 'include' });
+      const p = await http.get(`${fileApi(path)}?$select=ETag`);
       if (p.ok) etag = String((await p.json().catch(() => ({})))?.d?.ETag ?? '');
     }
     return { text, etag };
@@ -167,7 +122,7 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
 
     async list(dir) {
       const names = async (kind: 'Files' | 'Folders'): Promise<string[]> => {
-        const r = await f(api(`${folderApi(dir)}/${kind}?$select=Name`), { headers: { Accept: V }, credentials: 'include' });
+        const r = await http.get(`${folderApi(dir)}/${kind}?$select=Name`);
         if (r.status === 404) return [];
         if (!r.ok) throw new Error(`一覧の取得に失敗 (${dir}): HTTP ${r.status}${await errText(r)}`);
         const j = await r.json().catch(() => ({}));
