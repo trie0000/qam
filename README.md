@@ -309,9 +309,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<配置先>\qam-autoingest.
 - [x] **Phase 4** — 四半期検査（SCAN/MAP の四半期充足チェック）: scan/map の実施済み・スケジュール一覧を
       API 取得し、現四半期の 検査済み/スケジュール済み/未対応 を AssetGroup・ドメイン単位で判定。
       未対応 AssetGroup の一覧、週次サマリ、対象×週マトリクスを表示（`src/inspection*.ts` / `src/ui/views/inspection.ts`）
-- [ ] **Phase 5** — SPO 共有化（複数人同時利用）: 管理データを SharePoint のリスト／ライブラリへ移し、
+- [x] **Phase 5** — SPO 共有化（複数人同時利用）: 管理データを SharePoint のリスト／ライブラリへ移し、
       UI は SharePoint ページへ overlay 注入（起動は CDP 方式）。relay は Qualys 中継だけを担う。
-      方針は [docs/SPO-MULTIUSER.md](docs/SPO-MULTIUSER.md)
+      方針と実機検証の結果は [docs/SPO-MULTIUSER.md](docs/SPO-MULTIUSER.md)
+
+### SharePoint 共有で使う（複数人で同じデータを見る）
+
+1. 設定 → 共通設定 →「管理データの保管先」を **SharePoint** にし、サイト URL を入れる
+   （ライブラリ `QamData` とリスト `Qam*` は初回起動時に自動作成される）
+2. 設定 → 開発者 →「**アプリを SharePoint に配置**」を実行（起動アイコンはここから読む）
+3. `server/qam-launch.bat` のショートカットを配る。クリックすると
+   中継サーバ起動 → 専用プロファイルの Edge 起動 → サインイン → アプリ起動 まで自動で進む
+
+- Qualys のパスワードは **DPAPI で暗号化**して各自のブラウザに保存する（平文は保持しない）。
+  暗号文は保存した Windows ユーザー・PC でしか復号できないので、PC を替えたら再入力する
+- 取り込みは誰でもできるが、**同時取込は排他ロックで直列化**され、直前に誰かが取り込んでいれば確認が出る
 
 > 言語：アプリ本体 = TypeScript（esbuild / vitest）、relay・launcher = PowerShell 5.1 準拠。
 

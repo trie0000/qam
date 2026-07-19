@@ -5,7 +5,9 @@ import { fetchQualys, qualysUserAdd, qualysScheduleAdd, type FetchResult } from 
 import { SCHEDULE_PATHS, scheduleParams, validateSchedule, type ScheduleInput } from './schedule';
 import type { QamEntity, QamInspectionRaw, QamRecords, QamSnapshot } from './types';
 
-export interface QualysCreds { base: string; user: string; pass: string; proxy: string }
+// pass は平文、secret は DPAPI 暗号文。secret があれば relay 側でだけ復号され、
+// ブラウザは平文を持たない。どちらか一方が入っていればよい。
+export interface QualysCreds { base: string; user: string; pass: string; proxy: string; secret?: string }
 
 export interface DownloadResult { snapshot: QamSnapshot; raw: string; pages: number }
 export type DownloadProgress = (p: { page: number; records: number }) => void;
@@ -73,7 +75,7 @@ export async function diagnoseSubscriptionIps(creds: QualysCreds): Promise<IpSco
   ];
   const rows: IpScopeRow[] = [];
   for (const v of variants) {
-    const r = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url: `${base}/api/2.0/fo/asset/ip/?action=list${v.q}` });
+    const r = await fetchQualys({ base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true, url: `${base}/api/2.0/fo/asset/ip/?action=list${v.q}` });
     if (r.ok) { const t = extractIpTokens(r.xml); rows.push({ label: v.label, key: v.key, ok: true, unique: countSubscriptionIps(r.xml), singles: t.singles, ranges: t.ranges }); }
     else rows.push({ label: v.label, key: v.key, ok: false, unique: null, singles: [], ranges: [], error: r.error || `HTTP ${r.status}` });
   }
@@ -123,7 +125,7 @@ export async function downloadIps(creds: QualysCreds): Promise<IpListResult> {
     // VM限定（compliance_enabled=0&certview_enabled=0）で取得し、VMのAddress Management 件数に一致させる。
     // フィルタ無しだと CertView/PC 区分のIPまで拾い、UI(VM)より多くなる（実測でVM限定にすると一致）。
     const base = creds.base.replace(/\/+$/, '');
-    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url: `${base}/api/2.0/fo/asset/ip/?action=list&compliance_enabled=0&certview_enabled=0` });
+    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true, url: `${base}/api/2.0/fo/asset/ip/?action=list&compliance_enabled=0&certview_enabled=0` });
     if (!res.ok || !res.xml) return { count: null, xml: res.xml || '' };
     return { count: countSubscriptionIps(res.xml), xml: res.xml };
   } catch { return { count: null, xml: '' }; }
@@ -133,7 +135,7 @@ export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProg
   // 取得は Basic 認証固定。セッションCookieは環境により 401(Bad Login)で拒否され、ページ追従でも
   // 毎回 401 を出すため使わない（Basic は安定して通る）。
   const fetchPage = (body: Record<string, unknown>): Promise<FetchResult> =>
-    fetchQualys({ ...body, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true });
+    fetchQualys({ ...body, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true });
 
   let res = await fetchPage({ kind, base: creds.base });
   if (!res.ok) throw new Error(`Qualys 取得失敗 (status ${res.status}): ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
@@ -193,7 +195,7 @@ export async function downloadInspection(
   const base = creds.base.replace(/\/+$/, '');
   const warnings: string[] = [];
   const get = async (url: string): Promise<string> => {
-    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
+    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true, url });
     if (!res.ok || !res.xml) {
       throw new Error(`status ${res.status}: ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
     }
@@ -247,7 +249,7 @@ export async function createSchedule(creds: QualysCreds, input: ScheduleInput, a
   const errors = validateSchedule(input);
   if (errors.length) throw new Error(errors.join(' / '));
   const res = await qualysScheduleAdd({
-    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, proxy: creds.proxy,
+    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy,
     path: SCHEDULE_PATHS[input.kind], author, fields: scheduleParams(input),
   });
   if (res.error) throw new Error(res.error);
@@ -268,7 +270,7 @@ async function writeQualys(
   creds: QualysCreds, path: string, fields: Record<string, string>, author: string,
 ): Promise<{ message: string }> {
   const res = await qualysScheduleAdd({
-    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, proxy: creds.proxy,
+    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy,
     path, author, fields,
   });
   if (res.error) throw new Error(res.error);
@@ -282,7 +284,7 @@ async function writeQualys(
 export async function findAssetGroup(creds: QualysCreds, title: string): Promise<{ id: string } | null> {
   const base = creds.base.replace(/\/+$/, '');
   const url = `${base}${ASSET_GROUP_PATH}?action=list&title=${encodeURIComponent(title)}`;
-  const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
+  const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true, url });
   if (!res.ok || !res.xml) throw new Error(`AssetGroup の確認に失敗 (status ${res.status}): ${failReason(res)}`);
   const err = qualysErrorText(res.xml);
   if (err) throw new Error(err);
@@ -297,7 +299,7 @@ export interface DomainInfo { name: string; netblocks: string[] }
 export async function findDomain(creds: QualysCreds, domain: string): Promise<DomainInfo | null> {
   const base = creds.base.replace(/\/+$/, '');
   const url = `${base}/api/2.0/fo/asset/domain/?action=list`;
-  const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
+  const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true, url });
   if (!res.ok || !res.xml) throw new Error(`ドメインの確認に失敗 (status ${res.status}): ${failReason(res)}`);
   const want = domain.trim().toLowerCase();
   try {
@@ -382,7 +384,7 @@ export function buildUserAddFields(input: UserAddInput): Record<string, string> 
 // Qualys へユーザを1人登録。成功時は作成された USER_LOGIN を返す。失敗は例外。
 export async function addQualysUser(creds: QualysCreds, input: UserAddInput): Promise<{ login: string }> {
   const fields = buildUserAddFields(input);
-  const res = await qualysUserAdd({ base: creds.base, user: creds.user, pass: creds.pass, proxy: creds.proxy, fields });
+  const res = await qualysUserAdd({ base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, fields });
   if (!res.ok) throw new Error(res.error || 'ユーザ登録に失敗しました');
   return { login: res.login ?? '' };
 }

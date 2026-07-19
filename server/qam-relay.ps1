@@ -75,8 +75,17 @@ $script:QamStop = $false
 $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null
 
 # ─── HTTP ヘルパ ─────────────────────────────────────────────────────────────
+# 許可オリジン。既定は SharePoint サイト（QAM_SP_SITE_URL）のオリジンに限定する。
+# '*' のままだと、どのサイトからでもローカルの relay を叩けてしまう。
+function Get-QamAllowedOrigin {
+    if ($env:QAM_ALLOWED_ORIGIN) { return $env:QAM_ALLOWED_ORIGIN }
+    if ($env:QAM_SP_SITE_URL) {
+        try { $u = [Uri]$env:QAM_SP_SITE_URL; return "$($u.Scheme)://$($u.Authority)" } catch { }
+    }
+    return '*'
+}
 function Set-Cors { param($Resp)
-    $Resp.Headers['Access-Control-Allow-Origin'] = '*'
+    $Resp.Headers['Access-Control-Allow-Origin'] = (Get-QamAllowedOrigin)
     $Resp.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     $Resp.Headers['Access-Control-Allow-Headers'] = 'Content-Type'
     # バンドルを含め一切キャッシュさせない（古い JS を掴み続けて修正が反映されないのを防ぐ）。
@@ -245,7 +254,7 @@ function Invoke-QualysFetch { param($Body)
         if ($useSession) {
             $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
         } elseif ($Body.user) {
-            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$(Get-QamPassword $Body)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         $method = 'GET'
@@ -292,7 +301,7 @@ function Invoke-QualysLogin { param($Body)
     $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
     try {
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
-        $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string]$Body.pass))"
+        $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string](Get-QamPassword $Body)))"
         $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
         Write-Host "[qam] login POST $base/api/2.0/fo/session/ (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'なし' }))" -ForegroundColor Cyan
         Add-QamLog "LOGIN start $base (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'none' }))"
@@ -381,7 +390,7 @@ function Invoke-QualysScheduleAdd { param($Body)
         $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')  # FO v2 API で必須
         if ($Body.user) {
-            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$(Get-QamPassword $Body)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         Add-QamLog "SCHEDADD start POST $url ($form)"
@@ -425,7 +434,7 @@ function Invoke-QualysUserAdd { param($Body)
         $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
         if ($Body.user) {
-            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$($Body.pass)"))
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$(Get-QamPassword $Body)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         # パスワードは出さず、ログイン名以外のフィールドだけログに残す。
@@ -451,6 +460,39 @@ function Invoke-QualysUserAdd { param($Body)
         Add-QamLog "USERADD exception: $($ex.Message)"
         return [ordered]@{ ok = $false; error = "接続エラー: $($ex.Message)" }
     } finally { $client.Dispose(); $handler.Dispose() }
+}
+
+# ─── 秘密情報（DPAPI）──────────────────────────────────────────────────────
+# Qualys のパスワードを平文でブラウザに置かないための暗号化。
+# ConvertFrom-SecureString は Windows の DPAPI（現在のユーザースコープ）で暗号化するので、
+# **同じ Windows ユーザー・同じPCでしか復号できない**。持ち出されても使えない。
+#
+# ★復号のエンドポイントは作らない。作ると平文を取り出せてしまい、この方式の意味が消える。
+#   復号は Qualys へ送出する直前に、この relay の中だけで行う。
+function Protect-QamSecret {
+    param([string]$Plain)
+    if (-not $Plain) { return '' }
+    $sec = ConvertTo-SecureString -String $Plain -AsPlainText -Force
+    return ConvertFrom-SecureString -SecureString $sec
+}
+function Unprotect-QamSecret {
+    param([string]$Cipher)
+    if (-not $Cipher) { return '' }
+    $sec = ConvertTo-SecureString -String $Cipher   # 他ユーザー/他PCの暗号文なら例外
+    $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+    try { return [Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr) }
+    finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+}
+
+# 要求から Qualys のパスワードを取り出す。secret（DPAPI 暗号文）があればそれを優先し、
+# 無ければ従来どおり pass（平文）を使う。ログには決して出さない。
+function Get-QamPassword {
+    param($Body)
+    if ($Body.PSObject.Properties.Name -contains 'secret' -and $Body.secret) {
+        try { return Unprotect-QamSecret ([string]$Body.secret) }
+        catch { throw "保存された認証情報を復号できません（別のPC・別のユーザーで保存された可能性があります）。設定画面で入力し直してください" }
+    }
+    return [string]$Body.pass
 }
 
 # ─── 名前解決（FQDN の検査対象を登録する前の確認）────────────────────────────
@@ -525,6 +567,14 @@ function Invoke-Route { param($Ctx)
         '^/qam/qualys/schedule-add$' {
             try { Send-Json $Ctx (Invoke-QualysScheduleAdd (Get-Body $req | ConvertFrom-Json)) }
             catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            return
+        }
+        '^/qam/secret/protect$' {
+            # 平文を受け取り、DPAPI 暗号文だけを返す。平文はここで捨てる（保存もログもしない）。
+            try {
+                $b = Get-Body $req | ConvertFrom-Json
+                Send-Json $Ctx @{ ok = $true; secret = (Protect-QamSecret ([string]$b.value)) }
+            } catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 500 }
             return
         }
         '^/qam/resolve$' {

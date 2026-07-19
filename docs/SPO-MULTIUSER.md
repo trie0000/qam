@@ -305,8 +305,28 @@ src/api/
   （設定は直近値を localStorage に控えて代用。Qualys の取得・登録だけができない旨を出す）
 - **ライブラリの自動作成**（`ensureLibrary`）
 
-**未着手**: ローダ（バンドルを SPO ライブラリから配信）、CDP ランチャ、DPAPI 秘密管理、
-relay の CORS 限定。DPAPI は Windows 実機で `ConvertFrom-SecureString` の往復を確認済み。
+### Phase 3 後半（配布まわり・Windows 実機で確認済み）
+
+- **DPAPI での秘密管理**: relay に `/qam/secret/protect`（暗号化のみ）を追加。設定画面で入力した
+  パスワードは即座に暗号文へ変換して localStorage に置き、**平文は保持しない**。
+  復号は Qualys へ送出する直前に relay 内部でのみ行う（`unprotect` は提供しない）
+- **CORS をテナント限定**: `QAM_SP_SITE_URL` のオリジンに限定（未設定時のみ `*`）
+- **アプリの自己配置**: 設定 → 開発者 →「アプリを SharePoint に配置」で、バンドルを
+  `QamData/app/qam.bundle.js` へ置く。更新はここを差し替えるだけで全員に反映される
+- **CDP ランチャ**（`server/qam-launch.ps1` / `.bat`）: relay 起動 → 専用プロファイルの Edge 起動
+  → サインイン完了を待つ → CDP でローダを注入。失敗時は既定ブラウザで SP を開いて手動起動へ
+
+**Windows 実機（PowerShell 5.1 / Win11 / Edge）での確認結果**
+
+| 項目 | 結果 |
+|---|---|
+| DPAPI の往復（`ConvertFrom-SecureString`） | 成功。暗号文に平文は含まれない |
+| `/qam/secret/protect` | 暗号文のみ返る。`unprotect` は存在しない |
+| CORS の限定 | `QAM_SP_SITE_URL` 設定時は当該オリジンのみを返す |
+| 専用プロファイルの Edge 起動＋デバッグポート | 起動可 |
+| CDP の WebSocket 接続と `Runtime.evaluate` | 接続・評価とも成功 |
+
+**未着手**: 共有設定の SPO 移行、ローカル→SPO 移送、履歴ファイルの不変化（§3.1 の残る弱点）。
 
 ---
 

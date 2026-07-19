@@ -67,18 +67,25 @@ export async function fetchQualys(body: Record<string, unknown>): Promise<FetchR
 
 // Qualys ユーザ登録（/msp/user.php?action=add）。relay が Basic 認証＋プロキシで叩く。
 export interface UserAddResult { ok: boolean; login?: string; error?: string; status?: number }
-export const qualysUserAdd = (body: { base: string; user: string; pass: string; proxy: string; author?: string; fields: Record<string, string> }): Promise<UserAddResult> =>
+export const qualysUserAdd = (body: { base: string; user: string; pass: string; secret?: string; proxy: string; author?: string; fields: Record<string, string> }): Promise<UserAddResult> =>
   postJson('/qam/qualys/user-add', body);
 
 // スケジュール登録（作成）。relay が form-urlencoded で POST し、応答XMLをそのまま返す。
 export interface ScheduleAddResult { ok: boolean; status?: number; xml?: string; error?: string }
 // author は監査ログ（api-audit.log）に残すため。認証情報はログに出さない。
 export const qualysScheduleAdd = (body: {
-  base: string; user: string; pass: string; proxy: string; path: string; author: string; fields: Record<string, string>;
+  base: string; user: string; pass: string; secret?: string; proxy: string; path: string; author: string; fields: Record<string, string>;
 }): Promise<ScheduleAddResult> => postJson('/qam/qualys/schedule-add', body);
 
 // FQDN の名前解決（ブラウザからは引けないので relay に代行させる）。
 // 1 件でも失敗し得るので、成否は結果の各要素で見る（呼び出し自体は成功扱い）。
+// パスワードを平文で持たないための暗号化（relay の DPAPI に委ねる）。復号口は無い。
+export async function protectSecret(value: string): Promise<string> {
+  const d = await postJson('/qam/secret/protect', { value });
+  if (!d?.ok || !d.secret) throw new Error(d?.error || '認証情報を保護できませんでした');
+  return String(d.secret);
+}
+
 export interface ResolveRow { name: string; ok: boolean; addresses: string[]; error?: string }
 export async function resolveHosts(names: string[]): Promise<ResolveRow[]> {
   const d = await postJson('/qam/resolve', { names });

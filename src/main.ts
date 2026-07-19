@@ -1,7 +1,7 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
 import { scopeCss } from './ui/scope-css';
-import { BUILD, BUILDTIME, ENTITIES, IS_OVERLAY, LS, fmtStamp, datetimeToStamp, stampNow, today } from './config';
+import { BUILD, BUILDTIME, ENTITIES, IS_OVERLAY, LS, RELAY, fmtStamp, datetimeToStamp, stampNow, today } from './config';
 import { el, esc, clear, onEnter } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -10,7 +10,7 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts } from './relay';
+import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts, protectSecret } from './relay';
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
@@ -1053,14 +1053,55 @@ async function runProvision(
 }
 
 // 接続先と認証情報を解決（未設定ならその場で入力を促す）。取得・登録で共有する。
-async function resolveQualysCreds(): Promise<{ base: string; user: string; pass: string; proxy: string } | null> {
+// アプリ本体（バンドル）を SharePoint のライブラリへ置く。
+// ローダはここから読むので、更新はこの配置を実行するだけで全員に反映される。
+async function deployBundleToSharePoint(): Promise<void> {
   const cfg = await getConfig();
-  const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+  if (cfg.storageMode !== 'sp') throw new Error('保管先が SharePoint のときだけ配置できます');
+  const r = await fetch(`${RELAY}/qam/bundle/qam.bundle.js`);
+  if (!r.ok) throw new Error(`アプリ本体を取得できません（中継サーバ）: HTTP ${r.status}`);
+  const js = await r.text();
+  if (js.length < 1000) throw new Error('アプリ本体が壊れています（サイズが小さすぎます）');
+  await backend.write('app/qam.bundle.js', js);
+  await backend.write('app/version.txt', `${BUILD}\n${BUILDTIME}\n`);
+  recordOp('アプリ配置', `${BUILD} を SharePoint に配置（${js.length.toLocaleString()} bytes）`);
+}
+
+// 入力された平文パスワードを暗号化して保存する（平文は localStorage に残さない）。
+// relay に暗号化を委ねるので、relay が落ちていれば保存できない旨を返す。
+async function storeQualysPassword(plain: string): Promise<boolean> {
+  if (!plain) { localStorage.removeItem(LS.qualysSecret); localStorage.removeItem(LS.qualysPass); return true; }
+  try {
+    localStorage.setItem(LS.qualysSecret, await protectSecret(plain));
+    localStorage.removeItem(LS.qualysPass); // 旧バージョンの平文が残っていれば消す
+    return true;
+  } catch (e) {
+    toast(`認証情報を保護できませんでした（中継サーバを確認してください）: ${(e as Error).message}`, 'error');
+    return false;
+  }
+}
+
+// 保存済みの認証情報。パスワードは DPAPI 暗号文（secret）で持ち、平文は保持しない。
+// 旧バージョンの平文が残っていれば互換のため読むが、保存時に暗号文へ移行する。
+function qualysCredsFromStorage(cfg: { qualysBase: string; qualysUser: string; proxy: string }): { base: string; user: string; pass: string; proxy: string; secret?: string } {
+  return {
+    base: cfg.qualysBase,
+    user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '',
+    pass: localStorage.getItem(LS.qualysPass) || '',
+    secret: localStorage.getItem(LS.qualysSecret) || undefined,
+    proxy: cfg.proxy,
+  };
+}
+
+async function resolveQualysCreds(): Promise<{ base: string; user: string; pass: string; proxy: string; secret?: string } | null> {
+  const cfg = await getConfig();
+  const creds = qualysCredsFromStorage(cfg);
   if (!creds.base) { toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return null; }
-  if (!creds.user || !creds.pass) {
+  if (!creds.user || !(creds.pass || creds.secret)) {
     const got = await promptQualysCreds(creds.user, creds.pass);
     if (!got) return null;
     creds.user = got.user; creds.pass = got.pass;
+    await storeQualysPassword(got.pass); // 次回からは暗号文で使う
   }
   return creds;
 }
@@ -1152,7 +1193,7 @@ function buildIpScopeDiagBox(): HTMLElement {
     btn.setAttribute('disabled', 'true'); clear(out); out.append(el('div', { class: 'qam-count' }, ['取得中…（4回 asset/ip を呼び出します）']));
     try {
       const cfg = await getConfig();
-      const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+      const creds = qualysCredsFromStorage(cfg);
       if (!creds.base) { clear(out); toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return; }
       if (!creds.user || !creds.pass) { const got = await promptQualysCreds(creds.user, creds.pass); if (!got) { clear(out); return; } creds.user = got.user; creds.pass = got.pass; }
       setRelayBusy(true);
@@ -1264,7 +1305,7 @@ function promptQualysCreds(curUser: string, curPass: string): Promise<{ user: st
       onPrimary: () => {
         const user = u.value.trim(); const pass = p.value;
         if (!user || !pass) { toast('アカウントとパスワードを入力してください', 'error'); return false; }
-        localStorage.setItem(LS.qualysUser, user); localStorage.setItem(LS.qualysPass, pass);
+        localStorage.setItem(LS.qualysUser, user); // パスワードは呼び出し側で暗号化して保存する
         done = true; resolve({ user, pass }); return true;
       },
       onClose: () => { if (!done) resolve(null); },
@@ -1335,7 +1376,7 @@ async function openUserAdd(): Promise<void> {
         .map((g) => g.name).filter((t) => settenId(t) === sid);
       if (!assetGroups.length) { toast(`接続点ID「${sid}」に一致する AssetGroup が見つかりません（group を取込済みか確認してください）`, 'error'); return false; }
       // 認証情報（個人設定・ブラウザ保持。未設定ならその場で促す）。
-      const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+      const creds = qualysCredsFromStorage(cfg);
       if (!creds.base) { toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return false; }
       if (!creds.user || !creds.pass) { const got = await promptQualysCreds(creds.user, creds.pass); if (!got) return false; creds.user = got.user; creds.pass = got.pass; }
       const scanType = scan.value as ScanType;
@@ -1391,7 +1432,7 @@ function openIngest(): void {
       try {
         const cfg = await getConfig();
         // アカウント・パスワードは個人設定(ブラウザ保持)。旧 env 設定があれば後方互換でフォールバック。
-        const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+        const creds = qualysCredsFromStorage(cfg);
         if (!creds.base) { setProg('設定で Qualys 接続先(POD)を入力してください', false); toast('接続先が未設定です', 'error'); return; }
         // アカウント/パスワードが未設定なら、その場で登録を促す（保存して続行）。
         if (!creds.user || !creds.pass) {
@@ -1557,7 +1598,12 @@ async function openSettings(): Promise<void> {
     .forEach(([v, t]) => storageMode.append(el('option', { value: v, selected: (cfg.storageMode || 'local') === v }, [t])));
   const spSite = el('input', { class: 'in', value: cfg.spSiteUrl || '', placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE' }) as HTMLInputElement;
   const spLib = el('input', { class: 'in', value: cfg.spLibrary || 'QamData', placeholder: 'QamData' }) as HTMLInputElement;
-  const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
+  // 暗号文は復号口が無いので画面へは戻せない。保存済みなら「入力済み」を示すだけにする。
+  const hasSecret = !!localStorage.getItem(LS.qualysSecret);
+  const pass = el('input', {
+    class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '',
+    placeholder: hasSecret ? '保存済み（変更するときだけ入力）' : '',
+  }) as HTMLInputElement;
   const author = el('input', { class: 'in', value: localStorage.getItem(LS.author) || '', placeholder: '例: 山田' }) as HTMLInputElement;
   const theme = el('select', { class: 'in' }) as HTMLSelectElement;
   ([['', 'システム既定'], ['light', 'ライト'], ['dark', 'ダーク']] as [string, string][])
@@ -1573,6 +1619,15 @@ async function openSettings(): Promise<void> {
   const ckHist = el('input', { type: 'checkbox' }) as HTMLInputElement;
   const ckCmt = el('input', { type: 'checkbox' }) as HTMLInputElement;
   const ckRow = (cb: HTMLInputElement, label: string) => el('label', { class: 'qam-chip', style: 'display:inline-flex;gap:6px;align-items:center;font-size:var(--fs-sm);margin-right:var(--s-4)' }, [cb, label]);
+  // アプリ本体を SharePoint へ配置（ローダはここから読む）
+  const deployBtn = el('button', { class: 'btn btn--sm' }, ['アプリを SharePoint に配置']);
+  deployBtn.addEventListener('click', async () => {
+    deployBtn.setAttribute('disabled', 'true');
+    try { await deployBundleToSharePoint(); toast('アプリを SharePoint に配置しました', 'ok'); }
+    catch (e) { toast(`配置に失敗: ${(e as Error).message}`, 'error'); }
+    finally { deployBtn.removeAttribute('disabled'); }
+  });
+
   const dataResetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['選択したデータをリセット']);
   dataResetBtn.addEventListener('click', async () => {
     const opts = { snapshots: ckSnap.checked, history: ckHist.checked, comments: ckCmt.checked };
@@ -1597,7 +1652,8 @@ async function openSettings(): Promise<void> {
     if (!(await confirmModal('登録情報のリセット', '接続先POD・Qualysアカウント・パスワード・プロキシ・記入者名を初期化します。取り込んだ資産データ・変更履歴・メモは消えません。よろしいですか？', 'リセット'))) return;
     try {
       await setConfig({ qualysBase: '', proxy: '', retentionDays: 90 });
-      localStorage.removeItem(LS.qualysUser); localStorage.removeItem(LS.qualysPass); localStorage.removeItem(LS.author);
+      localStorage.removeItem(LS.qualysUser); localStorage.removeItem(LS.qualysPass);
+      localStorage.removeItem(LS.qualysSecret); localStorage.removeItem(LS.author);
       base.value = ''; user.value = ''; proxy.value = ''; ret.value = '90'; pass.value = ''; author.value = '';
       toast('登録情報をリセットしました', 'ok');
     } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
@@ -1640,6 +1696,7 @@ async function openSettings(): Promise<void> {
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
     { id: 'common', label: '共通設定', pane: () => [field('管理データの保管先', storageMode, 'ローカル＝relay のデータディレクトリ（1人用）。SharePoint＝リストとライブラリで複数人が同じデータを見る。SharePoint はアプリが SP ページ上で動いている必要があります（接続できない場合は自動でローカルに戻ります）。'), field('SharePoint サイト URL', spSite, '例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE。既存サイトに相乗りできます。'), field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'), field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
     { id: 'dev', label: '開発者', pane: () => [
+      field('アプリを SharePoint に配置', deployBtn, 'アプリ本体を SharePoint のライブラリ（QamData/app/）へ置きます。起動アイコンはここから読むので、更新はこの配置を実行するだけで全員に反映されます。保管先が SharePoint のときだけ使えます。'),
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
       field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [`${BUILD}${BUILDTIME ? '  (' + BUILDTIME + ')' : ''}`])),
@@ -1661,7 +1718,7 @@ async function openSettings(): Promise<void> {
       try {
         await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)), storageMode: (storageMode.value === 'sp' ? 'sp' : 'local'), spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
-        if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
+        await storeQualysPassword(pass.value); // 平文は保存しない（DPAPI 暗号文にする）
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
         if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
         document.documentElement.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -1891,7 +1948,7 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
   let locked = false;
   try {
     const cfg = await getConfig();
-    const creds = { base: cfg.qualysBase, user: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '', pass: localStorage.getItem(LS.qualysPass) || '', proxy: cfg.proxy };
+    const creds = qualysCredsFromStorage(cfg);
     if (!creds.base || !creds.user || !creds.pass) { recordOp('自動取込中止', '接続先/認証情報が未設定（このプロファイルに保存が必要）'); return; }
     const today = dateOfStamp(stampNow());
     const todayDone = async (k: QamEntity): Promise<boolean> => (await getSnapshotStamps(backend, k)).some((s) => dateOfStamp(s) === today);
