@@ -93,6 +93,27 @@ export function classifyIpToken(raw: string): IpTokenKind | null {
   return null;
 }
 
+// トークン（単体/CIDR/レンジ）が表す IP 範囲を [開始, 終了] の 32bit 整数で返す。
+// 既存ホストがこの範囲に入るかの判定に使う。書式が不正なら null。
+export function ipBounds(raw: string): [number, number] | null {
+  const t = normalizeIpToken(raw);
+  switch (classifyIpToken(t)) {
+    case 'single': return [ipToInt(t), ipToInt(t)];
+    case 'cidr': {
+      const i = t.indexOf('/');
+      const size = 2 ** (32 - Number(t.slice(i + 1)));
+      const lo = Math.floor(ipToInt(t.slice(0, i)) / size) * size; // ネットワークアドレスへ丸める
+      return [lo, lo + size - 1];
+    }
+    case 'range': {
+      const i = t.indexOf('-');
+      const a = ipToInt(t.slice(0, i)); const b = ipToInt(t.slice(i + 1));
+      return a <= b ? [a, b] : [b, a];
+    }
+    default: return null;
+  }
+}
+
 // FQDN はラベルを "." で連ねた形。www. で始まっても構わない
 // （"www. を付けない" は MAP の domain= パラメータ固有の指定であって、
 //  検査対象ホスト名である AssetGroup の DNS Names には当てはまらない）。
@@ -241,6 +262,18 @@ export function validateProvision(i: ProvisionInput): string[] {
   return e;
 }
 
+// 申請情報を Qualys 側にも残す（division=申請部門 / comments=件名・担当者・備考の連結）。
+function applicationInfo(i: ProvisionInput): { division: string; comments: string } {
+  return {
+    division: (i.department ?? '').trim(),
+    comments: [
+      (i.subject ?? '').trim() && `件名: ${(i.subject ?? '').trim()}`,
+      (i.applicant ?? '').trim() && `申請部門担当者: ${(i.applicant ?? '').trim()}`,
+      (i.note ?? '').trim() && `備考: ${(i.note ?? '').trim()}`,
+    ].filter(Boolean).join(' / '),
+  };
+}
+
 // AssetGroup 作成（/api/2.0/fo/asset/group/?action=add）のパラメータ。
 // SCAN 対象だけを ips / dns_names に載せる（MAP 対象は domains 側で扱う）。
 // 空の項目は送らない（Qualys が不正パラメータとして弾くのを避ける）。
@@ -251,15 +284,26 @@ export function buildAssetGroupParams(i: ProvisionInput): Record<string, string>
     if (i.assetType === 'static') params.ips = p.scanTargets.join(',');
     else params.dns_names = p.scanTargets.join(',');
   }
-  // 申請情報を Qualys 側にも残す（division=申請部門 / comments=件名・担当者・備考の連結）。
-  const dep = (i.department ?? '').trim();
-  if (dep) params.division = dep;
-  const comments = [
-    (i.subject ?? '').trim() && `件名: ${(i.subject ?? '').trim()}`,
-    (i.applicant ?? '').trim() && `申請部門担当者: ${(i.applicant ?? '').trim()}`,
-    (i.note ?? '').trim() && `備考: ${(i.note ?? '').trim()}`,
-  ].filter(Boolean).join(' / ');
-  if (comments) params.comments = comments;
+  const info = applicationInfo(i);
+  if (info.division) params.division = info.division;
+  if (info.comments) params.comments = info.comments;
+  return params;
+}
+
+// 同名の AssetGroup が既にある場合の更新（/api/2.0/fo/asset/group/?action=edit）。
+// edit ではパラメータ名が変わる（ips → add_ips / set_ips、division → set_division 等）。
+// IP・DNS は **add_**（追加）で送る。set_ は上書きなので、以前の登録分を消してしまう。
+// 申請情報（division/comments）は今回の申請内容で置き換える。
+export function buildAssetGroupEditParams(i: ProvisionInput, id: string): Record<string, string> {
+  const p = planProvision(i);
+  const params: Record<string, string> = { action: 'edit', id };
+  if (p.scanTargets.length) {
+    if (i.assetType === 'static') params.add_ips = p.scanTargets.join(',');
+    else params.add_dns_names = p.scanTargets.join(',');
+  }
+  const info = applicationInfo(i);
+  if (info.division) params.set_division = info.division;
+  if (info.comments) params.set_comments = info.comments;
   return params;
 }
 
@@ -271,6 +315,26 @@ export function buildDomainParams(i: ProvisionInput, domain: string): Record<str
   if (p.netblocks.length) params.netblock = p.netblocks.join(',');
   return params;
 }
+
+// 既存ドメインの更新（action=edit）用のネットブロック。edit は netblock 必須で、
+// 送った内容が正（＝既存を上書きしうる）なので、消さないように「既存 + 今回分」を送る。
+// 追加分が無ければ更新自体を行わない（added が空）。
+export function mergeNetblocks(current: string[], add: string[]): { list: string[]; added: string[] } {
+  const list = current.map((s) => normalizeIpToken(s)).filter(Boolean);
+  const seen = new Set(list.map((s) => s.toLowerCase()));
+  const added: string[] = [];
+  for (const raw of add) {
+    const t = normalizeIpToken(raw);
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    added.push(t);
+  }
+  return { list: [...list, ...added], added };
+}
+
+// 既存ドメインへネットブロックを足す更新パラメータ。
+export const buildDomainEditParams = (domain: string, netblocks: string[]): Record<string, string> =>
+  ({ action: 'edit', domain, netblock: netblocks.join(',') });
 
 // スケジュールのタイトル: AssetGroup 名の後ろに種別（_s_ / _m_）と検査予定日を挟む。
 //   例) EXT-2026-001(仮)_s_20260801 / EXT-2026-001(仮)_m_20260801

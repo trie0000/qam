@@ -318,6 +318,8 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-modal-head { display: flex; align-items: center; padding: var(--s-6) var(--s-7); border-bottom: 1px solid var(--line); }
 .qam-modal-head .qam-modal-title { font-size: var(--fs-lg); font-weight: 600; margin-right: auto; }
 .qam-modal-body { padding: var(--s-7); overflow: auto; }
+/* 確認モーダルの本文は行ごとに読ませる（'\n' 区切りで渡ってくる） */
+.qam-confirm-msg { user-select: text; white-space: pre-line; line-height: var(--lh-base); }
 .qam-modal-foot { display: flex; justify-content: flex-end; gap: var(--s-3); padding: var(--s-5) var(--s-7); border-top: 1px solid var(--line); }
 /* 設定モーダル: 左ペインに分類、右ペインに項目（Spira風） */
 /* 共通: 項目を切り替えてもモーダルのサイズは変えない。項目数に対し十分大きくしスクロール不要に。 */
@@ -485,3 +487,21 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 /* 検査予定日＋時刻を1行に */
 .qam-sched-dt { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 .qam-sched-dt .in[type="date"] { width: auto; flex: 0 1 170px; }
+/* 登録前チェック: 資産ごとの既存/新規バッジ、リスト下のまとめ、同名警告 */
+.qam-tok-badge { font-size: var(--fs-xs); line-height: 1.7; padding: 0 var(--s-2); border-radius: var(--r-1);
+  border: 1px solid var(--line); color: var(--ink-3); white-space: nowrap; }
+/* 新規=塗り（検査時に host list へ追加される＝注目させる） / 既存=枠線のみ / 食い違い=警告色 */
+.qam-tok-badge--new { color: var(--ink); background: var(--accent-soft); border-color: var(--accent); }
+.qam-tok-badge--warn { color: var(--warn); border-color: var(--warn); }
+.qam-tok-badge--ok { color: var(--ink-3); }
+.qam-tok-badge--muted { color: var(--ink-4); }
+.qam-tok-foot { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); font-size: var(--fs-xs); }
+.qam-tok-foot-new { color: var(--ink); font-weight: 600; }
+.qam-tok-foot-muted { color: var(--ink-3); }
+.qam-prov-exists { margin-top: var(--s-2); color: var(--danger); font-size: var(--fs-sm);
+  white-space: pre-line; user-select: text; overflow-wrap: anywhere; }
+/* トラッキング方式の食い違い確認モーダル */
+.qam-track-list { display: flex; flex-direction: column; gap: var(--s-3); }
+.qam-track-item { padding: var(--s-3) var(--s-4); background: var(--paper-2); border-radius: var(--r-2);
+  border-left: 3px solid var(--warn); font-size: var(--fs-sm); user-select: text; }
+.qam-track-note { margin: var(--s-4) 0; font-size: var(--fs-sm); color: var(--danger); }

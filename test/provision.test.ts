@@ -2,8 +2,9 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_REGIONS, parseRegions, formatRegions, assetGroupTitle, toDnsLabel, domainName,
   classifyIpToken, normalizeIpToken, parseIpInput, parseFqdnInput, isFqdn, containsPrivateIp,
-  planProvision, validateProvision, buildAssetGroupParams,
-  describeProvision, buildDomainParams, scheduleTitle, type ProvisionInput,
+  planProvision, validateProvision, buildAssetGroupParams, buildAssetGroupEditParams,
+  describeProvision, buildDomainParams, buildDomainEditParams, mergeNetblocks, ipBounds,
+  scheduleTitle, type ProvisionInput,
 } from '../src/provision';
 
 // 既定は「SCAN と MAP の両方を実施する IP 資産 1 件」。
@@ -272,5 +273,56 @@ describe('複数行入力（改行区切り）', () => {
   it('レンジの前後空白は改行区切りでもトリミングされる', () => {
     const r = parseIpInput('  203.0.113.1 - 203.0.113.9  \n 203.0.113.20 ');
     expect(r.tokens).toEqual(['203.0.113.1-203.0.113.9', '203.0.113.20']);
+  });
+});
+
+describe('IP 範囲の解釈', () => {
+  it('単体・CIDR・レンジを [開始, 終了] に直す', () => {
+    expect(ipBounds('203.0.113.5')).toEqual([ipBounds('203.0.113.5')![0], ipBounds('203.0.113.5')![1]]);
+    const [lo, hi] = ipBounds('203.0.113.0/24')!;
+    expect(hi - lo).toBe(255);
+    // CIDR はネットワークアドレスへ丸める（途中のIPを書いても範囲は同じ）
+    expect(ipBounds('203.0.113.77/24')).toEqual([lo, hi]);
+    // レンジは逆順でも昇順に直す
+    expect(ipBounds('203.0.113.9-203.0.113.1')).toEqual(ipBounds('203.0.113.1-203.0.113.9'));
+  });
+
+  it('書式が不正なら null', () => {
+    expect(ipBounds('example.jp')).toBeNull();
+    expect(ipBounds('')).toBeNull();
+  });
+});
+
+describe('同名がある場合の更新パラメータ', () => {
+  it('AssetGroup は action=edit + id で、IP は add_ips（上書きしない）', () => {
+    const f = buildAssetGroupEditParams(base({ department: '○○部' }), '12345');
+    expect(f.action).toBe('edit');
+    expect(f.id).toBe('12345');
+    expect(f.add_ips).toBe('203.0.113.1');
+    expect(f.set_division).toBe('○○部');
+    // 上書き系（既存を消す）は送らない
+    expect(f.set_ips).toBeUndefined();
+    expect(f.ips).toBeUndefined();
+    expect(f.title).toBeUndefined(); // タイトルで引き当てているので変更しない
+  });
+
+  it('動的は add_dns_names で送る', () => {
+    const f = buildAssetGroupEditParams(dyn(), '1');
+    expect(f.add_dns_names).toBe('host1.example.jp');
+    expect(f.add_ips).toBeUndefined();
+  });
+
+  it('ドメイン更新は既存ネットブロックを残して追加分だけ足す', () => {
+    const m = mergeNetblocks(['203.0.113.0/24'], ['198.51.100.1', ' 203.0.113.0/24 ']);
+    expect(m.added).toEqual(['198.51.100.1']); // 既存と重複するものは足さない
+    expect(m.list).toEqual(['203.0.113.0/24', '198.51.100.1']);
+    expect(buildDomainEditParams('example.jp', m.list)).toEqual({
+      action: 'edit', domain: 'example.jp', netblock: '203.0.113.0/24,198.51.100.1',
+    });
+  });
+
+  it('追加分が無ければ added は空（更新自体を行わない判断に使う）', () => {
+    expect(mergeNetblocks(['203.0.113.1'], ['203.0.113.1']).added).toEqual([]);
+    expect(mergeNetblocks([], []).added).toEqual([]);
   });
 });

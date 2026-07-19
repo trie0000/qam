@@ -290,28 +290,41 @@ export async function findAssetGroup(creds: QualysCreds, title: string): Promise
   return id ? { id } : null;
 }
 
-// 既に登録済みのドメインか（サブスクリプションのドメイン一覧から探す）。
-export async function findDomain(creds: QualysCreds, domain: string): Promise<boolean> {
+// 登録済みドメインか（サブスクリプションのドメイン一覧から探す）。
+// 既存のネットブロックも返す: 更新（action=edit）は netblock 必須で送った内容が正になるため、
+// 既存分を消さないよう「既存 + 追加分」を送る必要がある。
+export interface DomainInfo { name: string; netblocks: string[] }
+export async function findDomain(creds: QualysCreds, domain: string): Promise<DomainInfo | null> {
   const base = creds.base.replace(/\/+$/, '');
   const url = `${base}/api/2.0/fo/asset/domain/?action=list`;
   const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, proxy: creds.proxy, noSession: true, url });
   if (!res.ok || !res.xml) throw new Error(`ドメインの確認に失敗 (status ${res.status}): ${failReason(res)}`);
   const want = domain.trim().toLowerCase();
-  for (const m of res.xml.matchAll(/<DOMAIN_NAME>([^<]+)<\/DOMAIN_NAME>/gi)) {
-    if (m[1].trim().toLowerCase() === want) return true;
+  try {
+    // 一覧の正規化（NETBLOCK/RANGE の解釈込み）は取込と同じパーサに任せる。
+    for (const r of Object.values(parseQualysXml(res.xml, 'domain').records)) {
+      const name = (r.scalar.DOMAIN_NAME || r.name || '').trim();
+      if (name.toLowerCase() === want) return { name, netblocks: r.set.NETBLOCK ?? [] };
+    }
+    return null;
+  } catch {
+    // 版差で解析できない場合は名前の有無だけ見る（ネットブロックは不明＝空扱い）。
+    for (const m of res.xml.matchAll(/<DOMAIN(?:_NAME)?(?:\s[^>]*)?>([^<]+)<\/DOMAIN(?:_NAME)?>/gi)) {
+      if (m[1].trim().toLowerCase() === want) return { name: m[1].trim(), netblocks: [] };
+    }
+    return null;
   }
-  // 要素名が版で違う場合に備え、素の <DOMAIN> テキストも見る。
-  for (const m of res.xml.matchAll(/<DOMAIN(?:\s[^>]*)?>([^<]+)<\/DOMAIN>/gi)) {
-    if (m[1].trim().toLowerCase() === want) return true;
-  }
-  return false;
 }
 
 export const createAssetGroup = (creds: QualysCreds, fields: Record<string, string>, author: string): Promise<{ message: string }> =>
   writeQualys(creds, ASSET_GROUP_PATH, fields, author);
 
-// fields には action=add / domain / netblock(任意) を渡す（組立は provision.ts）。
-export const addDomain = (creds: QualysCreds, fields: Record<string, string>, author: string): Promise<{ message: string }> =>
+// 既存 AssetGroup の更新。fields には action=edit / id / add_ips 等を渡す（組立は provision.ts）。
+export const editAssetGroup = (creds: QualysCreds, fields: Record<string, string>, author: string): Promise<{ message: string }> =>
+  writeQualys(creds, ASSET_GROUP_PATH, fields, author);
+
+// ドメインの登録・更新。fields には action=add|edit / domain / netblock(任意) を渡す。
+export const writeDomain = (creds: QualysCreds, fields: Record<string, string>, author: string): Promise<{ message: string }> =>
   writeQualys(creds, DOMAIN_ADD_PATH, fields, author);
 
 // ──────────────────────────────────────────────────────────────────────────

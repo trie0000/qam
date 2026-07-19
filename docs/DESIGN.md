@@ -264,9 +264,20 @@ qam/
   IP は `classifyIpToken` で single/cidr/range を判別。レンジの `-` は両端の半角スペースを許容し
   `normalizeIpToken` で詰める。**レンジは展開せず表記のまま 1 件**として `ips` へカンマ連結する。
 - **Qualys の制約**: AssetGroup 名は**一意必須**・`All` 不可。ドメインは `www.` を付けない。
-- **登録順**: AssetGroup 作成 → （MAP のとき）ドメイン登録 → スケジュール登録。同名検出時は
-  「既存を使う / 別名で作る / 中止」を必ず選ばせる（破壊的な既定を置かない）。途中失敗時は
-  完了済みの手順を添えて返し、操作履歴にも中断として残す。
+- **登録順**: AssetGroup 作成 → （MAP のとき）ドメイン登録 → スケジュール登録。**同名は更新**で扱う
+  （`findAssetGroup` → `buildAssetGroupEditParams` の `action=edit&id=…&add_ips|add_dns_names`、
+  `findDomain` → `mergeNetblocks` で既存＋今回分を `action=edit&netblock=…`）。
+  edit は `set_*` が上書き・ドメインの `netblock` も送った内容が正になるため、**既存を消さない足し方**に
+  統一する。追加分が無いドメインは更新自体を行わない。途中失敗時は完了済みの手順を添えて返す。
+- **登録前チェック** (`precheck.ts`): 取り込み済みスナップショット（group/domain/host の最新）から
+  `buildRegistry` でインデックスを作り、`checkAsset` が資産ごとに `new | known | unknown` と
+  トラッキング方式の食い違い（`ip-tracked-fqdn` / `dns-tracked-ip`）を判定する。静的は `ipBounds` の
+  範囲照合（CIDR・レンジは範囲内の既存ホストを全部拾う）、動的は FQDN/DNS 名の完全一致（小文字化）。
+  host 未取込は `unknown`＝「判定不可」で、**新規と誤って断定しない**。表示は `assetBadge` /
+  `issueLines` / `existingNameLines`（いずれも純粋関数でテスト対象）。UI 側は `ui/views/asset-editor.ts`
+  がバッジと「新規登録される見込み」を描画し、`conflicts()` が SCAN 対象の食い違いを返す。
+  食い違いがある場合、フォームは `confirmTracking` を呼び、**「検査担当に確認済み」チェックが入るまで
+  送信を通さない**（main.ts のモーダル側で primary を弾く）。
 - **relay の許可パス**: schedule/scan・scheduled_scans.php・asset/group・asset_domain.php の 4 つのみ。
 - **検査種別は資産ごと**: `AssetEntry { value, scan, map }` を持ち、SCAN 対象は AssetGroup の
   `ips`/`dns_names`、MAP 対象は **domains** へ登録する（静的=申請番号ベースのドメイン1件＋対象IPを

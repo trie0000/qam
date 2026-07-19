@@ -4,14 +4,15 @@
 // 左ペインの独立ビューにインラインで置くので、本体（node）と送信処理（submit）を返す。
 // 本番 Qualys への書き込みなので、送信前に「何が作られるか」を必ず確認させる。
 // 命名・パラメータ組立・検証は provision.ts / schedule.ts（純粋関数）に委ねる。
-import { el, clear } from '../dom';
-import { icon } from '../../icons';
+import { el } from '../dom';
 import { defaultScheduleInput, validateSchedule, type ScheduleInput } from '../../schedule';
+import { assetEditor } from './asset-editor';
+import { emptyRegistry, existingNameLines, type AssetCheck, type AssetRegistry } from '../../precheck';
 import {
   DEFAULT_REGIONS, planProvision, validateProvision, describeProvision,
   parseIpInput, parseFqdnInput, IP_INPUT_HINT, FQDN_INPUT_HINT,
   scheduleTitle,
-  type AssetEntry, type AssetType, type ProvisionInput, type RegionOption, type TokenParse,
+  type AssetType, type ProvisionInput, type RegionOption,
 } from '../../provision';
 
 export interface ScheduleDefaults {
@@ -33,8 +34,11 @@ export interface InspectionFormOpts {
   initial?: ProvisionInput; // 履歴からの再登録用プリフィル（予定日は today のまま）
   defaults: ScheduleDefaults;
   regions: RegionOption[];
+  registry?: AssetRegistry; // 取り込み済みの AssetGroup/ドメイン/host list（事前チェック用）
   confirm: (title: string, lines: string[]) => Promise<boolean>;
   warn: (title: string, lines: string[]) => void;   // 書式違反の警告
+  // トラッキング方式の食い違い確認（「検査担当に確認済み」を取れたら true）。
+  confirmTracking: (issues: AssetCheck[]) => Promise<boolean>;
   submit: (mode: RegisterMode, p: ProvisionInput, scan: ScheduleInput, map: ScheduleInput) => Promise<ProvisionResult>;
   onDone: () => void;
 }
@@ -54,95 +58,6 @@ const field = (label: string, node: Node, note = ''): HTMLElement =>
 
 const numInput = (value: number, min: number, max: number): HTMLInputElement =>
   el('input', { class: 'in', type: 'number', min: String(min), max: String(max), value: String(value) }) as HTMLInputElement;
-
-// 検査資産情報のエディタ: テキスト欄に直接入力 →「追加」でリストへ。
-// 行ごとに SCAN / MAP のチェックを持ち（両方可）、ヘッダのチェックで全選択/全解除できる。
-// カンマ・改行区切りは分割して複数行として登録する（レンジは展開しない）。
-// 書式違反が1つでもあれば何も追加せず警告し、入力はそのまま残して修正を促す。
-interface AssetEditor {
-  node: HTMLElement;
-  read: () => AssetEntry[];
-  add: (entries: AssetEntry[]) => void;
-  setEnabled: (on: boolean) => void;
-}
-function assetEditor(
-  hint: string,
-  parse: (raw: string) => TokenParse,
-  onInvalid: (bad: string[]) => void,
-  onChange: () => void,
-): AssetEditor {
-  const rows: AssetEntry[] = [];
-  const input = el('textarea', { class: 'in qam-tok-ta', rows: '3', placeholder: hint }) as HTMLTextAreaElement;
-  const addBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['追加']);
-  const list = el('div', { class: 'qam-tok-list' });
-  const allScan = el('input', { type: 'checkbox', title: 'すべての資産を SCAN 対象にする' }) as HTMLInputElement;
-  const allMap = el('input', { type: 'checkbox', title: 'すべての資産を MAP 対象にする' }) as HTMLInputElement;
-  const head = el('div', { class: 'qam-tok-head', hidden: true }, [
-    el('span', { class: 'qam-tok-headlbl' }, ['すべて']),
-    el('label', { class: 'qam-tok-ck' }, [allScan, el('span', {}, ['SCAN'])]),
-    el('label', { class: 'qam-tok-ck' }, [allMap, el('span', {}, ['MAP'])]),
-  ]);
-
-  // ヘッダのチェック状態を行の状態に合わせる（全部入っていれば on）。
-  const syncHead = (): void => {
-    head.hidden = rows.length === 0;
-    allScan.checked = rows.length > 0 && rows.every((r) => r.scan);
-    allMap.checked = rows.length > 0 && rows.every((r) => r.map);
-  };
-  const draw = (): void => {
-    clear(list);
-    rows.forEach((r, idx) => {
-      const del = el('button', { class: 'btn btn--icon btn--sm', type: 'button', 'aria-label': `${r.value} を削除`, title: '削除', html: icon('x', 13) });
-      del.addEventListener('click', () => { rows.splice(idx, 1); draw(); onChange(); });
-      const ck = (kind: 'scan' | 'map'): HTMLElement => {
-        const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
-        cb.checked = r[kind];
-        cb.addEventListener('change', () => { r[kind] = cb.checked; syncHead(); onChange(); });
-        return el('label', { class: 'qam-tok-ck' }, [cb, el('span', {}, [kind === 'scan' ? 'SCAN' : 'MAP'])]);
-      };
-      list.append(el('div', { class: 'qam-tok-item' }, [
-        del, el('span', { class: 'qam-tok-val' }, [r.value]), el('span', { class: 'qam-spacer' }), ck('scan'), ck('map'),
-      ]));
-    });
-    syncHead();
-    onChange();
-  };
-  const setAll = (kind: 'scan' | 'map', on: boolean): void => {
-    for (const r of rows) r[kind] = on;
-    draw();
-  };
-  allScan.addEventListener('change', () => setAll('scan', allScan.checked));
-  allMap.addEventListener('change', () => setAll('map', allMap.checked));
-
-  const commit = (): void => {
-    const { tokens, errors } = parse(input.value);
-    if (errors.length) { onInvalid(errors); return; } // 修正できるよう入力は消さない
-    // 新規行は既定で SCAN 対象（大半が SCAN のため）。MAP は明示的に選ばせる。
-    for (const t of tokens) if (!rows.some((r) => r.value === t)) rows.push({ value: t, scan: true, map: false });
-    input.value = '';
-    draw();
-  };
-  addBtn.addEventListener('click', commit);
-  // Ctrl/Cmd+Enter で追加（素の Enter は改行として使う）。IME 変換中は無視する。
-  input.addEventListener('keydown', (ev) => {
-    const e = ev as KeyboardEvent;
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commit(); }
-  });
-
-  const node = el('div', {}, [el('div', { class: 'qam-tok-input' }, [input, addBtn]), head, list]);
-  return {
-    node,
-    read: () => rows.map((r) => ({ ...r })),
-    add: (init) => { for (const a of init) if (a.value && !rows.some((r) => r.value === a.value)) rows.push({ ...a }); draw(); },
-    // 資産種別で使わない側は入力自体を止める（見えていても打てない状態にしない）。
-    setEnabled: (on) => {
-      input.disabled = !on;
-      addBtn.toggleAttribute('disabled', !on);
-      if (!on) { rows.length = 0; input.value = ''; draw(); } // 使わない入力は残さない
-    },
-  };
-}
 
 // 検査予定日(YYYY-MM-DD) → タイトル用 YYYYMMDD。
 const ymd = (iso: string): string => (iso || '').replace(/-/g, '');
@@ -171,17 +86,26 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const region = el('select', { class: 'in' }) as HTMLSelectElement;
   regions.forEach((r) => region.append(el('option', { value: r.code }, [`${r.label}（${r.code}）`])));
   const preview = el('div', { class: 'qam-prov-preview' });
+  // 取り込み済みデータに同名の AssetGroup / ドメインがあるときの注意（赤字）。
+  const exists = el('div', { class: 'qam-prov-exists', hidden: true });
   const warnInvalid = (kind: string) => (bad: string[]): void => {
     o.warn(`${kind}の書式を確認してください`, [
       `次の入力は書式に合っていません: ${bad.join(', ')}`,
       kind === 'IP' ? `正しい書式: ${IP_INPUT_HINT}` : `正しい書式: ${FQDN_INPUT_HINT}`,
     ]);
   };
-  const ipEditor = assetEditor(IP_INPUT_HINT, parseIpInput, warnInvalid('IP'), () => refreshAll());
-  const fqdnEditor = assetEditor(FQDN_INPUT_HINT, parseFqdnInput, warnInvalid('FQDN'), () => refreshAll());
+  // 取り込み済みデータ（AssetGroup/ドメイン/host list）。未取込なら「判定不可」表示になる。
+  const registry = o.registry ?? emptyRegistry();
+  const ipEditor = assetEditor({
+    hint: IP_INPUT_HINT, assetType: 'static', registry,
+    parse: parseIpInput, onInvalid: warnInvalid('IP'), onChange: () => refreshAll(),
+  });
+  const fqdnEditor = assetEditor({
+    hint: FQDN_INPUT_HINT, assetType: 'dynamic', registry,
+    parse: parseFqdnInput, onInvalid: warnInvalid('FQDN'), onChange: () => refreshAll(),
+  });
 
   // ---- スケジュール（1回のみ: 検査予定日と開始時刻だけ）----
-  const title = el('input', { class: 'in', placeholder: 'AssetGroup名_YYYYMMDD が自動で入ります' }) as HTMLInputElement;
   const active = el('select', { class: 'in' }) as HTMLSelectElement;
   active.append(el('option', { value: 'no' }, ['無効で作成（Qualys で確認してから有効化）']), el('option', { value: 'yes' }, ['有効で作成（検査予定日に実行される）']));
   const scanOpt = el('input', { class: 'in', value: o.defaults.scanOptionProfile, placeholder: '未入力ならアカウント既定' }) as HTMLInputElement;
@@ -268,6 +192,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   };
 
   // 作られるものを常に見せる（送信して初めて分かる、を避ける）。
+  // 取り込み済みデータに同名があれば「新規作成ではなく更新になる」ことを赤字で添える。
   function refreshPreview(): void {
     const p = planProvision(readProvision());
     const rows: string[] = [`AssetGroup: ${p.title || '（申請番号を入力）'}`];
@@ -275,6 +200,9 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     rows.push(`MAP 対象: ${p.mapTargets.length ? p.mapTargets.join(', ') : '（なし）'}`);
     if (p.domains.length) rows.push(`ドメイン: ${p.domains.join(', ')}`);
     preview.textContent = rows.join('　/　');
+    const lines = p.title ? existingNameLines(registry, p.title, p.domains) : [];
+    exists.hidden = !lines.length;
+    exists.textContent = lines.join('\n');
   }
 
   const show = (node: HTMLElement, on: boolean): void => { node.hidden = !on; };
@@ -329,7 +257,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     rowAssetType,
     rowIp,
     rowFqdn,
-    field('作成される内容', preview),
+    field('作成される内容', el('div', {}, [preview, exists])),
 
     section('検査スケジュール'),
     rowSameTiming,
@@ -399,6 +327,9 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     ];
     if (errors.length) { showErrors([...new Set(errors)]); return false; }
     showErrors([]);
+    // 既存ホストとトラッキング方式が食い違う資産があれば、検査担当の確認が取れるまで進めない。
+    const conflicts = (assetType.value === 'dynamic' ? fqdnEditor : ipEditor).conflicts();
+    if (conflicts.length && !(await o.confirmTracking(conflicts))) return false;
     const mode = regMode.value as RegisterMode;
     const at = (i: ScheduleInput): string =>
       `${i.startDate} ${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}`;
@@ -408,7 +339,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
         ...(plan.withScan ? [`SCAN 予定を記録: ${plan.title}（${at(scan)}）`] : []),
         ...(plan.withMap ? [`MAP 予定を記録: ${plan.domains.join(', ')}（${at(map)}）`] : []),
       ]
-      : describeProvision(p);
+      // 同名が取り込み済みなら「作成」ではなく「更新」になる旨も確認画面に出す。
+      : [...describeProvision(p), ...existingNameLines(registry, plan.title, plan.domains)];
     if (!(await o.confirm(mode === 'ledger' ? '管理表に記録しますか？' : 'この内容で登録しますか？', lines))) return false;
     try {
       await o.submit(mode, p, scan, map);
