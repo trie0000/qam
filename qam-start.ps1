@@ -3,10 +3,12 @@
 # =============================================================================
 # 1) relay (qam-relay.ps1) が未起動なら別ウィンドウ + -NoExit で起動
 # 2) /qam/health が 200 になるまで最大 10 秒待機
-# 3) 保管先に応じて開き方を変える（入口はこのファイルだけ。利用者に選ばせない）
-#      QAM_STORAGE_MODE=local … 既定ブラウザで http://127.0.0.1:<port>/ を開く（1人用）
-#      QAM_STORAGE_MODE=sp    … server\qam-launch.ps1 へ委譲し、専用プロファイルの Edge で
-#                               SharePoint を開いて CDP でアプリを注入する（共有）
+# 3) server\qam-launch.ps1 へ委譲し、専用プロファイルの Edge で SharePoint を開いて
+#    CDP でアプリを注入する
+#
+# 管理データは SharePoint に置くので、アプリは **SharePoint のページ上でしか動かない**
+# （サインイン情報を使うため）。ローカルの画面（http://127.0.0.1:<port>/）を開いても
+# 保管先に接続できないので、そこへは開かない。
 # 起動: エクスプローラで qam-start.bat をダブルクリック
 # =============================================================================
 [CmdletBinding()]
@@ -63,18 +65,13 @@ if (Test-Up $health) {
     else { Write-Host "[qam-start] 警告: relay の起動応答を確認できませんでした。別ウィンドウのログを確認してください (QAM_DATA_DIR 未設定等)。" -ForegroundColor Yellow }
 }
 
-# 保管先で開き方を変える。利用者はこのファイルを叩くだけでよい。
-$mode = Get-EnvValue 'QAM_STORAGE_MODE'
-if ($mode -eq 'sp') {
-    $launch = Join-Path $PSScriptRoot 'server\qam-launch.ps1'
-    if (Test-Path -LiteralPath $launch) {
-        Write-Host '[qam-start] 保管先が SharePoint のため、専用ブラウザで開きます' -ForegroundColor Cyan
-        & $launch -RelayPort $Port
-        return
-    }
-    Write-Host "[qam-start] 警告: $launch が見つかりません。ローカル画面で開きます" -ForegroundColor Yellow
+# 管理データは SharePoint にあるので、必ず SharePoint のページ上で起動する。
+$launch = Join-Path $PSScriptRoot 'server\qam-launch.ps1'
+if (-not (Test-Path -LiteralPath $launch)) {
+    Write-Host "[qam-start] 起動スクリプトが見つかりません: $launch" -ForegroundColor Red
+    Write-Host '[qam-start] 配布物が不完全です（server\qam-launch.ps1 が必要）' -ForegroundColor Red
+    Read-Host '終了するには Enter'
+    exit 1
 }
-
-$url = "http://127.0.0.1:$Port/"
-Write-Host "[qam-start] ブラウザで開きます: $url" -ForegroundColor Cyan
-try { Start-Process $url | Out-Null } catch { Write-Host "  手動で開いてください: $url" -ForegroundColor Yellow }
+Write-Host '[qam-start] SharePoint のページで開きます' -ForegroundColor Cyan
+& $launch -RelayPort $Port

@@ -2027,6 +2027,12 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
 // 繋がらないときに黙ってローカルで動くと「自分だけ違うものを見ている」事故になるので、
 // 失敗は隠さずに止める。
 async function initStorage(): Promise<{ ok: true } | { ok: false; reason: string }> {
+  // SharePoint の REST は同一オリジンの Cookie で認証する。ローカルの画面（relay が配信する
+  // http://127.0.0.1:<port>/）から開いていると、その Cookie が無いので必ず失敗する。
+  // 失敗してから「接続できません」と言うより、開き方が違うことを名指しで伝える。
+  if (!IS_OVERLAY) {
+    return { ok: false, reason: 'ローカルの画面（127.0.0.1）から開いています。管理データは SharePoint にあるため、この画面からは接続できません。' };
+  }
   const cfg = await getConfig();
   const siteUrl = (cfg.spSiteUrl || '').trim();
   const library = (cfg.spLibrary || '').trim() || 'QamData';
@@ -2045,8 +2051,16 @@ async function initStorage(): Promise<{ ok: true } | { ok: false; reason: string
   }
 }
 
-// 保管先に繋がらないときの案内。ここで止める（読み書きの当てが無いまま画面を出さない）。
-function showStorageDownModal(reason: string): void {
+// 保管先に繋がらないときの案内。読み書きの当てが無いまま画面を出さない。
+// ★ここで「設定を直す手段」も出す。保管先が繋がらないと設定画面へ辿り着けないので、
+//   サイト URL 未設定のときに詰んでしまうため（設定画面はアプリの中にある）。
+function showStorageDownModal(reason: string, onRetry: () => void): void {
+  const site = el('input', {
+    class: 'in', placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE',
+  }) as HTMLInputElement;
+  const lib = el('input', { class: 'in', placeholder: 'QamData' }) as HTMLInputElement;
+  void getConfig().then((c) => { site.value = c.spSiteUrl || ''; lib.value = c.spLibrary || 'QamData'; }).catch(() => undefined);
+
   const body = el('div', {}, [
     el('div', { style: 'display:flex;gap:var(--s-3);align-items:flex-start' }, [
       el('span', { style: 'color:var(--danger);flex:none', html: icon('alert', 20) }),
@@ -2055,10 +2069,30 @@ function showStorageDownModal(reason: string): void {
     el('div', { style: 'margin-top:var(--s-4)' }, [callout(reason)]),
     el('div', { style: 'margin-top:var(--s-4)' }, [callout(
       'このアプリは SharePoint のページ上で動かす必要があります（サインイン情報を使うため）。'
-      + 'qam-start.bat から起動してください。サイト URL は設定 → 共通設定で確認できます。',
+      + 'ブラウザで 127.0.0.1 を直接開いても接続できません。qam-start.bat から起動してください。',
     )]),
+    el('div', { class: 'qam-form-sec' }, ['接続先の設定']),
+    el('div', { class: 'qam-field' }, [el('label', {}, ['SharePoint サイト URL']), site]),
+    el('div', { class: 'qam-field' }, [el('label', {}, ['ドキュメントライブラリ名']), lib]),
   ]);
-  openModal({ title: '保管先に接続できません', body });
+  openModal({
+    title: '保管先に接続できません',
+    body,
+    primaryLabel: '保存して再試行',
+    dismissBackdrop: false,
+    onPrimary: async () => {
+      const url = site.value.trim();
+      if (!url) { toast('SharePoint サイト URL を入力してください', 'error'); return false; }
+      try {
+        await setConfig({ spSiteUrl: url, spLibrary: lib.value.trim() || 'QamData' });
+      } catch (e) {
+        toast(`設定を保存できません（中継サーバを確認してください）: ${(e as Error).message}`, 'error');
+        return false;
+      }
+      onRetry();
+      return true;
+    },
+  });
 }
 
 async function start(): Promise<void> {
@@ -2068,7 +2102,11 @@ async function start(): Promise<void> {
     toast('中継サーバに接続できません。Qualys の取得・登録はできませんが、保存済みデータは参照できます', 'error');
   }
   const storage = await initStorage();
-  if (!storage.ok) { showStorageDownModal(storage.reason); return; }
+  if (!storage.ok) {
+    // 設定を直して再試行できるようにする（直せば再読込せずに続行できる）。
+    showStorageDownModal(storage.reason, () => { void start(); });
+    return;
+  }
   refresh();
   const ai = new URLSearchParams(location.search).get('autoingest');
   if (ai !== null) {
