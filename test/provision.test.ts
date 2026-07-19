@@ -344,3 +344,15 @@ describe('MAP / SCAN の表示順', () => {
     expect(map).toBeLessThan(scan);     // MAP が SCAN より先
   });
 });
+
+describe('地域区分の必須判定', () => {
+  it('MAP を実施しないなら未選択でも通る', () => {
+    const scanOnly = base({ regionCode: '', assets: [asset('203.0.113.1', true, false)] });
+    expect(validateProvision(scanOnly)).toEqual([]);
+  });
+
+  it('MAP を実施するなら未選択は弾く', () => {
+    const withMap = base({ regionCode: '', assets: [asset('203.0.113.1', true, true)] });
+    expect(validateProvision(withMap)).toContain('MAP を実施する資産があるため、地域区分を選んでください');
+  });
+});

@@ -59,6 +59,16 @@ const field = (label: string, node: Node, note = ''): HTMLElement =>
 const numInput = (value: number, min: number, max: number): HTMLInputElement =>
   el('input', { class: 'in', type: 'number', min: String(min), max: String(max), value: String(value) }) as HTMLInputElement;
 
+// 日付＋時刻を 1 行に並べる（時・分は単位付きの小さな枠）。
+const dateTimeRow = (date: HTMLElement, hour: HTMLElement, minute: HTMLElement): HTMLElement =>
+  el('div', { class: 'qam-sched-dt' }, [
+    date,
+    el('div', { class: 'qam-sched-time' }, [
+      hour, el('span', { class: 'qam-sched-unit' }, ['時']),
+      minute, el('span', { class: 'qam-sched-unit' }, ['分']),
+    ]),
+  ]);
+
 // 検査予定日(YYYY-MM-DD) → タイトル用 YYYYMMDD。
 const ymd = (iso: string): string => (iso || '').replace(/-/g, '');
 
@@ -84,6 +94,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const applicant = el('input', { class: 'in', placeholder: '検査を依頼してきた部門の担当者名' }) as HTMLInputElement;
   const note = el('textarea', { class: 'in qam-prov-note', rows: '3', placeholder: '補足があれば記入' }) as HTMLTextAreaElement;
   const region = el('select', { class: 'in' }) as HTMLSelectElement;
+  // 既定は未選択。MAP を実施する場合のみ必須（ドメイン名の末尾に使う）。
+  region.append(el('option', { value: '' }, ['（未選択）']));
   regions.forEach((r) => region.append(el('option', { value: r.code }, [`${r.label}（${r.code}）`])));
   const preview = el('div', { class: 'qam-prov-preview' });
   // 取り込み済みデータに同名の AssetGroup / ドメインがあるときの注意（赤字）。
@@ -127,7 +139,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const rowAssetType = field('資産種別', assetType, '静的=IP 指定。動的=FQDN 指定（IP は入力できません）。');
   const rowDepartment = field('申請部門', department, 'AssetGroup の Division に記録されます。');
   const rowApplicant = field('申請部門担当者', applicant, '検査を依頼してきた部門の担当者名です（このツールの利用者ではありません）。');
-  const rowRegion = field('地域区分', region, 'MAP 用ドメイン名の末尾に付く地域コードです。');
+  const rowRegion = field('地域区分', region,
+    'MAP 用ドメイン名の末尾に付く地域コードです。MAP を実施する資産がある場合は必須です。');
   const rowIp = field('検査資産情報（IP）', ipEditor.node,
     '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
     + '行ごとに MAP / SCAN を選べます（両方可）。プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
@@ -135,12 +148,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
     + '動的（FQDN 指定）は MAP 検査の対象外のため、MAP は選べません（SCAN のみ）。');
 
-  const rowMapTime = field('MAP の検査予定日時',
-    el('div', { class: 'qam-sched-dt' }, [mapDate, el('div', { class: 'qam-sched-time' }, [mapHour, mapMinute])]),
-    'この日時に1回だけ実行されます。');
-  const rowScanTime = field('SCAN の検査予定日時',
-    el('div', { class: 'qam-sched-dt' }, [scanDate, el('div', { class: 'qam-sched-time' }, [scanHour, scanMinute])]),
-    'この日時に1回だけ実行されます。');
+  const rowMapTime = field('MAP の検査予定日時', dateTimeRow(mapDate, mapHour, mapMinute), 'この日時に1回だけ実行されます。');
+  const rowScanTime = field('SCAN の検査予定日時', dateTimeRow(scanDate, scanHour, scanMinute), 'この日時に1回だけ実行されます。');
   const rowMapTitle = field('MAP のスケジュールタイトル', mapTitle, '既定は「AssetGroup名_m_検査予定日」。');
   const rowScanTitle = field('SCAN のスケジュールタイトル', scanTitle, '既定は「AssetGroup名_s_検査予定日」。');
 
@@ -218,8 +227,7 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     show(rowFqdn, isDyn);
     ipEditor.setEnabled(!isDyn);
     fqdnEditor.setEnabled(isDyn);
-    // MAP を実施する資産があるときだけ、地域区分と MAP 側の設定を出す（動的は MAP 対象外）。
-    show(rowRegion, p.withMap);
+    // 地域区分は常に表示する（MAP を選んだときだけ必須）。MAP 側の設定は MAP 対象があるときだけ。
     show(rowMapTime, p.withMap);
     show(rowMapTitle, p.withMap);
     show(rowScanTime, p.withScan && !(p.withMap && sameTiming.checked));
@@ -324,8 +332,11 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     const plan = planProvision(p);
     const scan = readSchedule('scan', p);
     const map = readSchedule('map', p);
-    const errors = [
-      ...validateProvision(p),
+    // スケジュール側の検証は入力（AssetGroup/ドメイン）が揃ってから。先に出すと
+    // 「地域区分が未選択」→「対象のドメインを入力してください」のように、原因ではない
+    // 派生エラーが並んで分かりにくくなる。
+    const invalid = validateProvision(p);
+    const errors = invalid.length ? invalid : [
       ...(plan.withScan ? validateSchedule(scan) : []),
       ...(plan.withMap ? validateSchedule(map) : []),
     ];

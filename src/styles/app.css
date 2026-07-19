@@ -433,8 +433,9 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 /* スケジュール登録フォーム */
 .qam-sched-wdrow { display: flex; flex-wrap: wrap; gap: var(--s-3); }
 .qam-sched-wd { display: inline-flex; align-items: center; gap: var(--s-1); font-size: var(--fs-sm); cursor: pointer; }
-.qam-sched-time { display: flex; gap: var(--s-3); }
-.qam-sched-time .in { width: 90px; }
+.qam-sched-time { display: flex; align-items: center; gap: var(--s-2); flex: 0 0 auto; }
+/* 時・分は 2 桁しか入らないので枠は最小限に（日付と1行に収めるため） */
+.qam-sched-time .in { width: 58px; text-align: right; }
 .qam-sched-err { color: var(--danger); font-size: var(--fs-sm); margin-top: var(--s-3); user-select: text; }
 /* hidden 属性は UA の display:none だが、作者側の display 指定（flex 等）に負ける。
    .qam-field や .qam-prov-range を hidden にしても消えないので、ここで確実に消す。 */
@@ -487,9 +488,10 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-tok-ck--na { color: var(--ink-4); cursor: not-allowed; opacity: .55; }
 .qam-tok-ck--na input { cursor: not-allowed; }
 .qam-tok-item .qam-spacer { flex: 1; }
-/* 検査予定日＋時刻を1行に */
-.qam-sched-dt { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
-.qam-sched-dt .in[type="date"] { width: auto; flex: 0 1 170px; }
+/* 検査予定日＋時刻は必ず1行（折り返さない）。2段組の列幅に収まるよう日付枠も詰める */
+.qam-sched-dt { display: flex; align-items: center; gap: var(--s-3); flex-wrap: nowrap; }
+.qam-sched-dt .in[type="date"] { width: auto; flex: 0 1 150px; min-width: 128px; }
+.qam-sched-unit { font-size: var(--fs-xs); color: var(--ink-3); flex: 0 0 auto; }
 /* 登録前チェック: 資産ごとの既存/新規バッジ、リスト下のまとめ、同名警告 */
 .qam-tok-badge { font-size: var(--fs-xs); line-height: 1.7; padding: 0 var(--s-2); border-radius: var(--r-1);
   border: 1px solid var(--line); color: var(--ink-3); white-space: nowrap; }
