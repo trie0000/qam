@@ -66,6 +66,16 @@ export const qualysScheduleAdd = (body: {
   base: string; user: string; pass: string; proxy: string; path: string; author: string; fields: Record<string, string>;
 }): Promise<ScheduleAddResult> => postJson('/qam/qualys/schedule-add', body);
 
+// FQDN の名前解決（ブラウザからは引けないので relay に代行させる）。
+// 1 件でも失敗し得るので、成否は結果の各要素で見る（呼び出し自体は成功扱い）。
+export interface ResolveRow { name: string; ok: boolean; addresses: string[]; error?: string }
+export async function resolveHosts(names: string[]): Promise<ResolveRow[]> {
+  const d = await postJson('/qam/resolve', { names });
+  if (d?.error) throw new Error(d.error);
+  const rows: ResolveRow[] = Array.isArray(d?.results) ? d.results : (d?.results ? [d.results] : []);
+  return rows.map((r) => ({ ...r, addresses: Array.isArray(r.addresses) ? r.addresses : (r.addresses ? [r.addresses] : []) }));
+}
+
 export interface SessionResult { ok: boolean; status?: number; error?: string }
 export const qualysLogin = (creds: { base: string; user: string; pass: string; proxy: string }): Promise<SessionResult> => postJson('/qam/qualys/login', creds);
 export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/logout', {});

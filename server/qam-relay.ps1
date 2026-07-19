@@ -453,6 +453,44 @@ function Invoke-QualysUserAdd { param($Body)
     } finally { $client.Dispose(); $handler.Dispose() }
 }
 
+# ─── 名前解決（FQDN の検査対象を登録する前の確認）────────────────────────────
+# ブラウザからは DNS を引けないので relay が代行する。外部コマンド(nslookup)は起動せず
+# .NET のリゾルバを使う（引数を渡さないので注入の余地がない・OS 差も吸収できる）。
+# relay は単スレッドなので、応答しない名前で全体が止まらないよう 1 件ずつ待ち時間を区切る。
+$QamDnsTimeoutMs = 4000
+$QamFqdnPattern = '^[A-Za-z0-9]([A-Za-z0-9\-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9\-]*[A-Za-z0-9])?)+$'
+
+function Resolve-QamHost { param([string]$Name)
+    if ($Name.Length -gt 253 -or $Name -notmatch $QamFqdnPattern) {
+        return [ordered]@{ name = $Name; ok = $false; addresses = @(); error = 'FQDN の書式ではありません' }
+    }
+    try {
+        $task = [System.Net.Dns]::GetHostAddressesAsync($Name)
+        if (-not $task.Wait($QamDnsTimeoutMs)) {
+            return [ordered]@{ name = $Name; ok = $false; addresses = @(); error = "応答がありません（${QamDnsTimeoutMs}ms でタイムアウト）" }
+        }
+        $addrs = @($task.Result | ForEach-Object { $_.IPAddressToString })
+        if ($addrs.Count -eq 0) { return [ordered]@{ name = $Name; ok = $false; addresses = @(); error = 'アドレスが返りませんでした' } }
+        return [ordered]@{ name = $Name; ok = $true; addresses = $addrs; error = '' }
+    } catch {
+        $ex = $_.Exception; while ($ex.InnerException) { $ex = $ex.InnerException }
+        return [ordered]@{ name = $Name; ok = $false; addresses = @(); error = $ex.Message }
+    }
+}
+
+function Invoke-QamResolve { param($Body)
+    $results = @()
+    $names = @($Body.names) | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ } | Select-Object -Unique
+    # 一度に大量に引かれると relay が長時間ふさがるので上限を設ける。
+    if ($names.Count -gt 100) { return [ordered]@{ ok = $false; error = '一度に検証できるのは 100 件までです'; results = @() } }
+    foreach ($n in $names) {
+        $r = Resolve-QamHost $n
+        Add-QamLog ("DNS {0} -> {1}" -f $n, $(if ($r.ok) { $r.addresses -join ',' } else { 'NG ' + $r.error }))
+        $results += $r
+    }
+    return [ordered]@{ ok = $true; results = @($results) }
+}
+
 # ─── ルーティング ────────────────────────────────────────────────────────────
 $IndexHtml = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QAM — Qualys Asset Management</title></head><body><div id="qam-root"></div><script src="/qam/bundle/qam.bundle.js"></script></body></html>'
 
@@ -487,6 +525,11 @@ function Invoke-Route { param($Ctx)
         '^/qam/qualys/schedule-add$' {
             try { Send-Json $Ctx (Invoke-QualysScheduleAdd (Get-Body $req | ConvertFrom-Json)) }
             catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            return
+        }
+        '^/qam/resolve$' {
+            try { Send-Json $Ctx (Invoke-QamResolve (Get-Body $req | ConvertFrom-Json)) }
+            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message; results = @() } 502 }
             return
         }
         '^/qam/qualys/user-add$' {

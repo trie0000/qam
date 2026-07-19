@@ -10,6 +10,14 @@ import { icon } from '../../icons';
 import { assetBadge, checkAsset, newHostAssets, type AssetCheck, type AssetRegistry } from '../../precheck';
 import type { AssetEntry, AssetType, TokenParse } from '../../provision';
 
+// FQDN の名前解決の検証結果。unknown=未検証（登録時に警告する）。
+export type ResolveState =
+  | { status: 'unknown' }
+  | { status: 'checking' }
+  | { status: 'ok'; addresses: string[] }
+  | { status: 'ng'; error: string };
+export interface ResolveEntry { value: string; state: ResolveState }
+
 export interface AssetEditor {
   node: HTMLElement;
   read: () => AssetEntry[];
@@ -18,6 +26,8 @@ export interface AssetEditor {
   // SCAN 対象のうち、既存ホストとトラッキング方式が食い違うもの。
   // MAP 対象は AssetGroup の ips/dns_names に入れない（ドメイン側で扱う）ので対象外。
   conflicts: () => AssetCheck[];
+  // SCAN 対象のうち、名前解決が未検証／失敗のもの（resolve を持つときだけ中身が入る）。
+  unresolved: () => ResolveEntry[];
 }
 
 export interface AssetEditorOpts {
@@ -28,6 +38,9 @@ export interface AssetEditorOpts {
   parse: (raw: string) => TokenParse;
   onInvalid: (bad: string[]) => void;
   onChange: () => void;
+  // 名前解決の検証（FQDN のときだけ渡す）。未指定なら検証ボタンを出さない。
+  resolve?: (names: string[]) => Promise<{ name: string; ok: boolean; addresses: string[]; error?: string }[]>;
+  onError?: (message: string) => void;
 }
 
 export function assetEditor(o: AssetEditorOpts): AssetEditor {
@@ -42,11 +55,59 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
   }) as HTMLInputElement;
   allMap.disabled = !o.mapAllowed;
   const allScan = el('input', { type: 'checkbox', title: 'すべての資産を SCAN 対象にする' }) as HTMLInputElement;
+  // 名前解決の検証結果（値ごと）。行を消しても残さない。
+  const resolved = new Map<string, ResolveState>();
+  const resolveBtn = el('button', { class: 'btn btn--sm', type: 'button', title: 'DNS で名前解決できるかを確認します（relay 経由）' },
+    ['名前解決を検証']) as HTMLButtonElement;
   const head = el('div', { class: 'qam-tok-head', hidden: true }, [
+    ...(o.resolve ? [resolveBtn] : []),
     el('span', { class: 'qam-tok-headlbl' }, ['すべて']),
     el('label', { class: 'qam-tok-ck' }, [allMap, el('span', {}, ['MAP'])]),
     el('label', { class: 'qam-tok-ck' }, [allScan, el('span', {}, ['SCAN'])]),
   ]);
+
+  const stateOf = (value: string): ResolveState => resolved.get(value) ?? { status: 'unknown' };
+
+  // 検証結果のバッジ。未検証も「登録時に警告される」ことが分かるよう明示する。
+  const resolveBadge = (value: string): HTMLElement => {
+    const st = stateOf(value);
+    if (st.status === 'ok') {
+      // 代表は IPv4 を優先（検査対象は IPv4 のため）。無ければ先頭を出す。
+      const head = st.addresses.find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a)) ?? st.addresses[0];
+      const rest = st.addresses.length - 1;
+      return el('span', { class: 'qam-tok-badge qam-tok-badge--ok', title: `名前解決 OK: ${st.addresses.join(', ')}` },
+        [`解決 ${head}${rest > 0 ? ` 他${rest}` : ''}`]);
+    }
+    if (st.status === 'ng') return el('span', { class: 'qam-tok-badge qam-tok-badge--ng', title: st.error }, ['解決NG']);
+    if (st.status === 'checking') return el('span', { class: 'qam-tok-badge qam-tok-badge--muted' }, ['検証中…']);
+    return el('span', { class: 'qam-tok-badge qam-tok-badge--muted', title: '「名前解決を検証」で確認できます（未検証のまま登録すると警告します）' }, ['未検証']);
+  };
+
+  // 一覧の値をまとめて検証する（relay は単スレッドなので 1 リクエストで送る）。
+  const runResolve = async (): Promise<void> => {
+    if (!o.resolve || !rows.length) return;
+    const names = rows.map((r) => r.value);
+    for (const n of names) resolved.set(n, { status: 'checking' });
+    resolveBtn.disabled = true;
+    draw();
+    try {
+      const res = await o.resolve(names);
+      const seen = new Set<string>();
+      for (const r of res) {
+        seen.add(r.name);
+        resolved.set(r.name, r.ok ? { status: 'ok', addresses: r.addresses } : { status: 'ng', error: r.error || '名前解決できませんでした' });
+      }
+      // 応答に含まれなかった値は未検証へ戻す（検証中のまま固まらないように）。
+      for (const n of names) if (!seen.has(n)) resolved.delete(n);
+    } catch (e) {
+      for (const n of names) resolved.delete(n);
+      o.onError?.((e as Error).message);
+    } finally {
+      resolveBtn.disabled = false;
+      draw();
+    }
+  };
+  resolveBtn.addEventListener('click', () => { void runResolve(); });
 
   // 同じ値の判定は使い回す（レンジは host 全件の走査になるため）。
   const cache = new Map<string, AssetCheck>();
@@ -108,7 +169,7 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
       };
       list.append(el('div', { class: 'qam-tok-item' }, [
         del, el('span', { class: 'qam-tok-val' }, [r.value]), el('span', { class: 'qam-spacer' }),
-        badgeNode(r.value), ck('map'), ck('scan'),
+        ...(o.resolve ? [resolveBadge(r.value)] : []), badgeNode(r.value), ck('map'), ck('scan'),
       ]));
     });
     syncHead();
@@ -157,5 +218,9 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
       if (!on) { rows.length = 0; input.value = ''; draw(false); } // 使わない入力は残さない
     },
     conflicts: () => rows.filter((r) => r.scan).map((r) => checkOf(r.value)).filter((c) => !!c.issue),
+    unresolved: () => (o.resolve
+      ? rows.filter((r) => r.scan).map((r) => ({ value: r.value, state: stateOf(r.value) }))
+        .filter((e) => e.state.status !== 'ok')
+      : []),
   };
 }

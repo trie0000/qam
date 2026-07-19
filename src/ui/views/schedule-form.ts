@@ -6,7 +6,7 @@
 // 命名・パラメータ組立・検証は provision.ts / schedule.ts（純粋関数）に委ねる。
 import { el } from '../dom';
 import { defaultScheduleInput, validateSchedule, type ScheduleInput } from '../../schedule';
-import { assetEditor } from './asset-editor';
+import { assetEditor, type ResolveEntry } from './asset-editor';
 import { emptyRegistry, existingNameLines, type AssetCheck, type AssetRegistry } from '../../precheck';
 import {
   DEFAULT_REGIONS, planProvision, validateProvision, describeProvision,
@@ -39,6 +39,10 @@ export interface InspectionFormOpts {
   warn: (title: string, lines: string[]) => void;   // 書式違反の警告
   // トラッキング方式の食い違い確認（「検査担当に確認済み」を取れたら true）。
   confirmTracking: (issues: AssetCheck[]) => Promise<boolean>;
+  // FQDN の名前解決（relay 経由）。未指定なら検証ボタンを出さない。
+  resolveHosts?: (names: string[]) => Promise<{ name: string; ok: boolean; addresses: string[]; error?: string }[]>;
+  // 名前解決が未検証／NG のまま登録しようとしたときの確認。続行なら true。
+  confirmResolve: (rows: ResolveEntry[]) => Promise<boolean>;
   submit: (mode: RegisterMode, p: ProvisionInput, scan: ScheduleInput, map: ScheduleInput) => Promise<ProvisionResult>;
   onDone: () => void;
 }
@@ -117,6 +121,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const fqdnEditor = assetEditor({
     hint: FQDN_INPUT_HINT, assetType: 'dynamic', registry, mapAllowed: false, // 動的は MAP 対象外
     parse: parseFqdnInput, onInvalid: warnInvalid('FQDN'), onChange: () => refreshAll(),
+    resolve: o.resolveHosts,
+    onError: (m) => o.warn('名前解決に失敗しました', [m, 'relay が起動しているか、名前解決できるネットワークかを確認してください。']),
   });
 
   // ---- スケジュール（1回のみ: 検査予定日と開始時刻だけ）----
@@ -147,7 +153,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     + '行ごとに MAP / SCAN を選べます（両方可）。プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
   const rowFqdn = field('検査資産情報（FQDN）', fqdnEditor.node,
     '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
-    + '動的（FQDN 指定）は MAP 検査の対象外のため、MAP は選べません（SCAN のみ）。');
+    + '動的（FQDN 指定）は MAP 検査の対象外のため、MAP は選べません（SCAN のみ）。'
+    + '「名前解決を検証」で DNS を引いて確認できます（未検証・解決できないまま登録すると警告します）。');
 
   const rowMapTime = field('MAP の検査予定日時', dateTimeRow(mapDate, mapHour, mapMinute), 'この日時に1回だけ実行されます。');
   const rowScanTime = field('SCAN の検査予定日時', dateTimeRow(scanDate, scanHour, scanMinute), 'この日時に1回だけ実行されます。');
@@ -345,8 +352,12 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     if (errors.length) { showErrors([...new Set(errors)]); return false; }
     showErrors([]);
     // 既存ホストとトラッキング方式が食い違う資産があれば、検査担当の確認が取れるまで進めない。
-    const conflicts = (assetType.value === 'dynamic' ? fqdnEditor : ipEditor).conflicts();
+    const editor = assetType.value === 'dynamic' ? fqdnEditor : ipEditor;
+    const conflicts = editor.conflicts();
     if (conflicts.length && !(await o.confirmTracking(conflicts))) return false;
+    // 名前解決が未検証／NG の FQDN があれば、そのまま登録してよいか確認する。
+    const unresolved = editor.unresolved();
+    if (unresolved.length && !(await o.confirmResolve(unresolved))) return false;
     const mode = regMode.value as RegisterMode;
     const at = (i: ScheduleInput): string =>
       `${i.startDate} ${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}`;

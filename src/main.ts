@@ -9,11 +9,12 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow } from './relay';
+import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts } from './relay';
 import { downloadEntity, downloadIps, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { buildInspectionForm } from './ui/views/schedule-form';
+import type { ResolveEntry } from './ui/views/asset-editor';
 import type { ScheduleInput } from './schedule';
 import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, buildAssetGroupEditParams, buildDomainParams, buildDomainEditParams, mergeNetblocks, DEFAULT_REGIONS, type ProvisionInput } from './provision';
 import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type AssetRegistry, type RegistrySource } from './precheck';
@@ -797,6 +798,8 @@ async function openQuickInspectModal(initial?: ProvisionInput): Promise<void> {
     regions: parseRegions(cfg.regions || ''),
     registry, // 既存の AssetGroup/ドメイン/host list との突き合わせ（登録前チェック）
     confirmTracking,
+    resolveHosts, // FQDN の名前解決（relay 経由）
+    confirmResolve,
     defaults: {
       scanOptionProfile: cfg.scanOptionProfile || '',
       mapOptionProfile: cfg.mapOptionProfile || '',
@@ -820,6 +823,35 @@ async function openQuickInspectModal(initial?: ProvisionInput): Promise<void> {
     dismissBackdrop: false, // 誤クリックで入力を失わせない
     wide: true,             // 2〜3段組の入力があるので横幅を広く取る
     onPrimary: () => form.submit(),
+  });
+}
+
+// 名前解決が未検証／NG の FQDN があるときの警告。ここは「確認して続行」だけ求める
+// （解決できない＝公開前などの正当な理由もあるため、チェックでの二重確認までは課さない）。
+async function confirmResolve(rows: ResolveEntry[]): Promise<boolean> {
+  const reason = (e: ResolveEntry): string =>
+    (e.state.status === 'ng' ? `解決できません（${e.state.error}）` : '未検証');
+  const body = el('div', {}, [
+    el('div', { style: 'margin-bottom:var(--s-4)' }, [
+      callout('SCAN 対象の FQDN に、名前解決を確認できていないものがあります。'),
+    ]),
+    el('div', { class: 'qam-track-list' }, rows.map((e) =>
+      el('div', { class: 'qam-track-item' }, [`${e.value}: ${reason(e)}`]))),
+    el('div', { class: 'qam-track-note' }, [
+      '名前解決できない FQDN は、検査が実施されない（対象なしで終了する）ことがあります。'
+      + '公開前などで解決できないことが分かっている場合はこのまま登録できます。',
+    ]),
+  ]);
+  return new Promise((resolve) => {
+    let done = false;
+    openModal({
+      title: '名前解決を確認できていません',
+      body,
+      primaryLabel: 'このまま登録する',
+      dismissBackdrop: false,
+      onPrimary: () => { done = true; resolve(true); return true; },
+      onClose: () => { if (!done) resolve(false); },
+    });
   });
 }
 
@@ -1665,6 +1697,8 @@ function openHelp(): void {
           件名・申請部門担当者・備考は Comments に記録されます（<b>申請部門担当者</b>は検査を依頼してきた
           部門の担当者名で、このツールの利用者ではありません）。
           <b>動的（FQDN 指定）は MAP 検査の対象外</b>です（MAP のチェックは選べません）。
+          FQDN は<b>「名前解決を検証」</b>で DNS を引いて確認できます（行ごとに 解決/解決NG/未検証 を表示）。
+          <b>未検証・解決NG のまま登録しようとすると警告</b>が出ます（公開前などで解決できない場合はそのまま登録できます）。
           <b>検査資産情報</b>はテキスト欄に直接入力して「追加」（Ctrl/⌘+Enter でも可）でリストに積まれ、
           各行の削除ボタンで消せます。<b>カンマ区切り・改行区切りで複数まとめて追加</b>でき、IP は単体／CIDR／レンジを
           自動判別します（レンジの「-」は両端に半角スペースがあっても可、前後の空白は自動除去。

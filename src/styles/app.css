@@ -499,12 +499,14 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-sched-unit { font-size: var(--fs-xs); color: var(--ink-3); flex: 0 0 auto; }
 /* 登録前チェック: 資産ごとの既存/新規バッジ、リスト下のまとめ、同名警告 */
 .qam-tok-badge { font-size: var(--fs-xs); line-height: 1.7; padding: 0 var(--s-2); border-radius: var(--r-1);
-  border: 1px solid var(--line); color: var(--ink-3); white-space: nowrap; }
+  border: 1px solid var(--line); color: var(--ink-3); white-space: nowrap;
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
 /* 新規=塗り（検査時に host list へ追加される＝注目させる） / 既存=枠線のみ / 食い違い=警告色 */
 .qam-tok-badge--new { color: var(--ink); background: var(--accent-soft); border-color: var(--accent); }
 .qam-tok-badge--warn { color: var(--warn); border-color: var(--warn); }
 .qam-tok-badge--ok { color: var(--ink-3); }
 .qam-tok-badge--muted { color: var(--ink-4); }
+.qam-tok-badge--ng { color: var(--danger); border-color: var(--danger); }
 .qam-tok-foot { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); font-size: var(--fs-xs); }
 .qam-tok-foot-new { color: var(--ink); font-weight: 600; }
 .qam-tok-foot-muted { color: var(--ink-3); }

@@ -283,6 +283,12 @@ qam/
   食い違いがある場合、フォームは `confirmTracking` を呼び、**「検査担当に確認済み」チェックが入るまで
   送信を通さない**（main.ts のモーダル側で primary を弾く）。
 - **relay の許可パス**: schedule/scan・scheduled_scans.php・asset/group・asset_domain.php の 4 つのみ。
+- **名前解決の検証** (`/qam/resolve`): ブラウザから DNS は引けないので relay が代行する。外部コマンド
+  (nslookup) は起動せず `[System.Net.Dns]::GetHostAddressesAsync` を使う（引数を渡さないので注入の
+  余地がなく、PS5.1/7・OS 差も吸収できる）。relay は単スレッドなので **1 件ごとに 4 秒でタイムアウト**し、
+  **1 リクエスト 100 件まで**。名前は FQDN 書式に一致するものだけ引き、結果は relay.log にも残す。
+  UI 側は行ごとに `unknown | checking | ok | ng` を保持し、SCAN 対象に ok 以外があれば登録前に確認する
+  （トラッキング食い違いと違いチェックは課さない。公開前で解決できない、が正当な運用のため）。
 - **検査種別は資産ごと**: `AssetEntry { value, scan, map }` を持ち、MAP 対象は **domains**
   （申請番号ベースのドメイン1件＋対象IPを `netblock` に）、SCAN 対象は AssetGroup の `ips`/`dns_names`
   へ登録する。`planProvision` が scanTargets / mapTargets / domains / netblocks を導出する。
