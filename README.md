@@ -309,6 +309,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<配置先>\qam-autoingest.
 - [x] **Phase 4** — 四半期検査（SCAN/MAP の四半期充足チェック）: scan/map の実施済み・スケジュール一覧を
       API 取得し、現四半期の 検査済み/スケジュール済み/未対応 を AssetGroup・ドメイン単位で判定。
       未対応 AssetGroup の一覧、週次サマリ、対象×週マトリクスを表示（`src/inspection*.ts` / `src/ui/views/inspection.ts`）
+- [ ] **Phase 5** — SPO 共有化（複数人同時利用）: 管理データを SharePoint のリスト／ライブラリへ移し、
+      UI は SharePoint ページへ overlay 注入（起動は CDP 方式）。relay は Qualys 中継だけを担う。
+      方針は [docs/SPO-MULTIUSER.md](docs/SPO-MULTIUSER.md)
 
 > 言語：アプリ本体 = TypeScript（esbuild / vitest）、relay・launcher = PowerShell 5.1 準拠。
 
