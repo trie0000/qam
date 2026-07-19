@@ -97,11 +97,11 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   // 取り込み済みデータ（AssetGroup/ドメイン/host list）。未取込なら「判定不可」表示になる。
   const registry = o.registry ?? emptyRegistry();
   const ipEditor = assetEditor({
-    hint: IP_INPUT_HINT, assetType: 'static', registry,
+    hint: IP_INPUT_HINT, assetType: 'static', registry, mapAllowed: true,
     parse: parseIpInput, onInvalid: warnInvalid('IP'), onChange: () => refreshAll(),
   });
   const fqdnEditor = assetEditor({
-    hint: FQDN_INPUT_HINT, assetType: 'dynamic', registry,
+    hint: FQDN_INPUT_HINT, assetType: 'dynamic', registry, mapAllowed: false, // 動的は MAP 対象外
     parse: parseFqdnInput, onInvalid: warnInvalid('FQDN'), onChange: () => refreshAll(),
   });
 
@@ -111,7 +111,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const scanOpt = el('input', { class: 'in', value: o.defaults.scanOptionProfile, placeholder: '未入力ならアカウント既定' }) as HTMLInputElement;
   const mapOpt = el('input', { class: 'in', value: o.defaults.mapOptionProfile, placeholder: '未入力ならアカウント既定' }) as HTMLInputElement;
   const scanner = el('input', { class: 'in', value: o.defaults.scannerAppliance }) as HTMLInputElement;
-  // 検査予定日時は SCAN / MAP で別に持つ。「同じタイミング」にすると MAP は SCAN の値に追従する。
+  // 検査予定日時は MAP / SCAN で別に持つ。「同じタイミング」にすると SCAN は MAP の値に追従する
+  // （表示順が MAP → SCAN なので、先に入力する MAP を基準にする）。
   const sameTiming = el('input', { type: 'checkbox' }) as HTMLInputElement;
   sameTiming.checked = true;
   const scanDate = el('input', { class: 'in', type: 'date', value: o.today }) as HTMLInputElement;
@@ -129,27 +130,28 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const rowRegion = field('地域区分', region, 'MAP 用ドメイン名の末尾に付く地域コードです。');
   const rowIp = field('検査資産情報（IP）', ipEditor.node,
     '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
-    + '行ごとに SCAN / MAP を選べます（両方可）。プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
+    + '行ごとに MAP / SCAN を選べます（両方可）。プライベートIP（10/8・172.16/12・192.168/16）は登録できません。');
   const rowFqdn = field('検査資産情報（FQDN）', fqdnEditor.node,
     '入力して「追加」（Ctrl/⌘+Enter でも可）。カンマ区切り・改行区切りで複数まとめて追加できます。'
-    + '行ごとに SCAN / MAP を選べます（両方可）。');
+    + '動的（FQDN 指定）は MAP 検査の対象外のため、MAP は選べません（SCAN のみ）。');
 
+  const rowMapTime = field('MAP の検査予定日時',
+    el('div', { class: 'qam-sched-dt' }, [mapDate, el('div', { class: 'qam-sched-time' }, [mapHour, mapMinute])]),
+    'この日時に1回だけ実行されます。');
   const rowScanTime = field('SCAN の検査予定日時',
     el('div', { class: 'qam-sched-dt' }, [scanDate, el('div', { class: 'qam-sched-time' }, [scanHour, scanMinute])]),
     'この日時に1回だけ実行されます。');
-  const rowMapTime = field('MAP の検査予定日時',
-    el('div', { class: 'qam-sched-dt' }, [mapDate, el('div', { class: 'qam-sched-time' }, [mapHour, mapMinute])]));
-  const rowScanTitle = field('SCAN のスケジュールタイトル', scanTitle, '既定は「AssetGroup名_s_検査予定日」。');
   const rowMapTitle = field('MAP のスケジュールタイトル', mapTitle, '既定は「AssetGroup名_m_検査予定日」。');
+  const rowScanTitle = field('SCAN のスケジュールタイトル', scanTitle, '既定は「AssetGroup名_s_検査予定日」。');
 
   // 既定値は共通設定から来る。何が入るのかを具体値で示す（未設定なら Qualys 側の既定に委ねる旨）。
   const defNote = (v: string): string =>
     (v.trim() ? `共通設定の既定値: ${v.trim()}` : '共通設定が未設定のため、Qualys アカウントの既定プロファイルが適用されます。');
-  const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, defNote(o.defaults.scanOptionProfile));
   const rowMapOpt = field('MAP のオプションプロファイル', mapOpt, defNote(o.defaults.mapOptionProfile));
+  const rowScanOpt = field('SCAN のオプションプロファイル', scanOpt, defNote(o.defaults.scanOptionProfile));
   const rowScanner = field('スキャナー', scanner, `共通設定の既定値: ${o.defaults.scannerAppliance || 'External'}`);
   // 通常は触らない項目なのでトグルで畳んでおく（開いた状態は保持しない＝毎回閉じる）。
-  const optBody = el('div', { class: 'qam-prov-optbody', hidden: true }, [rowScanner, rowScanOpt, rowMapOpt]);
+  const optBody = el('div', { class: 'qam-prov-optbody', hidden: true }, [rowScanner, rowMapOpt, rowScanOpt]);
   const optCb = el('input', { type: 'checkbox', id: 'qam-opt-toggle' }) as HTMLInputElement;
   optCb.addEventListener('change', () => { optBody.hidden = !optCb.checked; });
   const optToggle = el('label', { class: 'qam-prov-opttoggle', for: 'qam-opt-toggle' }, [
@@ -169,12 +171,14 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     note: note.value,
   });
 
-  // 「同じタイミング」なら MAP の日時は SCAN に追従する。
+  // 「同じタイミング」なら SCAN の日時は MAP に追従する（先に入力する MAP が基準）。
+  // 片方しか実施しないときは同期しない（未使用側の値で上書きしてしまうため）。
   const syncTiming = (): void => {
-    if (!sameTiming.checked) return;
-    mapDate.value = scanDate.value;
-    mapHour.value = scanHour.value;
-    mapMinute.value = scanMinute.value;
+    const p = planProvision(readProvision());
+    if (!sameTiming.checked || !p.withMap || !p.withScan) return;
+    scanDate.value = mapDate.value;
+    scanHour.value = mapHour.value;
+    scanMinute.value = mapMinute.value;
   };
 
   // スケジュールタイトルの既定値: AssetGroup 名 + _s_/_m_ + 検査予定日(YYYYMMDD)。
@@ -196,9 +200,9 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   function refreshPreview(): void {
     const p = planProvision(readProvision());
     const rows: string[] = [`AssetGroup: ${p.title || '（申請番号を入力）'}`];
-    rows.push(`SCAN 対象: ${p.scanTargets.length ? p.scanTargets.join(', ') : '（なし）'}`);
     rows.push(`MAP 対象: ${p.mapTargets.length ? p.mapTargets.join(', ') : '（なし）'}`);
     if (p.domains.length) rows.push(`ドメイン: ${p.domains.join(', ')}`);
+    rows.push(`SCAN 対象: ${p.scanTargets.length ? p.scanTargets.join(', ') : '（なし）'}`);
     preview.textContent = rows.join('　/　');
     const lines = p.title ? existingNameLines(registry, p.title, p.domains) : [];
     exists.hidden = !lines.length;
@@ -214,31 +218,31 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     show(rowFqdn, isDyn);
     ipEditor.setEnabled(!isDyn);
     fqdnEditor.setEnabled(isDyn);
-    // MAP を実施する資産があるときだけ、地域区分と MAP 側の設定を出す。
-    show(rowRegion, p.withMap && !isDyn);
-    show(rowScanTime, p.withScan);
-    show(rowScanTitle, p.withScan);
-    show(rowMapTime, p.withMap && !sameTiming.checked);
+    // MAP を実施する資産があるときだけ、地域区分と MAP 側の設定を出す（動的は MAP 対象外）。
+    show(rowRegion, p.withMap);
+    show(rowMapTime, p.withMap);
     show(rowMapTitle, p.withMap);
+    show(rowScanTime, p.withScan && !(p.withMap && sameTiming.checked));
+    show(rowScanTitle, p.withScan);
     show(rowSameTiming, p.withScan && p.withMap);
     show(optSection, !isLedger);
     show(rowState, !isLedger);
-    show(rowScanOpt, p.withScan);
     show(rowMapOpt, p.withMap);
+    show(rowScanOpt, p.withScan);
     syncTiming();
     refreshPreview();
     syncTitles();
   }
   const rowSameTiming = el('label', { class: 'qam-prov-opttoggle' }, [
-    sameTiming, el('span', {}, ['SCAN と MAP を同じタイミングで実施する']),
+    sameTiming, el('span', {}, ['MAP と SCAN を同じタイミングで実施する']),
   ]);
   sameTiming.addEventListener('change', refreshAll);
   regMode.addEventListener('change', refreshAll);
   assetType.addEventListener('change', refreshAll);
   region.addEventListener('change', refreshAll);
   appNo.addEventListener('input', refreshAll);
-  for (const inp of [scanDate, scanHour, scanMinute]) inp.addEventListener('input', refreshAll);
-  for (const inp of [mapDate, mapHour, mapMinute]) inp.addEventListener('input', () => { refreshPreview(); syncTitles(); });
+  for (const inp of [mapDate, mapHour, mapMinute]) inp.addEventListener('input', refreshAll);
+  for (const inp of [scanDate, scanHour, scanMinute]) inp.addEventListener('input', () => { refreshPreview(); syncTitles(); });
 
   const err = el('div', { class: 'qam-sched-err', hidden: true });
   const body = el('div', {}, [
@@ -261,8 +265,8 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
 
     section('検査スケジュール'),
     rowSameTiming,
-    pair(rowScanTime, rowMapTime),
-    pair(rowScanTitle, rowMapTitle),
+    pair(rowMapTime, rowScanTime),
+    pair(rowMapTitle, rowScanTitle),
 
     section('その他'),
     field('備考欄', note, '件名・申請部門担当者・備考は AssetGroup の Comments に記録されます。'),

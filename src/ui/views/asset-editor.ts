@@ -1,7 +1,8 @@
 // 検査資産情報のエディタ（静的=IP / 動的=FQDN で 1 つずつ使う）。
 // テキスト欄に直接入力 →「追加」でリストへ。カンマ・改行区切りは分割して複数行として登録する
 // （レンジは展開しない）。書式違反が 1 つでもあれば何も追加せず警告し、入力は残して修正を促す。
-// 行ごとに SCAN / MAP のチェックを持ち（両方可）、ヘッダのチェックで全選択/全解除できる。
+// 行ごとに MAP / SCAN のチェックを持ち（両方可）、ヘッダのチェックで全選択/全解除できる。
+// 動的（FQDN 指定）は MAP 検査の対象外なので、MAP のチェックは無効化する。
 // 各行には取り込み済み host list と突き合わせたバッジを出し、
 // 「どれが新規に host list へ追加されるか」「トラッキング方式が食い違っていないか」を登録前に見せる。
 import { el, clear } from '../dom';
@@ -22,6 +23,7 @@ export interface AssetEditor {
 export interface AssetEditorOpts {
   hint: string;
   assetType: AssetType;
+  mapAllowed: boolean;      // false（動的）なら MAP のチェックを無効化する
   registry: AssetRegistry;
   parse: (raw: string) => TokenParse;
   onInvalid: (bad: string[]) => void;
@@ -34,12 +36,16 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
   const addBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['追加']);
   const list = el('div', { class: 'qam-tok-list' });
   const foot = el('div', { class: 'qam-tok-foot', hidden: true });
+  const MAP_NA = '動的（FQDN 指定）の資産は MAP 検査の対象外です';
+  const allMap = el('input', {
+    type: 'checkbox', title: o.mapAllowed ? 'すべての資産を MAP 対象にする' : MAP_NA,
+  }) as HTMLInputElement;
+  allMap.disabled = !o.mapAllowed;
   const allScan = el('input', { type: 'checkbox', title: 'すべての資産を SCAN 対象にする' }) as HTMLInputElement;
-  const allMap = el('input', { type: 'checkbox', title: 'すべての資産を MAP 対象にする' }) as HTMLInputElement;
   const head = el('div', { class: 'qam-tok-head', hidden: true }, [
     el('span', { class: 'qam-tok-headlbl' }, ['すべて']),
-    el('label', { class: 'qam-tok-ck' }, [allScan, el('span', {}, ['SCAN'])]),
     el('label', { class: 'qam-tok-ck' }, [allMap, el('span', {}, ['MAP'])]),
+    el('label', { class: 'qam-tok-ck' }, [allScan, el('span', {}, ['SCAN'])]),
   ]);
 
   // 同じ値の判定は使い回す（レンジは host 全件の走査になるため）。
@@ -55,8 +61,8 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
   // ヘッダのチェック状態を行の状態に合わせる（全部入っていれば on）。
   const syncHead = (): void => {
     head.hidden = rows.length === 0;
+    allMap.checked = o.mapAllowed && rows.length > 0 && rows.every((r) => r.map);
     allScan.checked = rows.length > 0 && rows.every((r) => r.scan);
-    allMap.checked = rows.length > 0 && rows.every((r) => r.map);
   };
 
   // 新規に host list へ登録される見込みの資産を、リストの下にまとめて出す。
@@ -91,15 +97,18 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
     rows.forEach((r, idx) => {
       const del = el('button', { class: 'btn btn--icon btn--sm', type: 'button', 'aria-label': `${r.value} を削除`, title: '削除', html: icon('x', 13) });
       del.addEventListener('click', () => { rows.splice(idx, 1); draw(); o.onChange(); });
-      const ck = (kind: 'scan' | 'map'): HTMLElement => {
+      const ck = (kind: 'map' | 'scan'): HTMLElement => {
+        const na = kind === 'map' && !o.mapAllowed;
         const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
-        cb.checked = r[kind];
+        cb.checked = r[kind] && !na;
+        cb.disabled = na;
         cb.addEventListener('change', () => { r[kind] = cb.checked; syncHead(); drawFoot(); o.onChange(); });
-        return el('label', { class: 'qam-tok-ck' }, [cb, el('span', {}, [kind === 'scan' ? 'SCAN' : 'MAP'])]);
+        return el('label', { class: `qam-tok-ck${na ? ' qam-tok-ck--na' : ''}`, ...(na ? { title: MAP_NA } : {}) },
+          [cb, el('span', {}, [kind === 'map' ? 'MAP' : 'SCAN'])]);
       };
       list.append(el('div', { class: 'qam-tok-item' }, [
         del, el('span', { class: 'qam-tok-val' }, [r.value]), el('span', { class: 'qam-spacer' }),
-        badgeNode(r.value), ck('scan'), ck('map'),
+        badgeNode(r.value), ck('map'), ck('scan'),
       ]));
     });
     syncHead();
@@ -133,7 +142,14 @@ export function assetEditor(o: AssetEditorOpts): AssetEditor {
   return {
     node,
     read: () => rows.map((r) => ({ ...r })),
-    add: (init) => { for (const a of init) if (a.value && !rows.some((r) => r.value === a.value)) rows.push({ ...a }); draw(); },
+    // 古い履歴からのプリフィルで MAP が付いていても、対象外なら落とす。
+    add: (init) => {
+      for (const a of init) {
+        if (!a.value || rows.some((r) => r.value === a.value)) continue;
+        rows.push({ ...a, map: a.map && o.mapAllowed });
+      }
+      draw();
+    },
     // 資産種別で使わない側は入力自体を止める（見えていても打てない状態にしない）。
     setEnabled: (on) => {
       input.disabled = !on;

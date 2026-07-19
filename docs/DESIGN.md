@@ -279,10 +279,17 @@ qam/
   食い違いがある場合、フォームは `confirmTracking` を呼び、**「検査担当に確認済み」チェックが入るまで
   送信を通さない**（main.ts のモーダル側で primary を弾く）。
 - **relay の許可パス**: schedule/scan・scheduled_scans.php・asset/group・asset_domain.php の 4 つのみ。
-- **検査種別は資産ごと**: `AssetEntry { value, scan, map }` を持ち、SCAN 対象は AssetGroup の
-  `ips`/`dns_names`、MAP 対象は **domains** へ登録する（静的=申請番号ベースのドメイン1件＋対象IPを
-  `netblock` に／動的=FQDN 自体をドメインに）。`planProvision` が scanTargets / mapTargets /
-  domains / netblocks を導出する。全選択チェックは行の状態に追従する。
+- **検査種別は資産ごと**: `AssetEntry { value, scan, map }` を持ち、MAP 対象は **domains**
+  （申請番号ベースのドメイン1件＋対象IPを `netblock` に）、SCAN 対象は AssetGroup の `ips`/`dns_names`
+  へ登録する。`planProvision` が scanTargets / mapTargets / domains / netblocks を導出する。
+  全選択チェックは行の状態に追従する。
+- **動的は MAP 対象外**: `planProvision` が `assetType === 'dynamic'` のとき mapTargets を空にする
+  （UI で MAP チェックを無効化するのに加え、モデル側でも落とす）。古い履歴からのプリフィルに備え、
+  `validateProvision` は動的＋MAP をエラーにし、`asset-editor` の `add()` も map を落とす。
+- **表示順は MAP → SCAN**: 運用の実施順に合わせ、資産行のチェック・スケジュール欄・
+  オプションプロファイル・`describeProvision` の確認内容・登録手順（スケジュール作成と管理表記録）を
+  すべて MAP 先行で揃える。「同じタイミング」は**先に入力する MAP を基準に SCAN が追従**し、
+  片方だけ実施する場合は同期しない（未使用側の値で上書きしないため）。
 - **スケジュールタイトル**: `scheduleTitle(agTitle, kind, ymd)` = `AG名_s_YYYYMMDD` / `AG名_m_YYYYMMDD`。
 - **検査予定日時**: SCAN/MAP で別に保持。「同じタイミング」チェック時は MAP が SCAN に追従する。
 - **資産種別**: 静的（IP 指定）= 検査資産情報は IP のみ。

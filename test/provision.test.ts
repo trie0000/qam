@@ -132,10 +132,16 @@ describe('資産ごとの SCAN/MAP 指定と入力検証', () => {
     expect(p.netblocks).toEqual(['203.0.113.1', '203.0.113.2']);
   });
 
-  it('動的の MAP は FQDN 自体をドメインとして登録する（ネットブロックなし）', () => {
-    const p = planProvision(dyn({ assets: [asset('a.example.jp', false, true), asset('b.example.jp', false, true)] }));
-    expect(p.domains).toEqual(['a.example.jp', 'b.example.jp']);
+  it('動的は MAP 対象外（MAP が付いていても無視し、ドメインも作らない）', () => {
+    const i = dyn({ assets: [asset('a.example.jp', true, true), asset('b.example.jp', false, true)] });
+    const p = planProvision(i);
+    expect(p.withMap).toBe(false);
+    expect(p.mapTargets).toEqual([]);
+    expect(p.domains).toEqual([]);
     expect(p.netblocks).toEqual([]);
+    expect(p.scanTargets).toEqual(['a.example.jp']);
+    // 古いデータからの復元で MAP が残っていたら検証で気づけるようにする
+    expect(validateProvision(i)).toContain('動的（FQDN 指定）の資産は MAP 検査の対象外です');
   });
 
   it('正しい入力なら検証を通る（静的・動的とも）', () => {
@@ -324,5 +330,17 @@ describe('同名がある場合の更新パラメータ', () => {
   it('追加分が無ければ added は空（更新自体を行わない判断に使う）', () => {
     expect(mergeNetblocks(['203.0.113.1'], ['203.0.113.1']).added).toEqual([]);
     expect(mergeNetblocks([], []).added).toEqual([]);
+  });
+});
+
+describe('MAP / SCAN の表示順', () => {
+  it('確認内容は MAP（ドメイン）→ SCAN の順に並ぶ', () => {
+    const lines = describeProvision(base());
+    const map = lines.findIndex((l) => l.startsWith('MAP スケジュール'));
+    const scan = lines.findIndex((l) => l.startsWith('SCAN スケジュール'));
+    const domain = lines.findIndex((l) => l.startsWith('ドメイン「'));
+    expect(map).toBeGreaterThanOrEqual(0);
+    expect(domain).toBeLessThan(map);   // ドメイン登録は MAP スケジュールの前
+    expect(map).toBeLessThan(scan);     // MAP が SCAN より先
   });
 });

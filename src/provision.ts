@@ -175,9 +175,9 @@ export function domainName(applicationNo: string, regionCode: string): string {
   return label && code ? `${label}.${code}` : '';
 }
 
-// 検査対象の資産 1 件。資産ごとに SCAN / MAP のどちらを実施するかを持つ（両方可）。
+// 検査対象の資産 1 件。資産ごとに MAP / SCAN のどちらを実施するかを持つ（両方可）。
+//   MAP  対象 → domains に登録し、ドメイン指定でスケジュール（静的のみ）
 //   SCAN 対象 → AssetGroup の ips / dns_names に登録し、AssetGroup 指定でスケジュール
-//   MAP  対象 → domains に登録し、ドメイン指定でスケジュール
 export interface AssetEntry { value: string; scan: boolean; map: boolean }
 
 export interface ProvisionInput {
@@ -202,25 +202,23 @@ export interface ProvisionPlan {
   scanTargets: string[];  // AssetGroup の ips / dns_names に入れる資産
   mapTargets: string[];   // MAP 検査対象の資産
   domains: string[];      // domains へ登録する名前（MAP スケジュールの対象）
-  netblocks: string[];    // 静的のとき、生成ドメインに紐付けるネットブロック
+  netblocks: string[];    // 生成ドメインに紐付けるネットブロック（＝MAP 対象IP）
   withScan: boolean;
   withMap: boolean;
 }
 
 export function planProvision(i: ProvisionInput): ProvisionPlan {
-  const isDyn = i.assetType === 'dynamic';
+  // 動的（FQDN 指定）は MAP 検査の対象外。MAP はドメイン配下を探索する検査で、
+  // FQDN 単体の資産に対しては行わない運用のため、MAP の指定があっても無視する。
+  const mapTargets = i.assetType === 'dynamic' ? [] : mapAssets(i);
   const scanTargets = scanAssets(i);
-  const mapTargets = mapAssets(i);
   return {
     title: assetGroupTitle(i.applicationNo),
     scanTargets,
     mapTargets,
-    // 動的(FQDN)は FQDN 自体をドメインとして登録。静的(IP)は申請番号ベースの
-    // ドメイン名を1つ払い出し、対象IPをそのネットブロックとして紐付ける。
-    domains: mapTargets.length
-      ? (isDyn ? mapTargets : [domainName(i.applicationNo, i.regionCode)].filter(Boolean))
-      : [],
-    netblocks: isDyn ? [] : mapTargets,
+    // 申請番号ベースのドメイン名を1つ払い出し、MAP 対象IPをそのネットブロックとして紐付ける。
+    domains: mapTargets.length ? [domainName(i.applicationNo, i.regionCode)].filter(Boolean) : [],
+    netblocks: mapTargets,
     withScan: scanTargets.length > 0,
     withMap: mapTargets.length > 0,
   };
@@ -234,6 +232,9 @@ export function validateProvision(i: ProvisionInput): string[] {
   if (no && assetGroupTitle(no).toLowerCase() === 'all') e.push('AssetGroup 名に "All" は使用できません');
   const p = planProvision(i);
   const isStatic = i.assetType === 'static';
+
+  // 動的は MAP 対象外（UI 側でもチェックできない）。古いデータからの復元に対する保険。
+  if (!isStatic && i.assets.some((a) => a.map)) e.push('動的（FQDN 指定）の資産は MAP 検査の対象外です');
 
   if (!i.assets.length) {
     e.push(isStatic ? '検査資産情報の IP を1つ以上入力してください' : '検査資産情報の FQDN を1つ以上入力してください');
@@ -349,11 +350,12 @@ export function describeProvision(i: ProvisionInput): string[] {
   if ((i.subject ?? '').trim()) lines.push(`　件名: ${(i.subject ?? '').trim()}`);
   if (p.withScan) lines.push(`　SCAN 対象（${i.assetType === 'static' ? 'IP_SET' : 'DNS_LIST'}）: ${p.scanTargets.join(', ')}`);
   else lines.push('　SCAN 対象なし（AssetGroup のみ作成）');
+  // 表示は MAP → SCAN の順（運用の実施順に合わせる）。
   for (const d of p.domains) {
     const nb = p.netblocks.length ? `（ネットブロック: ${p.netblocks.join(', ')}）` : '';
     lines.push(`ドメイン「${d}」を登録${nb}`);
   }
-  if (p.withScan) lines.push(`SCAN スケジュールを登録（対象: ${p.title}）`);
   if (p.withMap) lines.push(`MAP スケジュールを登録（対象: ${p.domains.join(', ')}）`);
+  if (p.withScan) lines.push(`SCAN スケジュールを登録（対象: ${p.title}）`);
   return lines;
 }

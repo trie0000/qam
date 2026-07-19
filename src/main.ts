@@ -876,15 +876,6 @@ async function recordLedger(
   // 予定日時はローカル時刻として記録（週次バケットも利用者のタイムゾーンで切っているため）。
   const at = (i: ScheduleInput): string =>
     `${i.startDate}T${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}:00`;
-  if (plan.withScan) {
-    await appendManualInspection(backend, {
-      ts, author, mode: 'ledger', kind: 'scan', title: scanInput.title,
-      nextLaunch: at(scanInput), assetGroups: [plan.title], domains: [],
-      subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
-      provision: p,
-    });
-    steps.push(`SCAN 予定を管理表に記録（${plan.title}）`);
-  }
   if (plan.withMap) {
     await appendManualInspection(backend, {
       ts, author, mode: 'ledger', kind: 'map', title: mapInput.title,
@@ -893,6 +884,15 @@ async function recordLedger(
       provision: p,
     });
     steps.push(`MAP 予定を管理表に記録（${plan.domains.join(', ')}）`);
+  }
+  if (plan.withScan) {
+    await appendManualInspection(backend, {
+      ts, author, mode: 'ledger', kind: 'scan', title: scanInput.title,
+      nextLaunch: at(scanInput), assetGroups: [plan.title], domains: [],
+      subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
+      provision: p,
+    });
+    steps.push(`SCAN 予定を管理表に記録（${plan.title}）`);
   }
   recordOp('検査登録(管理表のみ)', steps.join(' / '));
   toast(`管理表に記録しました: ${steps.join(' / ')}`, 'ok');
@@ -936,30 +936,30 @@ async function runProvision(
       domains.push(d);
     }
     // 3) スケジュール
-    if (plan.withScan) {
-      await createSchedule(creds, { ...scanInput, targets: [agTitle] }, author);
-      steps.push('SCAN スケジュールを登録');
-    }
     if (plan.withMap) {
       await createSchedule(creds, { ...mapInput, targets: domains }, author);
       steps.push('MAP スケジュールを登録');
+    }
+    if (plan.withScan) {
+      await createSchedule(creds, { ...scanInput, targets: [agTitle] }, author);
+      steps.push('SCAN スケジュールを登録');
     }
     // 登録履歴（管理表）にも残す。実体は Qualys にあるので判定へは合流しない（mode='qualys'）。
     const ts = new Date().toISOString();
     const at = (i: ScheduleInput): string =>
       `${i.startDate}T${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}:00`;
-    if (plan.withScan) {
-      await appendManualInspection(backend, {
-        ts, author, mode: 'qualys', kind: 'scan', title: scanInput.title,
-        nextLaunch: at(scanInput), assetGroups: [agTitle], domains: [],
-        subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
-        provision: p,
-      }).catch(() => undefined); // 履歴の記録失敗で登録自体は失敗にしない
-    }
     if (plan.withMap) {
       await appendManualInspection(backend, {
         ts, author, mode: 'qualys', kind: 'map', title: mapInput.title,
         nextLaunch: at(mapInput), assetGroups: [agTitle], domains,
+        subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
+        provision: p,
+      }).catch(() => undefined); // 履歴の記録失敗で登録自体は失敗にしない
+    }
+    if (plan.withScan) {
+      await appendManualInspection(backend, {
+        ts, author, mode: 'qualys', kind: 'scan', title: scanInput.title,
+        nextLaunch: at(scanInput), assetGroups: [agTitle], domains: [],
         subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
         provision: p,
       }).catch(() => undefined);
@@ -1663,6 +1663,7 @@ function openHelp(): void {
           「その他（備考）」のセクション構成で、申請部門は AssetGroup の Division、
           件名・申請部門担当者・備考は Comments に記録されます（<b>申請部門担当者</b>は検査を依頼してきた
           部門の担当者名で、このツールの利用者ではありません）。
+          <b>動的（FQDN 指定）は MAP 検査の対象外</b>です（MAP のチェックは選べません）。
           <b>検査資産情報</b>はテキスト欄に直接入力して「追加」（Ctrl/⌘+Enter でも可）でリストに積まれ、
           各行の削除ボタンで消せます。<b>カンマ区切り・改行区切りで複数まとめて追加</b>でき、IP は単体／CIDR／レンジを
           自動判別します（レンジの「-」は両端に半角スペースがあっても可、前後の空白は自動除去。
