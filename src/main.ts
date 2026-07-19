@@ -1476,7 +1476,7 @@ function openIngest(): void {
 }
 
 // ---- settings ----
-// Spira 風に分類（個人設定 / 共通設定 / 開発者）。左ペインで分類を選び右ペインに項目を表示。
+// 共通デザインルールに沿って分類（個人設定 / 共通設定 / 開発者）。左ペインで分類を選び右ペインに項目を表示。
 async function openSettings(): Promise<void> {
   const cfg = await getConfig();
   const field = (label: string, input: HTMLElement, hint?: string) =>

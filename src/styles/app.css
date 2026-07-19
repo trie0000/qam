@@ -1,5 +1,5 @@
 /* =========================================================
- * QAM styles — Spira トークン同梱（モスグリーン accent / paper 系）
+ * QAM styles — 共通トークン同梱（モスグリーン accent / paper 系）
  * トークンは :root に集中定義。hex/px 直書き禁止（変数経由）。
  * 単体ページ（SP overlay ではない）ため all:initial シールドは不要。
  * ========================================================= */
@@ -182,7 +182,7 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-table thead th .qam-th { display: flex; align-items: center; gap: var(--s-2); cursor: pointer; }
 .qam-table thead th .qam-th svg { width: 13px; height: 13px; }
 
-/* ---------- フィルタ（チップ式・Notion/Spira風） ---------- */
+/* ---------- フィルタ（チップ式） ---------- */
 .qam-filterbar { display: flex; flex-wrap: wrap; gap: var(--s-2); padding: 0 var(--gutter); }
 .qam-filterbar:empty { display: none; }
 .qam-flt-chips { display: flex; flex-wrap: wrap; gap: var(--s-2); }
@@ -325,11 +325,11 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 /* 確認モーダルの本文は行ごとに読ませる（'\n' 区切りで渡ってくる） */
 .qam-confirm-msg { user-select: text; white-space: pre-line; line-height: var(--lh-base); }
 .qam-modal-foot { display: flex; justify-content: flex-end; gap: var(--s-3); padding: var(--s-5) var(--s-7); border-top: 1px solid var(--line); }
-/* 設定モーダル: 左ペインに分類、右ペインに項目（Spira風） */
+/* 設定モーダル: 左ペインに分類、右ペインに項目 */
 /* 共通: 項目を切り替えてもモーダルのサイズは変えない。項目数に対し十分大きくしスクロール不要に。 */
 .qam-settings { display: grid; grid-template-columns: 160px 1fr; gap: var(--s-7); width: 620px; max-width: 100%; height: 440px; }
 .qam-settings-nav { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); padding-right: var(--s-4); }
-/* 左ライン（accent）でアクティブ分類を視覚区別。app の qam-nav と同じ Spira 流の規約。 */
+/* 左ライン（accent）でアクティブ分類を視覚区別。app の qam-nav と同じ規約。 */
 .qam-settings-nav button { text-align: left; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--ink); font: inherit; padding: var(--s-3) var(--s-4); border-radius: var(--r-2); cursor: pointer; }
 .qam-settings-nav button:hover { background: var(--paper-2); }
 .qam-settings-nav button[aria-current="true"] { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
