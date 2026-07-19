@@ -283,3 +283,23 @@ describe('管理表（手動記録）の追記/読込', () => {
     expect(await readManualInspections(b)).toHaveLength(2);
   });
 });
+
+describe('管理表の登録履歴（mode / provision）', () => {
+  it('mode と provision スナップショットを保存・復元できる', async () => {
+    const b = new MemBackend();
+    const provision = { applicationNo: 'EXT-1', regionCode: 'jp', assetType: 'static', kind: 'both', ips: [], dnsNames: [] };
+    await appendManualInspection(b, {
+      ts: '2026-07-19T00:00:00Z', author: 'a', mode: 'qualys', kind: 'scan', title: 't',
+      nextLaunch: '2026-08-01T02:00:00', assetGroups: ['EXT-1(仮)'], domains: [], provision,
+    });
+    await appendManualInspection(b, {
+      ts: '2026-07-19T00:01:00Z', author: 'a', mode: 'ledger', kind: 'scan', title: 't2',
+      nextLaunch: '2026-08-02T02:00:00', assetGroups: ['EXT-2(仮)'], domains: [],
+    });
+    const rows = await readManualInspections(b);
+    expect(rows[0].mode).toBe('qualys');
+    expect(rows[0].provision).toEqual(provision);
+    // 判定へ合流させるのは ledger（旧データ=未設定含む）だけ、というフィルタが成り立つこと
+    expect(rows.filter((r) => r.mode !== 'qualys')).toHaveLength(1);
+  });
+});

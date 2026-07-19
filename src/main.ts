@@ -19,7 +19,7 @@ import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, DEFA
 import { parseQualysXml } from './ingest/parse';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, appendManualInspection, readManualInspections, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, readComments, addComment, editComment, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, readAnnotations, setAnnotation, setAnnotationsBulk, removeHistoryEvents, logOp, readOps, resetData, recordLicense, readLicenses, appendManualInspection, readManualInspections, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, backupSlot, listBackups, hasBackup, pruneBackups, type QamOp,
 } from './store';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords } from './types';
@@ -217,7 +217,7 @@ async function refresh(): Promise<void> {
   }
 
   const filterBar = el('div', { class: 'qam-filterbar' });
-  const scrollable = state.mode === 'licenses' || state.mode === 'inspection' || state.mode === 'quick'; // 縦に積むダッシュボードはビュー全体をスクロール
+  const scrollable = state.mode === 'licenses' || state.mode === 'inspection'; // 縦に積むダッシュボードはビュー全体をスクロール
   const tableHost = el('div', { style: 'min-height:0;overflow:' + (scrollable ? 'auto' : 'hidden') });
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
   main.append(tabs, subbar, toolbar, filterBar, tableHost);
@@ -698,7 +698,8 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   const snap = stamp ? await readSnapshot(backend, 'group', stamp) : null;
   const pattern = cfg.inspectionAgPattern || DEFAULT_AG_PATTERN;
   // 管理表（Qualys 未登録の予定）もスケジュールとして合流させる。
-  const manual = await readManualInspections(backend);
+  // mode='qualys'（実登録の履歴）は Qualys から取得したスケジュールと二重計上になるので外す。
+  const manual = (await readManualInspections(backend)).filter((m) => m.mode !== 'qualys');
   const manualRows = {
     scan: manual.filter((m) => m.kind === 'scan').map((m) => ({
       id: `manual-${m.ts}`, title: m.title, active: true, nextLaunch: m.nextLaunch,
@@ -723,30 +724,76 @@ async function renderInspection(count: HTMLElement, host: HTMLElement): Promise<
   }));
 }
 
-// 簡易検査ビュー: 「検査を登録」で登録モーダルを開く（ビュー表示時にも自動で開く）。
-// 登録モーダルは入力量が多いので背景クリックでは閉じない（キャンセル/×/Esc のみ）。
+// 簡易検査ビュー: 管理表（簡易検査からの登録履歴）を表で出し、上部の「＋ 新規登録」から
+// 登録モーダルを開く。行クリックでその内容をプリフィルして再登録できる。
 async function renderQuickInspect(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
-  count.textContent = 'AssetGroup とドメインを払い出して検査を登録';
+  const rows = (await readManualInspections(backend)).slice().reverse(); // 新しい順
+  count.textContent = `${rows.length} 件`;
   clear(host);
-  const openBtn = el('button', { class: 'btn btn--primary', html: `${icon('send', 16)}<span>検査を登録</span>` });
-  openBtn.addEventListener('click', () => { openQuickInspectModal().catch((e) => toast(`検査登録でエラー: ${(e as Error).message}`, 'error')); });
-  host.append(el('div', { class: 'qam-quick' }, [
-    el('p', { class: 'qam-insp-sec-note' }, [
-      '外部接続申請にもとづき、AssetGroup／ドメインの払い出しと検査スケジュールの登録（または管理表への記録）を行います。',
-    ]),
-    el('div', { class: 'qam-quick-actions' }, [openBtn]),
-  ]));
-  await openQuickInspectModal().catch(() => undefined); // 表示と同時に開く（閉じてもボタンから再開できる）
+
+  const addBtn = el('button', { class: 'btn btn--primary btn--sm', html: `${icon('send', 14)}<span>＋ 新規登録</span>` });
+  addBtn.addEventListener('click', () => { openQuickInspectModal().catch((e) => toast(`検査登録でエラー: ${(e as Error).message}`, 'error')); });
+  const bar = el('div', { class: 'qam-quick-bar' }, [
+    addBtn,
+    el('span', { class: 'qam-insp-sec-note' }, ['行クリックで、その内容をプリフィルして再登録できます（検査予定日は本日に戻ります）。']),
+  ]);
+
+  const modeLabel = (m: QamManualInspection): string => (m.mode === 'qualys' ? 'Qualys登録' : '管理表のみ');
+  const cols: Column[] = [
+    { id: 'ts', label: '記録日時', mono: true, width: 170, render: (m: QamManualInspection) => esc(fmtJst(m.ts)), sortVal: (m: QamManualInspection) => m.ts },
+    { id: 'mode', label: 'モード', width: 110, render: (m: QamManualInspection) => esc(modeLabel(m)), sortVal: modeLabel },
+    { id: 'kind', label: '種別', mono: true, width: 70, render: (m: QamManualInspection) => (m.kind === 'scan' ? 'SCAN' : 'MAP') },
+    { id: 'ag', label: 'AssetGroup', render: (m: QamManualInspection) => esc(m.assetGroups.join(', ')) },
+    { id: 'domains', label: 'ドメイン', render: (m: QamManualInspection) => esc(m.domains.join(', ') || '—') },
+    { id: 'next', label: '検査予定日時', mono: true, width: 170, render: (m: QamManualInspection) => esc(m.nextLaunch.replace('T', ' ')), sortVal: (m: QamManualInspection) => m.nextLaunch },
+    { id: 'subject', label: '件名', render: (m: QamManualInspection) => esc(m.subject ?? '') },
+    { id: 'department', label: '申請部門', render: (m: QamManualInspection) => esc(m.department ?? '') },
+    { id: 'applicant', label: '申請者', render: (m: QamManualInspection) => esc(m.applicant ?? m.author) },
+    { id: 'title', label: 'タイトル', render: (m: QamManualInspection) => esc(m.title) },
+    { id: 'note', label: '備考', render: (m: QamManualInspection) => esc(m.note ?? '') },
+  ];
+  const columnRef: { open?: (a: HTMLElement) => void } = {};
+  const table = renderTable({
+    viewId: 'quick', columns: cols, rows,
+    getKey: (m: QamManualInspection) => `${m.ts}|${m.kind}`,
+    selected: state.selected, columnRef,
+    defaultHidden: ['title', 'note'],
+    onRowClick: (m: QamManualInspection) => {
+      openQuickInspectModal(prefillFrom(m)).catch((e) => toast(`検査登録でエラー: ${(e as Error).message}`, 'error'));
+    },
+  });
+  const colBtn = el('button', { class: 'btn btn--sm', title: '表示する列を選択', html: `${icon('settings', 14)}<span>列表示</span>` });
+  colBtn.addEventListener('click', (e) => { e.stopPropagation(); columnRef.open?.(colBtn); });
+  bar.append(el('span', { class: 'qam-spacer' }), colBtn);
+
+  const wrap = el('div', { class: 'qam-quick-list' }, [bar, el('div', { class: 'qam-quick-table' }, [table])]);
+  host.append(wrap);
 }
 
-async function openQuickInspectModal(): Promise<void> {
+// 履歴 → プリフィル入力。provision スナップショットがあればそれをそのまま使い、
+// 旧データ（スナップショット無し）はタイトル等から可能な範囲で復元する。
+function prefillFrom(m: QamManualInspection): ProvisionInput {
+  if (m.provision && typeof m.provision === 'object') return m.provision as ProvisionInput;
+  const ag = m.assetGroups[0] ?? '';
+  return {
+    applicationNo: ag.replace(/\(仮\)$/, ''),
+    regionCode: (m.domains[0] ?? '').split('.').pop() ?? '',
+    assetType: 'static',
+    kind: m.kind,
+    ips: [], dnsNames: [],
+    subject: m.subject, department: m.department, applicant: m.applicant, note: m.note,
+  };
+}
+
+async function openQuickInspectModal(initial?: ProvisionInput): Promise<void> {
   await ensureAuthor(); // 申請者の既定値・記録に使うので先に確定させる
   const cfg = await getConfig();
   const author = localStorage.getItem(LS.author) || '';
   const form = buildInspectionForm({
     today: dateOfStamp(stampNow()),
     author,
+    initial,
     regions: parseRegions(cfg.regions || ''),
     defaults: {
       scanOptionProfile: cfg.scanOptionProfile || '',
@@ -816,17 +863,19 @@ async function recordLedger(
     `${i.startDate}T${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}:00`;
   if (plan.withScan) {
     await appendManualInspection(backend, {
-      ts, author, kind: 'scan', title: scanInput.title,
+      ts, author, mode: 'ledger', kind: 'scan', title: scanInput.title,
       nextLaunch: at(scanInput), assetGroups: [plan.title], domains: [],
       subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
+      provision: p,
     });
     steps.push(`SCAN 予定を管理表に記録（${plan.title}）`);
   }
   if (plan.withMap) {
     await appendManualInspection(backend, {
-      ts, author, kind: 'map', title: mapInput.title,
+      ts, author, mode: 'ledger', kind: 'map', title: mapInput.title,
       nextLaunch: at(mapInput), assetGroups: [plan.title], domains: [plan.domain],
       subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
+      provision: p,
     });
     steps.push(`MAP 予定を管理表に記録（${plan.domain}）`);
   }
@@ -881,6 +930,26 @@ async function runProvision(
     if (plan.withMap) {
       await createSchedule(creds, { ...mapInput, targets: [domain] }, author);
       steps.push('MAP スケジュールを登録');
+    }
+    // 登録履歴（管理表）にも残す。実体は Qualys にあるので判定へは合流しない（mode='qualys'）。
+    const ts = new Date().toISOString();
+    const at = (i: ScheduleInput): string =>
+      `${i.startDate}T${String(i.startHour).padStart(2, '0')}:${String(i.startMinute).padStart(2, '0')}:00`;
+    if (plan.withScan) {
+      await appendManualInspection(backend, {
+        ts, author, mode: 'qualys', kind: 'scan', title: scanInput.title,
+        nextLaunch: at(scanInput), assetGroups: [agTitle], domains: [],
+        subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
+        provision: p,
+      }).catch(() => undefined); // 履歴の記録失敗で登録自体は失敗にしない
+    }
+    if (plan.withMap) {
+      await appendManualInspection(backend, {
+        ts, author, mode: 'qualys', kind: 'map', title: mapInput.title,
+        nextLaunch: at(mapInput), assetGroups: [agTitle], domains: [domain],
+        subject: p.subject, department: p.department, applicant: p.applicant, note: p.note,
+        provision: p,
+      }).catch(() => undefined);
     }
     recordOp('検査登録', steps.join(' / '));
     toast(`検査を登録しました: ${steps.join(' / ')}`, 'ok');

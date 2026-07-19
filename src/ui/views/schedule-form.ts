@@ -27,6 +27,7 @@ export type RegisterMode = 'qualys' | 'ledger';
 export interface InspectionFormOpts {
   today: string;
   author: string;          // 申請者の既定値（記入者名）
+  initial?: ProvisionInput; // 履歴からの再登録用プリフィル（予定日は today のまま）
   defaults: ScheduleDefaults;
   regions: RegionOption[];
   confirm: (title: string, lines: string[]) => Promise<boolean>;
@@ -48,7 +49,7 @@ const numInput = (value: number, min: number, max: number): HTMLInputElement =>
   el('input', { class: 'in', type: 'number', min: String(min), max: String(max), value: String(value) }) as HTMLInputElement;
 
 // 「単体 / レンジ」を切り替えられる IP 入力行。行は動的に増減する。
-function ipRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { node: HTMLElement; read: () => IpEntry } {
+function ipRow(onChange: () => void, onRemove: (row: HTMLElement) => void, init?: IpEntry): { node: HTMLElement; read: () => IpEntry } {
   const mode = el('select', { class: 'in qam-prov-mode' }) as HTMLSelectElement;
   mode.append(el('option', { value: 'single' }, ['単体']), el('option', { value: 'range' }, ['レンジ']));
   const single = el('input', { class: 'in', placeholder: '10.0.0.1 または 10.0.0.0/24' }) as HTMLInputElement;
@@ -62,6 +63,7 @@ function ipRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { no
     single.hidden = isRange;
     rangeBox.hidden = !isRange;
   };
+  if (init) { mode.value = init.mode; single.value = init.single; from.value = init.from; to.value = init.to; }
   mode.addEventListener('change', () => { sync(); onChange(); });
   for (const inp of [single, from, to]) inp.addEventListener('input', onChange);
   del.addEventListener('click', () => onRemove(node));
@@ -73,8 +75,9 @@ function ipRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { no
 }
 
 // FQDN の入力行（動的・複数）。
-function fqdnRow(onChange: () => void, onRemove: (row: HTMLElement) => void): { node: HTMLElement; read: () => string } {
+function fqdnRow(onChange: () => void, onRemove: (row: HTMLElement) => void, init?: string): { node: HTMLElement; read: () => string } {
   const input = el('input', { class: 'in', placeholder: 'host1.example.jp（www. は付けない）' }) as HTMLInputElement;
+  if (init) input.value = init;
   const del = el('button', { class: 'btn btn--sm', type: 'button' }, ['削除']);
   const node = el('div', { class: 'qam-prov-row' }, [input, del]);
   input.addEventListener('input', onChange);
@@ -121,18 +124,18 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
   const fqdnList = el('div', { class: 'qam-prov-list' });
   const preview = el('div', { class: 'qam-prov-preview' });
 
-  const addIp = (): void => {
-    const r = ipRow(refreshPreview, (n) => { const i = ipRows.findIndex((x) => x.node === n); if (i >= 0) { ipRows.splice(i, 1); n.remove(); refreshPreview(); } });
+  const addIp = (init?: IpEntry): void => {
+    const r = ipRow(refreshPreview, (n) => { const i = ipRows.findIndex((x) => x.node === n); if (i >= 0) { ipRows.splice(i, 1); n.remove(); refreshPreview(); } }, init);
     ipRows.push(r); ipList.append(r.node); refreshPreview();
   };
-  const addFqdn = (): void => {
-    const r = fqdnRow(refreshPreview, (n) => { const i = fqdnRows.findIndex((x) => x.node === n); if (i >= 0) { fqdnRows.splice(i, 1); n.remove(); refreshPreview(); } });
+  const addFqdn = (init?: string): void => {
+    const r = fqdnRow(refreshPreview, (n) => { const i = fqdnRows.findIndex((x) => x.node === n); if (i >= 0) { fqdnRows.splice(i, 1); n.remove(); refreshPreview(); } }, init);
     fqdnRows.push(r); fqdnList.append(r.node); refreshPreview();
   };
   const addIpBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['＋ IP を追加']);
   const addFqdnBtn = el('button', { class: 'btn btn--sm', type: 'button' }, ['＋ FQDN を追加']);
-  addIpBtn.addEventListener('click', addIp);
-  addFqdnBtn.addEventListener('click', addFqdn);
+  addIpBtn.addEventListener('click', () => addIp());
+  addFqdnBtn.addEventListener('click', () => addFqdn());
 
   // ---- スケジュール（1回のみ: 検査予定日と開始時刻だけ）----
   const title = el('input', { class: 'in', placeholder: 'AssetGroup名_YYYYMMDD が自動で入ります' }) as HTMLInputElement;
@@ -256,7 +259,21 @@ export function buildInspectionForm(o: InspectionFormOpts): { node: HTMLElement;
     rowState,
     err,
   ]);
-  addIp(); addFqdn();
+  const init = o.initial;
+  if (init) {
+    appNo.value = init.applicationNo;
+    subject.value = init.subject ?? '';
+    department.value = init.department ?? '';
+    applicant.value = init.applicant?.trim() || o.author;
+    note.value = init.note ?? '';
+    assetType.value = init.assetType;
+    kind.value = init.kind;
+    if ([...region.options].some((op) => op.value === init.regionCode)) region.value = init.regionCode;
+    for (const row of init.ips) addIp(row);
+    for (const d of init.dnsNames) addFqdn(d);
+  }
+  if (!ipRows.length) addIp();
+  if (!fqdnRows.length) addFqdn();
   syncRows();
 
   // 共通のスケジュール項目を組み立て、種別ごとに対象とプロファイルだけ差し替える。

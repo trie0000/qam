@@ -165,12 +165,16 @@ export async function readInspectionLegacy(b: FileBackend): Promise<QamInspectio
   try { return JSON.parse(raw) as QamInspectionRaw; } catch { return null; }
 }
 
-// --- 四半期検査の管理表（手動記録） ---
-// Qualys へ登録せず「予定」を管理表としてだけ持つモードの記録。追記のみ・剪定しない
-// （検査計画の恒久記録。Qualys 側に実体は無いので、一覧では「管理表」と明示する）。
+// --- 簡易検査の管理表（登録履歴） ---
+// 簡易検査からの登録を（Qualys 実登録・管理表のみ更新の両方とも）記録する。追記のみ・剪定しない。
+//   mode='ledger' … Qualys 未登録の予定。四半期判定にも「予定」として合流させる。
+//   mode='qualys' … Qualys へ実登録した履歴。実体は Qualys 側にあるので判定へは合流させない
+//                   （取得したスケジュールと二重計上になるため）。
+// provision には登録時のフォーム入力をそのまま残し、履歴からの再登録（プリフィル）に使う。
 export interface QamManualInspection {
   ts: string;              // 記録日時(ISO)
   author: string;
+  mode?: 'qualys' | 'ledger';  // 旧データは未設定＝ledger 扱い
   kind: 'scan' | 'map';
   title: string;           // スケジュールタイトル
   nextLaunch: string;      // 検査予定日時(ISO・ローカル)
@@ -178,6 +182,7 @@ export interface QamManualInspection {
   domains: string[];       // MAP 対象ドメイン（scan は空）
   // 申請情報（任意・記録用）。
   subject?: string; department?: string; applicant?: string; note?: string;
+  provision?: unknown;     // 登録時のフォーム入力（ProvisionInput）。再登録のプリフィル用
 }
 const MANUAL_INSPECTION = 'inspection/manual.jsonl';
 export const appendManualInspection = (b: FileBackend, m: QamManualInspection): Promise<void> =>

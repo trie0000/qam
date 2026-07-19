@@ -446,9 +446,10 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-prov-range { display: flex; align-items: center; gap: var(--s-2); flex: 1; }
 .qam-prov-preview { font-size: var(--fs-sm); color: var(--ink-3); background: var(--paper-2);
   border-radius: var(--r-2); padding: var(--s-3) var(--s-4); user-select: text; overflow-wrap: anywhere; }
-/* 簡易検査ビュー: 登録フォームをページ内に置く */
-.qam-quick { padding: var(--s-5) var(--gutter); max-width: 720px; display: flex; flex-direction: column; }
-.qam-quick-actions { display: flex; justify-content: flex-end; padding-top: var(--s-3); }
+/* 簡易検査ビュー: 管理表（登録履歴）＋上部の新規登録バー */
+.qam-quick-list { display: grid; grid-template-rows: auto 1fr; min-height: 0; height: 100%; }
+.qam-quick-bar { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-4) var(--gutter) var(--s-2); }
+.qam-quick-table { min-height: 0; }
 /* 簡易検査: 折りたたみのオプション設定 */
 .qam-prov-opt { margin-bottom: var(--s-5); }
 .qam-prov-optbody { margin-top: var(--s-4); padding: var(--s-4) var(--s-4) 0;
