@@ -205,6 +205,10 @@ function Invoke-CdpEvaluate {
 $LoaderJs = @'
 (async () => {
   if (document.getElementById('qam-root')) return 'already';
+  // ★アプリ本体に中継サーバの居場所を伝える。
+  //   ここを渡さないとアプリは既定ポートを見に行き、設定が取れず
+  //   「SharePoint に接続できません」になる（ポートを変えた環境で必ず踏む）。
+  try { localStorage.setItem('qam:relayUrl', 'http://127.0.0.1:__RELAY_PORT__'); } catch (e) {}
   const m = location.pathname.match(/^\/(?:sites|teams)\/[^\/]+/);
   const web = location.origin + (m ? m[0] : '');
   const tryFetch = async (u, opt) => { try { const r = await fetch(u, opt); return r.ok ? await r.text() : null; } catch (e) { return null; } };
@@ -212,7 +216,13 @@ $LoaderJs = @'
   let from = 'sharepoint';
   if (!js) { js = await tryFetch('http://127.0.0.1:__RELAY_PORT__/qam/bundle/qam.bundle.js', {}); from = 'relay'; }
   if (!js) return 'bundle-missing';
-  (0, eval)(js);
+  // 起動時の失敗を握り潰さない。ここで黙ると「注入は成功したのに何も出ない」になり、
+  // 画面にもログにも手がかりが残らない。
+  try { (0, eval)(js); } catch (e) { return 'eval-error: ' + (e && e.message) + ' @ ' + String(e && e.stack).split('\n')[1]; }
+  const root = document.getElementById('qam-root');
+  if (!root) return 'no-root: 本体は読めたが画面を作れていない';
+  const r = root.getBoundingClientRect();
+  if (r.width < 50 || r.height < 50) return 'invisible: root ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' (CSS が当たっていない)';
   return 'started:' + from;
 })()
 '@
@@ -288,6 +298,11 @@ try {
     Write-Log ("LOADER 応答: " + $res)
     if ($res -match 'bundle-missing') {
         throw 'アプリ本体を取得できません（SharePoint にも中継サーバにも見つかりません）'
+    }
+    # 本体は読めたが起動できなかった場合。ここを成功扱いにすると
+    # 「起動しました」と出たまま画面に何も出ず、原因が追えなくなる。
+    foreach ($pat in 'eval-error','no-root','invisible') {
+        if ($res -match ('"value"\s*:\s*"(' + $pat + '[^"]*)"')) { throw ('アプリを起動できませんでした: ' + $Matches[1]) }
     }
     if ($res -match 'started:relay') {
         Write-Warn 'SharePoint にアプリ本体がまだありません。中継サーバから起動しました'
