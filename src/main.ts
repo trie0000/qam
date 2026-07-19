@@ -9,7 +9,8 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts } from './relay';
+import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts } from './relay';
+import { createSpBackend } from './api/sp-file';
 import { downloadEntity, downloadIps, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
@@ -1499,6 +1500,11 @@ async function openSettings(): Promise<void> {
   const scannerAp = el('input', { class: 'in', value: cfg.scannerAppliance || 'External', placeholder: 'External' }) as HTMLInputElement;
   const schedTz = el('input', { class: 'in', value: cfg.scheduleTimeZone || 'JP', placeholder: 'JP' }) as HTMLInputElement;
   const regionsIn = el('input', { class: 'in', value: cfg.regions || formatRegions(DEFAULT_REGIONS), placeholder: formatRegions(DEFAULT_REGIONS) }) as HTMLInputElement;
+  const storageMode = el('select', { class: 'in' }) as HTMLSelectElement;
+  ([['local', 'ローカル（relay のデータディレクトリ）'], ['sp', 'SharePoint（複数人で共有）']] as [string, string][])
+    .forEach(([v, t]) => storageMode.append(el('option', { value: v, selected: (cfg.storageMode || 'local') === v }, [t])));
+  const spSite = el('input', { class: 'in', value: cfg.spSiteUrl || '', placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE' }) as HTMLInputElement;
+  const spLib = el('input', { class: 'in', value: cfg.spLibrary || 'QamData', placeholder: 'QamData' }) as HTMLInputElement;
   const pass = el('input', { class: 'in', type: 'password', value: localStorage.getItem(LS.qualysPass) || '' }) as HTMLInputElement;
   const author = el('input', { class: 'in', value: localStorage.getItem(LS.author) || '', placeholder: '例: 山田' }) as HTMLInputElement;
   const theme = el('select', { class: 'in' }) as HTMLSelectElement;
@@ -1580,7 +1586,7 @@ async function openSettings(): Promise<void> {
 
   const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
     { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
+    { id: 'common', label: '共通設定', pane: () => [field('管理データの保管先', storageMode, 'ローカル＝relay のデータディレクトリ（1人用）。SharePoint＝リストとライブラリで複数人が同じデータを見る。SharePoint はアプリが SP ページ上で動いている必要があります（接続できない場合は自動でローカルに戻ります）。'), field('SharePoint サイト URL', spSite, '例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE。既存サイトに相乗りできます。'), field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'), field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('自動バックアップ間隔（分）', bkInterval, 'ツール起動時に、この間隔ごとに1回だけ全データ（資産スナップショット・変更履歴・メモ・注釈・ライセンス推移）を zip で自動退避します（生XML・ログ・接続設定は除く。その時間に誰も起動しなければ作成されません）。0 で無効。既定60。'), field('バックアップ保管（日）', bkRetention, 'この日数を過ぎたバックアップは自動削除。既定7。'), field('今すぐバックアップ（動作確認）', bkNowBtn, '自動取得を待たず、現在の全データを手動で退避します。'), field('バックアップから復元', bkRestoreBox, '選択した時点の状態に戻します（その時点以降に追加したメモ・取込なども取り除かれます）。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
@@ -1601,7 +1607,7 @@ async function openSettings(): Promise<void> {
     title: '設定', body, primaryLabel: '保存',
     onPrimary: async () => {
       try {
-        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)) });
+        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), backupIntervalMin: Math.max(0, parseInt(bkInterval.value, 10) || 0), backupRetentionDays: Math.max(1, parseInt(bkRetention.value, 10) || 7), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)), storageMode: (storageMode.value === 'sp' ? 'sp' : 'local'), spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
         if (pass.value) localStorage.setItem(LS.qualysPass, pass.value); else localStorage.removeItem(LS.qualysPass);
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
@@ -1853,9 +1859,29 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
   finally { setRelayBusy(false); }
 }
 
+// 管理データの保管先を設定に従って切り替える（local = relay のファイル / sp = SharePoint ライブラリ）。
+// 失敗しても起動は止めず、ローカルのまま警告する。切替ミスで「データが空」に見える事故を防ぐため、
+// 起動時に一度だけ疎通を確かめてから採用する。
+async function applyStorageMode(): Promise<void> {
+  const cfg = await getConfig();
+  if (cfg.storageMode !== 'sp') return;
+  const siteUrl = (cfg.spSiteUrl || '').trim();
+  const library = (cfg.spLibrary || '').trim() || 'QamData';
+  if (!siteUrl) { toast('保管先が SharePoint ですが、サイト URL が未設定です。ローカル保管で起動します', 'error'); return; }
+  try {
+    setBackend(createSpBackend({ siteUrl, library }));
+    await backend.list(''); // 同一オリジン Cookie が要る。SP のオリジンで動いていなければここで落ちる
+    recordOp('保管先', `SharePoint (${library})`);
+  } catch (e) {
+    setBackend(relayBackend);
+    toast(`SharePoint に接続できないため、ローカル保管で起動しました: ${(e as Error).message}`, 'error');
+  }
+}
+
 async function start(): Promise<void> {
   startRelayPolling(); // 30秒間隔で中継サーバを死活監視（落ちたら警告・復帰で自動クローズ）
   if (!(await checkRelay())) { showRelayDownModal(); return; }
+  await applyStorageMode(); // 以降の store 呼び出しはすべてこの保管先に向く
   // 起動時に記入者名を強制入力させない。更新作業（取込/メモ・注釈の記載/削除）の直前に未設定なら促す。
   refresh();
   const ai = new URLSearchParams(location.search).get('autoingest');

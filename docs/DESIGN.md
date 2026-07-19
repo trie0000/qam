@@ -283,6 +283,11 @@ qam/
   食い違いがある場合、フォームは `confirmTracking` を呼び、**「検査担当に確認済み」チェックが入るまで
   送信を通さない**（main.ts のモーダル側で primary を弾く）。
 - **relay の許可パス**: schedule/scan・scheduled_scans.php・asset/group・asset_domain.php の 4 つのみ。
+- **管理データの保管先**: 設定 `storageMode` で `local`（relay のデータディレクトリ）/ `sp`
+  （SharePoint ライブラリ）を切り替える。`relay.ts` の `backend` は委譲で、起動時に `setBackend`
+  で実体が決まる（呼び出し側は無改修）。`sp` は同一オリジン Cookie 認証のため**アプリが
+  SharePoint ページ上で動いていること**が前提。疎通に失敗したら起動時にローカルへ戻す。
+  実装は `api/sp-file.ts`、方針は `SPO-MULTIUSER.md`。
 - **名前解決の検証** (`/qam/resolve`): ブラウザから DNS は引けないので relay が代行する。外部コマンド
   (nslookup) は起動せず `[System.Net.Dns]::GetHostAddressesAsync` を使う（引数を渡さないので注入の
   余地がなく、PS5.1/7・OS 差も吸収できる）。relay は単スレッドなので **1 件ごとに 4 秒でタイムアウト**し、

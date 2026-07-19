@@ -14,7 +14,7 @@ async function postJson(path: string, body: unknown): Promise<any> {
 // store.ts が使う FileBackend を relay /qam/file で実装。
 // 大きなファイル本体は JSON で包まず「生 body」で授受する（PS5.1 の ConvertTo/From-Json は
 // 大きな文字列で落ちるため）。path/append はクエリで渡す。
-export const backend: FileBackend = {
+export const relayBackend: FileBackend = {
   async read(path) {
     const r = await fetch(`${RELAY}/qam/file?path=${encodeURIComponent(path)}`);
     if (r.status === 404) return null; // 未存在
@@ -38,6 +38,17 @@ export const backend: FileBackend = {
     });
     if (!r.ok) { const d = await r.json().catch(() => ({} as any)); throw new Error(`削除に失敗 (${path}): ${d.error ?? 'HTTP ' + r.status}`); }
   },
+};
+
+// 実際に使う保管先は起動時に決まる（local = relay のファイル / sp = SharePoint ライブラリ）。
+// 呼び出し側は `backend` を import したままでよいよう、差し替え可能な委譲にしておく。
+let impl: FileBackend = relayBackend;
+export const setBackend = (b: FileBackend): void => { impl = b; };
+export const backend: FileBackend = {
+  read: (p) => impl.read(p),
+  write: (p, c, a) => impl.write(p, c, a),
+  list: (d) => impl.list(d),
+  remove: (p) => impl.remove(p),
 };
 
 export interface FetchResult { ok: boolean; status: number; nextUrl: string | null; xml: string; error?: string }
@@ -85,7 +96,10 @@ export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/
 // scanOptionProfile / mapOptionProfile: 検査登録時に既定で適用するオプションプロファイル（種別ごと）。
 // scannerAppliance: 既定スキャナー（既定 External）。scheduleTimeZone: 既定タイムゾーン（既定 JP）。
 // regions: 地域区分「ラベル=コード」のカンマ区切り（空なら既定6区分）。ドメイン名の末尾に使う。
-export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; backupIntervalMin: number; backupRetentionDays: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string }
+// storageMode: 管理データの保管先。local=relay のデータディレクトリ / sp=SharePoint ライブラリ。
+//   sp は「アプリが SharePoint ページのオリジンで動いている」ことが前提（同一オリジン Cookie 認証）。
+// spSiteUrl / spLibrary: sp のときの接続先。どちらも SPO を読む前に要るのでローカル設定に置く。
+export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; backupIntervalMin: number; backupRetentionDays: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string; storageMode: 'local' | 'sp'; spSiteUrl: string; spLibrary: string }
 export const getConfig = (): Promise<RelayConfig> => fetch(`${RELAY}/qam/config`).then((r) => r.json());
 export const setConfig = async (patch: Partial<RelayConfig>): Promise<RelayConfig> => {
   const r = await fetch(`${RELAY}/qam/config`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });

@@ -605,6 +605,9 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'scannerAppliance') { Set-QamEnvValue $EnvFile 'QAM_SCANNER_APPLIANCE' $b.scannerAppliance }
                 if ($b.PSObject.Properties.Name -contains 'scheduleTimeZone') { Set-QamEnvValue $EnvFile 'QAM_SCHEDULE_TIME_ZONE' $b.scheduleTimeZone }
                 if ($b.PSObject.Properties.Name -contains 'regions') { Set-QamEnvValue $EnvFile 'QAM_REGIONS' $b.regions }
+                if ($b.PSObject.Properties.Name -contains 'storageMode') { Set-QamEnvValue $EnvFile 'QAM_STORAGE_MODE' $b.storageMode }
+                if ($b.PSObject.Properties.Name -contains 'spSiteUrl') { Set-QamEnvValue $EnvFile 'QAM_SP_SITE_URL' $b.spSiteUrl }
+                if ($b.PSObject.Properties.Name -contains 'spLibrary') { Set-QamEnvValue $EnvFile 'QAM_SP_LIBRARY' $b.spLibrary }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -629,6 +632,9 @@ function Invoke-Route { param($Ctx)
                 mapOptionProfile = $env:QAM_MAP_OPTION_PROFILE
                 scannerAppliance = if ($env:QAM_SCANNER_APPLIANCE) { $env:QAM_SCANNER_APPLIANCE } else { 'External' }
                 scheduleTimeZone = if ($env:QAM_SCHEDULE_TIME_ZONE) { $env:QAM_SCHEDULE_TIME_ZONE } else { 'JP' }
+                storageMode = if ($env:QAM_STORAGE_MODE -eq 'sp') { 'sp' } else { 'local' }
+                spSiteUrl = $env:QAM_SP_SITE_URL
+                spLibrary = if ($env:QAM_SP_LIBRARY) { $env:QAM_SP_LIBRARY } else { 'QamData' }
                 regions = $env:QAM_REGIONS
             }; return
         }
