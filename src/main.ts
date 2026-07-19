@@ -10,7 +10,7 @@ import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, backupNow, restoreNow, resolveHosts } from './relay';
-import { createSpBackend } from './api/sp-file';
+import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
 import { downloadEntity, downloadIps, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
@@ -1919,6 +1919,7 @@ async function applyStorageMode(): Promise<void> {
   if (!siteUrl) { toast('保管先が SharePoint ですが、サイト URL が未設定です。ローカル保管で起動します', 'error'); return; }
   try {
     const http = createSpHttp({ siteUrl }); // ダイジェストをライブラリ/リストで共有する
+    await ensureLibrary(http, library); // 無ければ作る（無いと配下の書き込みが全部 404 になる）
     setBackend(createSpBackend({ siteUrl, library, http }));
     await backend.list(''); // 同一オリジン Cookie が要る。SP のオリジンで動いていなければここで落ちる
     const spRepo = createSpRepo({ siteUrl, http });

@@ -26,6 +26,8 @@ function stub(rules: Rule[]): { fetchImpl: typeof fetch; calls: Call[] } {
 
 const DIGEST: Rule = { match: /_api\/contextinfo$/, method: 'POST', res: () => json({ d: { GetContextWebInformation: { FormDigestValue: 'DIGEST', FormDigestTimeoutSeconds: 1800 } } }) };
 const FOLDER_OK: Rule = { match: /GetFolderByServerRelativeUrl\([^)]*\)\?\$select=Exists/, res: () => json({ d: { Exists: true } }) };
+// 実機検証: 未存在のフォルダでも 200 + { Exists: false } が返る（404 ではない）。
+const FOLDER_MISSING: Rule = { match: /GetFolderByServerRelativeUrl\([^)]*\)\?\$select=Exists/, res: () => json({ d: { Exists: false } }) };
 
 const make = (rules: Rule[], maxRetry = 4) => {
   const s = stub([DIGEST, FOLDER_OK, ...rules]);
@@ -130,6 +132,19 @@ describe('SharePoint ライブラリ保管', () => {
     await be.write('a.json', '1', false);
     await be.write('b.json', '2', false);
     expect(calls.filter((c) => c.url.endsWith('/_api/contextinfo'))).toHaveLength(1);
+  });
+
+  it('未存在フォルダは 200+Exists:false で返る。これを「有る」と誤判定せず作成する', async () => {
+    // ok だけ見て判定すると作成をスキップし、以降の書き込みが全部 404 になる（実機で踏んだ）。
+    const s = stub([
+      DIGEST, FOLDER_MISSING,
+      { match: /web\/folders$/, method: 'POST', res: () => json({}) },
+      { match: /Files\/add/, method: 'POST', res: () => json({}) },
+    ]);
+    const be = createSpBackend({ siteUrl: 'https://example.sharepoint.com/sites/qa', library: 'QamData', fetchImpl: s.fetchImpl });
+    await be.write('snapshots/host/a.json', '{}', false);
+    const made = s.calls.filter((c) => c.url.endsWith('/web/folders')).map((c) => JSON.parse(c.body!).ServerRelativeUrl);
+    expect(made).toEqual(['/sites/qa/QamData/snapshots', '/sites/qa/QamData/snapshots/host']);
   });
 
   it('サイト URL が絶対 URL でなければ生成時に弾く', () => {

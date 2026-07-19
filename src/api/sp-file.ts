@@ -7,9 +7,15 @@
 // ローカル relay の画面から呼んでも SP の Cookie は付かない。
 //
 // 追記（append）は SPO に追記 API が無く「読む → 足す → 全文書き戻す」になるため、
-// 更新も削除も無くてもロストアップデートが起きる。よって ETag の If-Match で
-// 衝突を検出し、読み直して再適用する。追記専用なので解消は自明で、無条件リトライで
-// 収束する（docs/SPO-MULTIUSER.md §3.1）。
+// 更新も削除も無くてもロストアップデートが起きる。
+//
+// ★実機検証（2026-07-19）で分かったこと:
+//   **ファイルの $value 書き込みは If-Match を無視する**（不正な ETag でも 204 で通り、
+//   内容が上書きされる）。リスト項目の MERGE は If-Match を守る（不正なら 412）。
+//   つまりファイルには条件付き書き込みが無く、競合の「検出」自体ができない。
+// したがってファイルの追記は **取込ロックで直列化する**ことで守る（api/repo.ts の
+// acquireIngestLock）。SP 保管でファイルを追記するのは取込経路だけで、そこはロック下にある。
+// If-Match は将来 SP の挙動が変わったときのために送るだけで、これに依存しない。
 import type { FileBackend } from '../store';
 import { V, errText, q, createSpHttp, type SpHttp } from './sp/http';
 
@@ -44,9 +50,11 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
     for (const p of parts) {
       cur = cur ? `${cur}/${p}` : p;
       if (known.has(cur)) continue;
+      // ★実機検証: 未存在のフォルダでも **200 + { Exists: false }** が返る（404 ではない）。
+      //   ok だけで判定すると作成をスキップし、以降の書き込みが全部 404 になる。
       const head = await http.get(`${folderApi(cur)}?$select=Exists`);
-      if (head.ok) { known.add(cur); continue; }
-      if (head.status !== 404) throw new Error(`フォルダの確認に失敗 (${cur}): HTTP ${head.status}${await errText(head)}`);
+      if (!head.ok && head.status !== 404) throw new Error(`フォルダの確認に失敗 (${cur}): HTTP ${head.status}${await errText(head)}`);
+      if (head.ok && (await head.json().catch(() => ({})))?.d?.Exists === true) { known.add(cur); continue; }
       const r = await post('web/folders', {
         headers: { 'Content-Type': V },
         body: JSON.stringify({ __metadata: { type: 'SP.Folder' }, ServerRelativeUrl: abs(cur) }),
@@ -54,7 +62,8 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
       // 同時に他の人が作った場合も 200 以外になり得るので、作成後に存在を確かめる。
       if (!r.ok) {
         const again = await http.get(`${folderApi(cur)}?$select=Exists`);
-        if (!again.ok) throw new Error(`フォルダの作成に失敗 (${cur}): HTTP ${r.status}${await errText(r)}`);
+        const made = again.ok && (await again.json().catch(() => ({})))?.d?.Exists === true;
+        if (!made) throw new Error(`フォルダの作成に失敗 (${cur}): HTTP ${r.status}${await errText(r)}`);
       }
       known.add(cur);
     }
@@ -68,7 +77,8 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
     const text = await r.text();
     let etag = r.headers.get('ETag') ?? '';
     if (!etag) {
-      // $value が ETag を返さない版に備え、プロパティから取り直す（追記の If-Match に要る）。
+      // ★実機検証: $value の応答に ETag ヘッダは付かない。プロパティから取り直す
+      //   （形式は "{GUID},<版>"）。実質こちらが通常経路になる。
       const p = await http.get(`${fileApi(path)}?$select=ETag`);
       if (p.ok) etag = String((await p.json().catch(() => ({})))?.d?.ETag ?? '');
     }
@@ -103,8 +113,10 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
         if (!r.ok) throw new Error(`保存に失敗 (${path}): HTTP ${r.status}${await errText(r)}`);
         return;
       }
-      // 追記: SPO に追記 API は無いので read → concat → write。衝突は If-Match で検出し、
-      // 読み直して自分の分を足し直す（追記専用なので何度やっても収束する）。
+      // 追記: SPO に追記 API は無いので read → concat → write。
+      // ★ファイルの If-Match は効かない（冒頭コメント参照）ので、これは競合を検出できない。
+      //   安全性は取込ロックによる直列化で担保する。412 の分岐は将来 SP が条件付き書き込みを
+      //   守るようになったときのための保険で、今は通らない。
       for (let i = 0; i <= maxRetry; i++) {
         const cur = await readMeta(path);
         if (!cur) {
@@ -146,4 +158,23 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
       throw new Error(`削除に失敗 (${path}): HTTP ${r.status}${await errText(r)}`);
     },
   };
+}
+
+/**
+ * 管理データ用のドキュメントライブラリを用意する（無ければ作る）。
+ * これが無いと配下のフォルダ作成もファイル書き込みも 404 になるので、保管先の切替時に呼ぶ。
+ */
+export async function ensureLibrary(http: SpHttp, title: string): Promise<void> {
+  const listApi = `web/lists/getbytitle('${q(title)}')`;
+  const head = await http.get(`${listApi}?$select=Id`);
+  if (head.ok) return;
+  if (head.status !== 404) throw new Error(`ライブラリの確認に失敗 (${title}): HTTP ${head.status}${await errText(head)}`);
+  const r = await http.post('web/lists', {
+    headers: { 'Content-Type': V },
+    body: JSON.stringify({ __metadata: { type: 'SP.List' }, Title: title, BaseTemplate: 101 }), // 101 = ドキュメントライブラリ
+  });
+  // 同時に他の人が作った場合も失敗しうるので、作成後に存在を確かめる。
+  if (!r.ok && !(await http.get(`${listApi}?$select=Id`)).ok) {
+    throw new Error(`ライブラリの作成に失敗 (${title}): HTTP ${r.status}${await errText(r)}`);
+  }
 }
