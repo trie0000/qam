@@ -21,8 +21,8 @@
 [CmdletBinding()]
 param(
     [string]$SiteUrl,                 # 例 https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE
-    [int]$RelayPort = 18090,
-    [int]$DebugPort = 18099,
+    [int]$RelayPort = 0,              # 未指定なら qam.env(QAM_RELAY_PORT) → 既定 18090
+    [int]$DebugPort = 0,              # 未指定なら qam.env(QAM_CDP_PORT)   → 既定 18099
     [int]$AuthTimeoutSec = 300,       # サインインを待つ上限（MFA を手で通す時間）
     [switch]$KeepOpen                 # 失敗時にウィンドウを残す（調査用）
 )
@@ -76,6 +76,18 @@ function Get-EnvValue {
         if ($t.Substring(0, $eq).Trim() -eq $Key) { return $t.Substring($eq + 1).Trim().Trim('"').Trim("'") }
     }
     return ''
+}
+
+# ポートは qam.env で決める（画面に設定欄は無い）。引数 > qam.env > 既定 の順。
+# ★ここで env を読まずにパラメータ既定値を使うと、relay へ -Port を明示的に渡してしまい、
+#   relay 側の env 解決が働かず「qam.env を変えてもポートが変わらない」になる。
+if (-not $RelayPort) {
+    $v = Get-EnvValue 'QAM_RELAY_PORT'
+    $RelayPort = if ($v -match '^\d+$') { [int]$v } else { 18090 }
+}
+if (-not $DebugPort) {
+    $v = Get-EnvValue 'QAM_CDP_PORT'
+    $DebugPort = if ($v -match '^\d+$') { [int]$v } else { 18099 }
 }
 
 function Test-Url {
