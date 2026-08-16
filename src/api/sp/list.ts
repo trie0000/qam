@@ -29,6 +29,8 @@ export interface SpListClient {
   /** 更新できたら true、他の人が先に書いていたら false（412）。 */
   update(title: string, id: number, row: Record<string, unknown>, etag: string): Promise<boolean>;
   remove(title: string, id: number): Promise<void>;
+  /** リストの既定ビューの絶対URL。無ければ空文字。 */
+  viewUrl(title: string): Promise<string>;
 }
 
 export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListClient {
@@ -143,6 +145,17 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
       if (r.ok) return true;
       if (r.status === 412) return false; // 他の人が先に更新 → 呼び出し側で読み直す
       throw new Error(`更新に失敗 (${title}#${id}): HTTP ${r.status}${await errText(r)}`);
+    },
+
+    async viewUrl(title) {
+      // ★URL を '<site>/Lists/<Title>' と組み立てない。リスト名を後から変えたり、
+      //   作成時に別の内部名が付いたりすると 404 になる。SP に持っている値を聞く。
+      const r = await http.get(`${listApi(title)}?$select=DefaultViewUrl,RootFolder/ServerRelativeUrl&$expand=RootFolder`);
+      if (!r.ok) return '';
+      const d = await http.json(r);
+      const rel = String(d.DefaultViewUrl ?? '') || String((d.RootFolder as { ServerRelativeUrl?: unknown } | undefined)?.ServerRelativeUrl ?? '');
+      if (!rel) return '';
+      try { return new URL(rel, http.site).toString(); } catch { return ''; }
     },
 
     async remove(title, id) {

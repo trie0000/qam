@@ -126,7 +126,8 @@ body {
 /* 入力欄(.in)と同じ背景・枠なしだと押せる要素に見えないので、ボタンは枠線＋一段濃い背景で区別する。 */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
   height: 34px; padding: 0 var(--s-7); border-radius: var(--r-2); border: 1px solid var(--line-strong);
-  font: inherit; font-size: var(--fs-md); cursor: pointer; white-space: nowrap; background: var(--paper-2-strong); color: var(--ink); }
+  font: inherit; font-size: var(--fs-md); cursor: pointer; white-space: nowrap; background: var(--paper-2-strong); color: var(--ink);
+  text-decoration: none; }  /* <a> に .btn を当てたときに下線が出ないように */
 .btn:hover { background: var(--paper-3); }
 .btn svg { width: 16px; height: 16px; flex: 0 0 auto; }
 .btn--sm { height: 28px; padding: 0 var(--s-5); font-size: var(--fs-sm); }

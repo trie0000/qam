@@ -271,6 +271,15 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       return { added, updated, removed };
     },
 
+    async rasListUrls() {
+      // 片方が取れなくてももう片方は出す（リンクが出ないだけで、機能は止めない）。
+      const [assets, tickets] = await Promise.all([
+        lists.viewUrl(LIST_RAS_ASSETS).catch(() => ''),
+        lists.viewUrl(LIST_RAS_TICKETS).catch(() => ''),
+      ]);
+      return { assets, tickets };
+    },
+
     listSiteGroups(): Promise<SiteGroup[]> { return permsApi().listSiteGroups(); },
 
     async applyRasPerms(perms: RasPerms, onProgress) {

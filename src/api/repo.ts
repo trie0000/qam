@@ -71,6 +71,8 @@ export interface RecordRepo {
   readRasTickets(): Promise<RasTicket[]>;
   syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
 
+  /** 独自RASの2リストを SharePoint で開くURL。取れなければ空文字。 */
+  rasListUrls(): Promise<{ assets: string; tickets: string }>;
   /** サイトの権限グループ（アクセス権画面の選択肢）。 */
   listSiteGroups(): Promise<SiteGroup[]>;
   /** 2リストの全アイテムへアクセス権を適用する。進捗は onProgress に返す。 */
@@ -87,7 +89,7 @@ let impl: RecordRepo = {
   readSharedJson: notReady, writeSharedJson: notReady,
   readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady,
   readRasTickets: notReady, syncRasTickets: notReady,
-  listSiteGroups: notReady, applyRasPerms: notReady,
+  rasListUrls: notReady, listSiteGroups: notReady, applyRasPerms: notReady,
   readOps: notReady, logOp: notReady,
   readManualInspections: notReady, appendManualInspection: notReady,
   readLicenses: notReady, recordLicense: notReady,
@@ -107,6 +109,7 @@ export const repo: RecordRepo = {
   setRasCompaniesBulk: (u) => impl.setRasCompaniesBulk(u),
   readRasTickets: () => impl.readRasTickets(),
   syncRasTickets: (t) => impl.syncRasTickets(t),
+  rasListUrls: () => impl.rasListUrls(),
   listSiteGroups: () => impl.listSiteGroups(),
   applyRasPerms: (p, cb) => impl.applyRasPerms(p, cb),
   setAnnotation: (e, id, f, v) => impl.setAnnotation(e, id, f, v),

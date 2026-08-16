@@ -801,6 +801,22 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     csvBtn.addEventListener('click', () => { void openRasCsvImport(); });
     toolbar.append(csvBtn);
   }
+  // 保管先の SharePoint リストを直接開けるようにする（権限の確認や手作業での修正用）。
+  // URL は SharePoint に聞く（組み立てるとリスト名を変えたときに 404 になる）。
+  const linkHost = el('span', { class: 'qam-chip-row' });
+  toolbar.append(linkHost);
+  void repo.rasListUrls().then((u) => {
+    clear(linkHost);
+    for (const [href, label] of [[u.assets, '資産リスト'], [u.tickets, 'チケットリスト']] as const) {
+      if (!href) continue;
+      const a = el('a', {
+        class: 'btn btn--sm', href, target: '_blank', rel: 'noopener noreferrer',
+        title: `${label}（SharePoint）を新しいタブで開く`,
+        html: `${icon('file', 14)}<span>${label}</span>`,
+      });
+      linkHost.append(a);
+    }
+  }).catch(() => undefined);
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};

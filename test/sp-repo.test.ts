@@ -27,6 +27,7 @@ function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: 
       return true;
     },
     remove: async (t, id) => { rows[t] = (rows[t] ?? []).filter((r) => r.Id !== id); },
+    viewUrl: async (t) => `https://example.sharepoint.com/sites/qa/Lists/${t}/AllItems.aspx`,
   };
 }
 
