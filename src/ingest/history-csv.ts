@@ -4,6 +4,16 @@
 import type { QamChange, QamEntity, QamEvent } from '../types';
 
 // RFC4180 風 CSV パーサ（ダブルクォート・改行・カンマ対応）。
+// CSV ファイルの文字コード。Excel が書き出す CSV は CP932(Shift_JIS) のことが多い。
+// UTF-8 として読んで置換文字(U+FFFD)が出たら CP932 として読み直す。
+// ★ここを UTF-8 固定にすると、ヘッダが化けて「事業会社の列が無い」と誤判定する
+//   （文字化けした列名がエラーに出るだけで、原因に辿り着けない）。
+export function decodeCsv(buf: ArrayBuffer): string {
+  const utf8 = new TextDecoder('utf-8').decode(buf);
+  if (!utf8.includes('\uFFFD')) return utf8;
+  try { return new TextDecoder('shift_jis').decode(buf); } catch { return utf8; }
+}
+
 export function parseCsv(text: string): string[][] {
   const s = text.replace(/^﻿/, '');
   const rows: string[][] = [];

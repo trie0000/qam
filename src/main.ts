@@ -33,7 +33,7 @@ import {
   type RasAsset, type RasPerms, type RasTicket,
 } from './ras';
 import type { SiteGroup } from './api/sp/perms';
-import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
+import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv, decodeCsv } from './ingest/history-csv';
 import {
   getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, getTicketStamps, readTickets, writeTickets, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, type QamOp,
 } from './store';
@@ -955,7 +955,7 @@ async function openRasCsvImport(): Promise<void> {
     if (!file.files?.length) return;
     try {
       const [rows, a, perms] = await Promise.all([
-        file.files[0].text().then(parseCsv), repo.readRasAssets(), loadRasPerms(),
+        file.files[0].arrayBuffer().then((b) => parseCsv(decodeCsv(b))), repo.readRasAssets(), loadRasPerms(),
       ]);
       assets = a;
       plan = planRasCsvImport(rows, assets, perms);

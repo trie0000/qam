@@ -288,6 +288,21 @@ describe('管理CSV の取込', () => {
     expect(r.updates).toEqual([]);
   });
 
+  it('実運用のヘッダ（事業会社 / 管理会社 / IP / FQDN）をそのまま読める', () => {
+    const r = csv([
+      ['事業会社', '管理会社', 'IP', 'FQDN'],
+      ['A社', 'X保守', '10.0.0.1', 'a.example'],
+      ['B', 'Y保守', '10.0.0.5', ''],
+    ]);
+    expect(r.usedHeaders).toEqual({ company: '事業会社', management: '管理会社', ip: 'IP', fqdn: 'FQDN' });
+    expect(r.updates).toEqual([
+      { key: '1', businessCompany: 'A事業会社', managementCompany: 'X保守' },
+      { key: rasKeyForIp('10.0.0.5'), businessCompany: 'B事業会社', managementCompany: 'Y保守' },
+    ]);
+    expect(r.unresolvedAliases).toEqual([]);
+    expect(r.unmatchedRows).toBe(0);
+  });
+
   it('管理会社の列を事業会社の列と取り違えない', () => {
     // 「会社」だけで拾うと管理会社の列に当たってしまう。
     const r = csv([['IP', '管理会社', '事業会社'], ['10.0.0.1', 'X保守', 'A社']]);

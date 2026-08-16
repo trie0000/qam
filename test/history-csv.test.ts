@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseGroupHistoryCsv, parseHistoryCsv } from '../src/ingest/history-csv';
+import { parseGroupHistoryCsv, parseHistoryCsv, decodeCsv } from '../src/ingest/history-csv';
 
 describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
   const header = '更新日,更新内容,接続点ID,事業場名,タイトル,接続点名称(Function),拠点名称(Location),コメント(comments)';
@@ -115,5 +115,19 @@ describe('parseGroupHistoryCsv（AssetGroup 変更履歴CSV）', () => {
     expect(ev[0].name).toBe('山田 太郎');
     expect(ev[0].new).toContain('権限:Manager');
     expect(ev[0].new).toContain('ログイン方法:SAML');
+  });
+});
+
+describe('CSV の文字コード', () => {
+  const bytes = (a: number[]) => new Uint8Array(a).buffer;
+
+  it('UTF-8 はそのまま読む', () => {
+    expect(decodeCsv(new TextEncoder().encode('事業会社,IP').buffer)).toBe('事業会社,IP');
+  });
+
+  it('Excel 由来の Shift_JIS を読み直す', () => {
+    // ★UTF-8 固定だとヘッダが化けて「事業会社の列が無い」と誤判定する。
+    // '事業会社' の CP932 バイト列。
+    expect(decodeCsv(bytes([0x8e, 0x96, 0x8b, 0xc6, 0x89, 0xef, 0x8e, 0xd0]))).toBe('事業会社');
   });
 });
