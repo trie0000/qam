@@ -1,7 +1,7 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
 import { scopeCss } from './ui/scope-css';
-import { BUILD, BUILDTIME, ENTITIES, IS_OVERLAY, LS, RELAY, fmtStamp, datetimeToStamp, stampNow, today } from './config';
+import { BUILD, BUILDTIME, ENTITIES, LS, RELAY, fmtStamp, datetimeToStamp, stampNow, today } from './config';
 import { el, esc, clear, onEnter, uiHost, uiQuery, setUiRoot } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -113,14 +113,7 @@ function matchAsset(r: QamRecord, q: string): boolean {
 // ★ ホスト要素には `all: initial !important` を当てる。継承する性質（font / color /
 //   user-select 等）だけは shadow の中にも入るので、ここで断つ。
 // ★ attachShadow が使えない環境では従来どおり host 直下に置く（機能は動く）。
-// 単体ページ（relay 配信）はホストの干渉が無いので従来どおり document へ流す。
 const uiScope: ParentNode = (() => {
-  if (!IS_OVERLAY) {
-    const s = document.createElement('style');
-    s.textContent = css;
-    document.head.append(s);
-    return document;
-  }
   document.getElementById('qam-host')?.remove(); // 再注入時の残骸
   const shield = document.createElement('div');
   shield.id = 'qam-host';
@@ -140,8 +133,8 @@ function callout(text: string): HTMLElement {
 }
 
 
-const root = IS_OVERLAY ? (() => {
-  // overlay: 画面全体を覆う専用コンテナを shadow の中に作る。
+const root = (() => {
+  // 画面全体を覆う専用コンテナを shadow の中に作る。
   // 位置と重なり順は shadow 内の CSS（.qam-overlay）で持つ。ホスト側の !important は
   // shadow 境界を越えられないので、ここが後から上書きされることはない。
   const d = document.createElement('div');
@@ -149,13 +142,13 @@ const root = IS_OVERLAY ? (() => {
   d.className = 'qam-overlay';
   uiScope.appendChild(d);
   return d;
-})() : document.getElementById('qam-root')!;
+})();
 // 自前の要素探索（モーダル/ポップオーバー）は shadow 内を見る必要がある。
 setUiRoot(uiScope, root);
 
-// テーマ・文字サイズを載せる先。overlay ではスコープ済み CSS が #qam-root を起点に
-// 見るので、html に付けても一致しない（暗色にしても効かない）。root 自身に付ける。
-const themeHost = IS_OVERLAY ? root : document.documentElement;
+// テーマ・文字サイズを載せる先。スコープ済み CSS は #qam-root を起点に見るので、
+// html に付けても一致しない（暗色にしても効かない）。root 自身に付ける。
+const themeHost = root;
 themeHost.dataset.theme = localStorage.getItem(LS.theme) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
 themeHost.dataset.fontsize = localStorage.getItem(LS.fontsize) || 'md'; // 文字サイズ 大中小
 const main = el('div', { class: 'qam-main' });
@@ -2057,12 +2050,6 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
 // 繋がらないときに黙ってローカルで動くと「自分だけ違うものを見ている」事故になるので、
 // 失敗は隠さずに止める。
 async function initStorage(): Promise<{ ok: true } | { ok: false; reason: string }> {
-  // SharePoint の REST は同一オリジンの Cookie で認証する。ローカルの画面（relay が配信する
-  // http://127.0.0.1:<port>/）から開いていると、その Cookie が無いので必ず失敗する。
-  // 失敗してから「接続できません」と言うより、開き方が違うことを名指しで伝える。
-  if (!IS_OVERLAY) {
-    return { ok: false, reason: 'ローカルの画面（127.0.0.1）から開いています。管理データは SharePoint にあるため、この画面からは接続できません。' };
-  }
   try {
     // ★getConfig() は中継サーバが落ちていると投げる。ここを try の外に置くと
     //   例外が start() まで抜けて、何も出ない真っ白な画面になる（原因が追えない）。

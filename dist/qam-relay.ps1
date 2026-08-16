@@ -4,7 +4,7 @@
 # ブラウザ(TS アプリ)が出来ないことだけを担う:
 #   1) TS バンドル(dist/qam.bundle.js)の配信
 #   2) Qualys API を「プロキシ経由 + Basic 認証」で取得（CORS/プロキシ回避）
-#   3) UNC データディレクトリ配下のファイル read/write/list/remove
+#   3) 設定(qam.env)の読み書き・パスワードの DPAPI 保護・DNS 解決
 # パース/差分/ストレージ書式の解釈は全て TS 側。relay はパス安全性だけ担保する。
 # 127.0.0.1 で listen するので管理者権限不要。設定は 引数 > 環境変数 > qam.env。
 #   実行: powershell -ExecutionPolicy Bypass -File qam-relay.ps1   （通常は qam-launch.bat 経由）
@@ -12,14 +12,11 @@
 [CmdletBinding()]
 param(
     [int]$Port,
-    [string]$DataDir,
     [string]$BundleDir,
     [string]$EnvFile
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Net.Http | Out-Null
-Add-Type -AssemblyName System.IO.Compression | Out-Null
-Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
 
 # ─── env 読込/保存 ───────────────────────────────────────────────────────────
 function Import-QamEnv {
@@ -65,8 +62,8 @@ function Set-QamEnvValue {
 if (-not $EnvFile) {
     $EnvFile = Join-Path $PSScriptRoot 'qam.env'
     # 旧配置（配布物が server\ と dist\ に分かれていた頃）の qam.env も拾う。
-    # 設定ファイルは gitignore で配らないので、置き場所を変えた途端に全員が
-    # 「QAM_DATA_DIR 未設定」で起動できなくなるのを防ぐ。
+    # 設定ファイルは gitignore で配らないので、置き場所を変えた途端に
+    # 全員が接続先を見失うのを防ぐ。
     if (-not (Test-Path -LiteralPath $EnvFile)) {
         $legacy = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'server') 'qam.env'
         if (Test-Path -LiteralPath $legacy) {
@@ -76,17 +73,23 @@ if (-not $EnvFile) {
     }
 }
 Import-QamEnv $EnvFile
-if (-not $DataDir) { $DataDir = $env:QAM_DATA_DIR }
-if (-not $DataDir) { Write-Host '[qam] QAM_DATA_DIR が未設定です。qam.env を設定してください。' -ForegroundColor Red; exit 2 }
+# 管理データは SharePoint に置くので、ローカルのデータディレクトリは持たない。
+# 残るのはログの置き場だけ。QAM_LOG_DIR > 旧 QAM_DATA_DIR(後方互換) > %LOCALAPPDATA%\qam。
+$LogDir = $env:QAM_LOG_DIR
+if (-not $LogDir) { $LogDir = $env:QAM_DATA_DIR }
+if (-not $LogDir) {
+    # LOCALAPPDATA は Windows 以外では空。空のまま Join-Path すると起動時に落ちるので TEMP へ逃がす。
+    $LogDir = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'qam' } else { Join-Path ([IO.Path]::GetTempPath()) 'qam' }
+}
 if (-not $Port) { $Port = if ($env:QAM_RELAY_PORT) { [int]$env:QAM_RELAY_PORT } else { 18090 } }
 # 配布物は全て dist にまとまっている（このスクリプトも dist 配下）ので、バンドルは同じフォルダ。
 if (-not $BundleDir) { $BundleDir = if ($env:QAM_BUNDLE_DIR) { $env:QAM_BUNDLE_DIR } else { $PSScriptRoot } }
-if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
+if (-not (Test-Path -LiteralPath $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force -ErrorAction SilentlyContinue | Out-Null }
 # UNC パス（\\server\share\…）に対し Resolve-Path .Path / [IO.Path]::GetFullPath は
 # プロバイダ接頭辞や「パス形式非対応」例外を招く。env の値をそのまま素のパスとして使う（末尾区切りのみ除去）。
-$DataFull = ([string]$DataDir).TrimEnd('\', '/')
-$script:LogFile = Join-Path $DataFull 'relay.log'
-$script:AuditFile = Join-Path $DataFull 'api-audit.log'  # 更新系APIの監査ログ（実行者・API・パラメータ）
+$LogFull = ([string]$LogDir).TrimEnd('\', '/')
+$script:LogFile = Join-Path $LogFull 'relay.log'
+$script:AuditFile = Join-Path $LogFull 'api-audit.log'  # 更新系APIの監査ログ（実行者・API・パラメータ）
 $script:QamStop = $false
 # Qualys セッション（login で取得し fetch で使い回し、logout で破棄）。
 $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null
@@ -146,17 +149,7 @@ function Get-Body { param($Req)
     $sr = New-Object System.IO.StreamReader($Req.InputStream, [System.Text.Encoding]::UTF8)
     try { return $sr.ReadToEnd() } finally { $sr.Dispose() }
 }
-# path を DataDir 配下に閉じ込めて解決（.. 等での脱出を拒否）。
-function Resolve-SafePath { param([string]$Rel)
-    if (-not $Rel) { throw 'path 未指定' }
-    # 相対パスは TS 側がスラッシュ区切りで渡す。区切りを \ に揃え、先頭の区切りを除去。
-    # GetFullPath は UNC で「パス形式非対応」例外を出すため使わず、文字列結合＋「..」拒否で脱出を防ぐ。
-    $rel2 = ($Rel -replace '/', '\').TrimStart('\')
-    if ($rel2 -match '(^|\\)\.\.(\\|$)' -or $rel2 -match ':') { throw "不正な path: $Rel" }
-    return "$DataFull\$rel2"
-}
 
-# ─── バックアップ（データディレクトリ全体を zip 退避/展開） ───────────────────
 # ─── Qualys プロキシ取得 ─────────────────────────────────────────────────────
 function Get-QamText1 { param([string]$Xml, [string]$Pattern)
     $m = [regex]::Match($Xml, $Pattern, [System.Text.RegularExpressions.RegexOptions]::Singleline)
@@ -563,35 +556,6 @@ function Invoke-Route { param($Ctx)
             }
             return
         }
-        '^/qam/file/list$' {
-            $dir = Resolve-SafePath $q['dir']
-            if (-not (Test-Path -LiteralPath $dir)) { Send-Json $Ctx @{ names = @() }; return }
-            Send-Json $Ctx @{ names = @(Get-ChildItem -LiteralPath $dir -ErrorAction SilentlyContinue | ForEach-Object { $_.Name }) }; return
-        }
-        '^/qam/file/remove$' {
-            $p = Resolve-SafePath (Get-Body $req | ConvertFrom-Json).path
-            if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }
-            Send-Json $Ctx @{ ok = $true }; return
-        }
-        '^/qam/file$' {
-            # 大きなファイル本体は JSON で包まず生 body で授受する。PS5.1 の ConvertTo/From-Json
-            # (JavaScriptSerializer) は大きな文字列で失敗する（"System.String 型に変換できません"）ため。
-            # path / append はクエリで渡す。
-            if ($req.HttpMethod -eq 'POST') {
-                $p = Resolve-SafePath $q['path']
-                $dir = Split-Path $p -Parent
-                if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
-                $content = Get-Body $req
-                if ($q['append'] -eq '1') { Add-Content -LiteralPath $p -Value $content -Encoding UTF8 -NoNewline }
-                else { Set-Content -LiteralPath $p -Value $content -Encoding UTF8 -NoNewline }
-                Send-Json $Ctx @{ ok = $true }; return
-            }
-            $p = Resolve-SafePath $q['path']
-            if (-not (Test-Path -LiteralPath $p)) { Send-Bytes $Ctx ([byte[]]@()) 'application/json; charset=utf-8' 404; return }
-            $raw = Get-Content -LiteralPath $p -Raw -Encoding UTF8
-            if ($null -eq $raw) { $raw = '' }
-            Send-Text $Ctx $raw 'application/json; charset=utf-8'; return
-        }
         '^/qam/config$' {
             if ($req.HttpMethod -eq 'POST') {
                 $b = Get-Body $req | ConvertFrom-Json
@@ -646,8 +610,8 @@ $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://127.0.0.1:$Port/")
 $listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
-Write-Host "[qam] relay listening on http://127.0.0.1:$Port/ (+localhost)  (DataDir=$DataFull, BundleDir=$BundleDir)" -ForegroundColor Green
-Add-QamLog "=== relay started: port=$Port DataDir=$DataFull BundleDir=$BundleDir ==="
+Write-Host "[qam] relay listening on http://127.0.0.1:$Port/ (+localhost)  (LogDir=$LogFull, BundleDir=$BundleDir)" -ForegroundColor Green
+Add-QamLog "=== relay started: port=$Port LogDir=$LogFull BundleDir=$BundleDir ==="
 
 while (-not $script:QamStop) {
     try { $ctx = $listener.GetContext() } catch { break }

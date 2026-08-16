@@ -1,49 +1,32 @@
 ﻿# =============================================================================
-# qam-relay.ps1 スモークテスト — relay を起動し file/config/health/path安全性を検証
+# qam-relay.ps1 スモークテスト — relay を起動し health/config を検証
 #   実行: pwsh test/relay-smoke.ps1   （fetch は実 Qualys/プロキシが要るので対象外）
 # =============================================================================
 $ErrorActionPreference = 'Stop'
 $port = 18098
 $base = "http://127.0.0.1:$port"
-$tmp = Join-Path $PSScriptRoot '.tmp-relay'
+$tmp = if ("$PSScriptRoot" -like '\\*') { Join-Path ([IO.Path]::GetTempPath()) 'qam-smoke' } else { Join-Path $PSScriptRoot '.tmp-relay' }
 if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
-$data = Join-Path $tmp 'data'; $bundle = Join-Path $tmp 'dist'; $envf = Join-Path $tmp 'qam.env'
-New-Item -ItemType Directory -Path $data, $bundle -Force | Out-Null
-$relay = Resolve-Path "$PSScriptRoot/../dist/qam-relay.ps1"
+$bundle = Join-Path $tmp 'dist'; $envf = Join-Path $tmp 'qam.env'
+New-Item -ItemType Directory -Path $bundle -Force | Out-Null
+# Resolve-Path は UNC でプロバイダ接頭辞付き（Microsoft.PowerShell.Core\FileSystem::\\…）を返し、
+# それを -File に渡すと子プロセスがスクリプトを見つけられない。素のパスを組み立てる。
+$relay = Join-Path (Split-Path $PSScriptRoot -Parent) 'dist\qam-relay.ps1'
 
 $script:pass = 0; $script:fail = 0
 function Assert-Eq($a, $e, $m) { if ("$a" -eq "$e") { $script:pass++; Write-Host "  ok  : $m" -ForegroundColor Green } else { $script:fail++; Write-Host "  FAIL: $m (expected=$e actual=$a)" -ForegroundColor Red } }
 
-$proc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', $relay, '-Port', $port, '-DataDir', $data, '-BundleDir', $bundle, '-EnvFile', $envf -PassThru
+# 実行系は環境で違う（Windows は PowerShell 5.1 = powershell.exe、他は pwsh）。
+# relay の本番実行環境は Windows PowerShell 5.1 なので、そこで回せることが重要。
+$shell = if (Get-Command pwsh -ErrorAction SilentlyContinue) { 'pwsh' } else { 'powershell' }
+# 作業ディレクトリに UNC パスは指定できない（Win32 制約）。共有(\\…)から実行された場合に
+# 子プロセスが起動できないので、cwd は必ずローカルパスにする（qam-launch.ps1 と同じ扱い）。
+$cwd = if ("$PSScriptRoot" -like '\\*') { [IO.Path]::GetTempPath() } else { $PSScriptRoot }
+$proc = Start-Process $shell -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $relay, '-Port', $port, '-BundleDir', $bundle, '-EnvFile', $envf -WorkingDirectory $cwd -PassThru
 try {
     $up = $false
     for ($i = 0; $i -lt 30; $i++) { try { if ((Invoke-RestMethod "$base/qam/health" -TimeoutSec 2).ok) { $up = $true; break } } catch { Start-Sleep -Milliseconds 300 } }
     Assert-Eq $up $true 'relay: /qam/health'
-
-    # file write → read
-    Invoke-RestMethod "$base/qam/file" -Method Post -ContentType 'application/json' -Body (@{ path = 'snapshots/group/2026-06-12.json'; content = '{"a":1}' } | ConvertTo-Json) | Out-Null
-    $r = Invoke-RestMethod "$base/qam/file?path=snapshots/group/2026-06-12.json"
-    Assert-Eq $r.content '{"a":1}' 'file: write→read'
-
-    # append
-    Invoke-RestMethod "$base/qam/file" -Method Post -ContentType 'application/json' -Body (@{ path = 'history/group.jsonl'; content = "L1`n" } | ConvertTo-Json) | Out-Null
-    Invoke-RestMethod "$base/qam/file" -Method Post -ContentType 'application/json' -Body (@{ path = 'history/group.jsonl'; content = "L2`n"; append = $true } | ConvertTo-Json) | Out-Null
-    $h = Invoke-RestMethod "$base/qam/file?path=history/group.jsonl"
-    Assert-Eq ($h.content.Trim() -replace "`r", '') "L1`nL2" 'file: append'
-
-    # list
-    $l = Invoke-RestMethod "$base/qam/file/list?dir=snapshots/group"
-    Assert-Eq (@($l.names).Count) 1 'file/list: 1 件'
-
-    # remove
-    Invoke-RestMethod "$base/qam/file/remove" -Method Post -ContentType 'application/json' -Body (@{ path = 'snapshots/group/2026-06-12.json' } | ConvertTo-Json) | Out-Null
-    $l2 = Invoke-RestMethod "$base/qam/file/list?dir=snapshots/group"
-    Assert-Eq (@($l2.names).Count) 0 'file/remove: 削除'
-
-    # path 安全性（範囲外は拒否）
-    $blocked = $false
-    try { Invoke-RestMethod "$base/qam/file?path=../../escape.txt" -TimeoutSec 3 } catch { $blocked = $true }
-    Assert-Eq $blocked $true 'safety: ../ 脱出を拒否'
 
     # config GET/POST
     $cfg = Invoke-RestMethod "$base/qam/config" -Method Post -ContentType 'application/json' -Body (@{ retentionDays = 45; proxy = 'http://px:8080' } | ConvertTo-Json)
