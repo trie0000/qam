@@ -44,6 +44,8 @@ export interface RasAsset {
 
 /** host list に無い資産の行キー。IP しか手掛かりが無いのでそれを使う。 */
 export const rasKeyForIp = (ip: string): string => `ip:${ip}`;
+/** AssetGroup に DNS 名でだけ登録されている資産の行キー（IP が無いので名前で持つ）。 */
+export const rasKeyForDns = (fqdn: string): string => `dns:${fqdn.trim().toLowerCase()}`;
 
 // IPv4 → 整数。不正なら null。AssetGroup の IP_RANGE を展開するのに使う。
 function ipToInt(s: string): number | null {
@@ -90,11 +92,13 @@ export interface RasTicket {
   created: string;
 }
 
-// 独自RAS資産を組み立てる。元は2つ:
+// 独自RAS資産を組み立てる。元は3つ:
 //   1. host list … Qualys が生きていると認識しているホスト（IP/FQDN が取れる）
-//   2. AssetGroup の IP … host list に居ない＝スキャンで応答が無い（host not alive）
+//   2. AssetGroup の IP_SET  … host list に居ない＝応答が無い（host not alive）
+//   3. AssetGroup の DNS_LIST … 同上。IP ではなく DNS 名で登録されている資産
 // ★host list だけを見ると not alive のホストが丸ごと抜ける。AssetGroup に登録が
-//   あるのに host list に居ない IP を拾って補う。
+//   あるのに host list に居ないものを拾って補う。DNS_LIST を見落とすと、
+//   「IP ではなく名前で登録した資産」だけが一覧に出ない（実際に踏んだ）。
 //
 // ただし「AssetGroup を今日更新した」場合は、IP を足した直後でまだスキャンが
 // 回っていないだけの可能性がある。それを not alive と決めつけないよう、
@@ -124,6 +128,7 @@ export function deriveRasAssets(
 ): DeriveRasResult {
   const out: RasAsset[] = [];
   const seenIp = new Set<string>();
+  const seenFqdn = new Set<string>();
   for (const h of hosts) {
     // 複数の接続点に属することがあるので、R 始まりのものだけを見る。
     const setten = (agSetten[h.key] ?? '').split(',').map((s) => s.trim()).filter(isRasSetten);
@@ -131,6 +136,8 @@ export function deriveRasAssets(
     const prev = registered.get(h.key);
     const ip = h.scalar.IP ?? '';
     if (ip) seenIp.add(ip);
+    // AssetGroup 側は DNS 名で登録されていることがあるので、host list の名前も控える。
+    for (const n of [h.scalar.FQDN, h.scalar.DNS]) if (n) seenFqdn.add(n.trim().toLowerCase());
     out.push({
       key: h.key,
       hostId: h.key,
@@ -147,6 +154,7 @@ export function deriveRasAssets(
   let droppedIps = 0;
   const pendingSetten: string[] = [];
   const byIp = new Map<string, RasAsset>();
+  const byDns = new Map<string, RasAsset>();
   for (const g of groups) {
     const sid = settenIdOf(g.name);
     if (!isRasSetten(sid)) continue;
@@ -174,8 +182,32 @@ export function deriveRasAssets(
       byIp.set(ip, row);
       out.push(row);
     }
+    // DNS 名でだけ登録されている資産（IP は分からない）。
+    for (const raw of g.set.DNS_LIST ?? []) {
+      const fqdn = raw.trim();
+      if (!fqdn) continue;
+      const lower = fqdn.toLowerCase();
+      if (seenFqdn.has(lower)) continue; // host list にある＝生きているので既に載せた
+      const hit = byDns.get(lower);
+      if (hit) { // 同じ名前が複数の RAS 接続点に登録されている
+        if (!hit.settenId.split(',').includes(sid)) hit.settenId += `,${sid}`;
+        continue;
+      }
+      const key = rasKeyForDns(lower);
+      const prev = registered.get(key);
+      const row: RasAsset = {
+        key, hostId: '', settenId: sid, ip: '', fqdn, status: notScanned ? RAS_NOT_SCANNED : RAS_NOT_ALIVE,
+        businessCompany: prev?.businessCompany ?? '',
+        managementCompany: prev?.managementCompany ?? '',
+      };
+      byDns.set(lower, row);
+      out.push(row);
+    }
   }
-  out.sort((a, b) => a.settenId.localeCompare(b.settenId) || a.ip.localeCompare(b.ip));
+  // 接続点ごとに、IPを持つ行を数値順で先に、IPが無い（DNS名だけの）行を後ろに置く。
+  // 文字列比較だと 10.0.0.10 が 10.0.0.2 より前に来る／IP無しが先頭に固まる。
+  const ipOrder = (v: string): number => { const n = ipToInt(v); return n === null ? Number.MAX_SAFE_INTEGER : n; };
+  out.sort((a, b) => a.settenId.localeCompare(b.settenId) || ipOrder(a.ip) - ipOrder(b.ip) || a.fqdn.localeCompare(b.fqdn));
   return { assets: out, droppedIps, pendingSetten: [...new Set(pendingSetten)].sort() };
 }
 
@@ -387,6 +419,7 @@ export function planRasCsvImport(rows: string[][], assets: RasAsset[], perms: Ra
   }
 
   const byIp = new Map<string, RasAsset>();
+  const byDns = new Map<string, RasAsset>();
   const byFqdn = new Map<string, RasAsset>();
   for (const a of assets) {
     if (a.ip && !byIp.has(a.ip)) byIp.set(a.ip, a);

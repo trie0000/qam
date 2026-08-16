@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   isRasSetten, deriveRasAssets, deriveRasTickets, normalizeRasPerms, registeredCompanies,
   groupIdsFor, canApplyPerms, parseCompanyList, mergeCompanies, pickRoles, buildItemPermPlan,
-  companiesWithoutGroups, assetsWithoutCompany, expandAgIps, rasKeyForIp, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
+  companiesWithoutGroups, assetsWithoutCompany, expandAgIps, rasKeyForIp, rasKeyForDns, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
   aliasesFor, parseAliases, buildAliasIndex, planRasCsvImport,
   type RasAsset,
 } from '../src/ras';
@@ -27,8 +27,8 @@ describe('独自RASの判定', () => {
   });
 });
 
-const group = (id: string, title: string, ips: string[], lastUpdate: string): QamRecord =>
-  ({ key: id, name: title, scalar: { TITLE: title }, set: { IPS: ips }, info: { LAST_UPDATE: lastUpdate }, hash: '' });
+const group = (id: string, title: string, ips: string[], lastUpdate: string, dns: string[] = []): QamRecord =>
+  ({ key: id, name: title, scalar: { TITLE: title }, set: { IPS: ips, DNS_LIST: dns }, info: { LAST_UPDATE: lastUpdate }, hash: '' });
 
 const BASE = '2026-08-16'; // 取込日（基準日）
 
@@ -99,6 +99,41 @@ describe('host not alive の拾い上げ', () => {
     ];
     const row = derive(g).assets.find((x) => x.ip === '10.0.0.5')!;
     expect(row.settenId).toBe('R100,R200');
+  });
+
+  it('AssetGroup に DNS_LIST でだけ登録された資産も拾う', () => {
+    // ★IP_SET だけを見ると、名前で登録した資産だけが一覧に出ない（実際に踏んだ）。
+    const g = [group('g1', 'R100 拠点', [], '2026-08-10T00:00:00Z', ['ras1.example', 'ras2.example'])];
+    const rows = derive(g).assets;
+    // IP を持つ行が先、DNS名だけの行は後ろ。
+    expect(rows.map((r) => `${r.fqdn}:${r.status}`)).toEqual([
+      'a.example:', `ras1.example:${RAS_NOT_ALIVE}`, `ras2.example:${RAS_NOT_ALIVE}`,
+    ]);
+    expect(rows.find((r) => r.fqdn === 'ras1.example')!.key).toBe(rasKeyForDns('ras1.example'));
+    expect(rows.find((r) => r.fqdn === 'ras1.example')!.ip).toBe(''); // IP は分からない
+  });
+
+  it('host list に同じ名前があれば DNS_LIST 側は重複させない（大文字小文字は無視）', () => {
+    const g = [group('g1', 'R100 拠点', [], '2026-08-10T00:00:00Z', ['A.EXAMPLE'])];
+    expect(derive(g).assets).toHaveLength(1); // host list の a.example だけ
+  });
+
+  it('DNS_LIST も最終更新が基準日なら Scan未実施', () => {
+    const g = [group('g1', 'R100 拠点', [], `${BASE}T09:00:00Z`, ['ras1.example'])];
+    expect(derive(g).assets.find((r) => r.fqdn === 'ras1.example')!.status).toBe(RAS_NOT_SCANNED);
+  });
+
+  it('同じ名前が複数のRAS接続点にあれば接続点IDをまとめる', () => {
+    const g = [
+      group('g1', 'R100 拠点', [], '2026-08-10T00:00:00Z', ['ras1.example']),
+      group('g2', 'R200 拠点', [], '2026-08-10T00:00:00Z', ['ras1.example']),
+    ];
+    expect(derive(g).assets.find((r) => r.fqdn === 'ras1.example')!.settenId).toBe('R100,R200');
+  });
+
+  it('IPは数値順に並べる（10.0.0.10 が 10.0.0.2 より前に来ないこと）', () => {
+    const g = [group('g1', 'R100 拠点', ['10.0.0.2', '10.0.0.10'], '2026-08-10T00:00:00Z')];
+    expect(derive(g).assets.map((r) => r.ip)).toEqual(['10.0.0.1', '10.0.0.2', '10.0.0.10']);
   });
 
   it('IPレンジは展開し、上限を超えた分は件数で返す（黙って捨てない）', () => {
