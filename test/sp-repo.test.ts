@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createSpRepo } from '../src/api/sp-repo';
 import { createSpListClient, type SpItem, type SpListClient } from '../src/api/sp/list';
-import { LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, LIST_SETTINGS, LOCK_INGEST, LIST_RAS_ASSETS, LIST_RAS_TICKETS, annotKey } from '../src/api/sp/schema';
+import { ALL_LISTS, LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, LIST_SETTINGS, LOCK_INGEST, LIST_RAS_ASSETS, LIST_RAS_TICKETS, annotKey } from '../src/api/sp/schema';
 
 // リストを模した最小の実装。行の追加/更新/削除がそのまま観測できる。
 function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: Record<string, SpItem[]>; ensured: string[] } {
@@ -342,5 +342,33 @@ describe('独自RAS のリスト同期', () => {
   it('壊れた共有 JSON は既定値にフォールバックする', async () => {
     const lists = fakeLists({ [LIST_SETTINGS]: [{ Id: 1, __etag: '"1"', SettingKey: 'ras:perms', Value: '{壊れ' }] });
     expect(await repoOf(lists).readSharedJson('ras:perms', { adminGroupIds: [] })).toEqual({ adminGroupIds: [] });
+  });
+});
+
+describe('列名の安全性', () => {
+  // SharePoint のカスタムリストに最初から入っている列。ここと同じ名前で列を作ろうとすると、
+  // 作成は「既にある」で素通りするのに **書き込みだけが必ず失敗する**。
+  // ★実際に QamRasTickets.Created で踏んだ（Created は組み込みの DateTime 列）。
+  //   実行時ガードはあるが、起動して初めて分かるのでは遅い。ここで落とす。
+  const BUILT_IN = [
+    'ID', 'Id', 'Title', 'Created', 'Modified', 'Author', 'Editor', 'GUID', 'Order', 'Version',
+    'Attachments', 'ContentType', 'ContentTypeId', 'FileLeafRef', 'FileDirRef', 'FileRef',
+    'FSObjType', 'Level', 'UniqueId', 'DocIcon', 'ItemChildCount', 'FolderChildCount',
+    'AppAuthor', 'AppEditor', 'ComplianceAssetId', '_UIVersionString', '_ModerationStatus',
+  ];
+
+  it.each(ALL_LISTS.map((l) => [l.title, l] as const))('%s の列名が組み込み列と衝突しない', (_title, list) => {
+    const hits = list.fields.map((f) => f.name).filter((n) => BUILT_IN.includes(n));
+    expect(hits).toEqual([]);
+  });
+
+  it('列名は空白を含まない ASCII（内部名が _x0020_ 化されて表示名とずれるのを防ぐ）', () => {
+    const bad = ALL_LISTS.flatMap((l) => l.fields.map((f) => `${l.title}.${f.name}`).filter((n) => !/^[\w.]+$/.test(n)));
+    expect(bad).toEqual([]);
+  });
+
+  it('一意制約を張る列は索引付き（SP は Indexed 無しの EnforceUniqueValues を受け付けない）', () => {
+    const bad = ALL_LISTS.flatMap((l) => l.fields.filter((f) => f.enforceUnique && !f.indexed).map((f) => `${l.title}.${f.name}`));
+    expect(bad).toEqual([]);
   });
 });

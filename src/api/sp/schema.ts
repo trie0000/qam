@@ -102,7 +102,7 @@ export const rasTicketFields: FieldSpec[] = [
   { name: 'Fqdn', type: 'Text' },
   { name: 'SettenId', type: 'Text' },
   { name: 'BusinessCompany', type: 'Text', indexed: true },
-  { name: 'Created', type: 'Text' },
+  { name: 'OpenedAt', type: 'Text' }, // Created は SP 組み込み列(DateTime)と衝突するので使えない
   { name: 'DedupKey', type: 'Text', indexed: true, enforceUnique: true },
 ];
 
@@ -187,7 +187,7 @@ export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
 
 export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
   ({ Title: t.number, TicketNumber: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
-     SettenId: t.settenId, BusinessCompany: t.businessCompany, Created: t.created, DedupKey: t.number });
+     SettenId: t.settenId, BusinessCompany: t.businessCompany, OpenedAt: t.created, DedupKey: t.number });
 export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
   ({ number: str(r.TicketNumber), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
-     settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), created: str(r.Created) });
+     settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), created: str(r.OpenedAt) });
