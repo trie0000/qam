@@ -758,6 +758,21 @@ const loadRasPerms = async (): Promise<RasPerms> => normalizeRasPerms(await repo
 
 async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
+  // 取込をやり直さなくても、保存済みの取込データから作り直せるようにする
+  // （この機能より前に取り込んだ環境では、これを押すまで一覧が空になる）。
+  const rebuildBtn = el('button', { class: 'btn btn--sm', title: '保存済みの取込データから独自RASの資産・チケットを作り直します（Qualys へは接続しません）' },
+    ['最新の取込から更新']);
+  rebuildBtn.addEventListener('click', async () => {
+    rebuildBtn.setAttribute('disabled', 'true');
+    try {
+      const r = await rebuildRasFromStorage();
+      if (!r.assets) toast('host の取込がないため作成できません。先に取込を実行してください', 'error');
+      else toast(`独自RAS: 資産 ${r.assets} 件 / チケット ${r.tickets} 件を反映しました`, 'ok');
+      refresh();
+    } catch (e) { toast('更新に失敗: ' + (e as Error).message, 'error'); }
+    finally { rebuildBtn.removeAttribute('disabled'); }
+  });
+  toolbar.append(rebuildBtn);
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
@@ -770,7 +785,8 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     const noCompany = assetsWithoutCompany(assets).length;
     count.textContent = `${rows.length} 件${noCompany ? ` / 事業会社が未設定 ${noCompany} 件` : ''}`;
     if (!assets.length) {
-      host.append(emptyState('独自RASの資産がありません', `接続点IDが ${RAS_PREFIX} で始まる資産を、取込のときに自動で登録します。まず取込を実行してください。`));
+      host.append(emptyState('独自RASの資産がありません',
+        `接続点IDが ${RAS_PREFIX} で始まる資産をここに登録します。既に取込済みなら「最新の取込から更新」を押してください（Qualys へは接続しません）。まだ取込が無ければ先に取込を実行してください。`));
       return;
     }
     // 事業会社が未登録だと管理者しか見られない行になるので、気付けるように注意を出す。
@@ -814,7 +830,8 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     const rows = tickets.filter((t) => matchQ([t.number, t.state, t.hostId, t.ip, t.fqdn, t.settenId, t.businessCompany]));
     count.textContent = `${rows.length} 件`;
     if (!tickets.length) {
-      host.append(emptyState('独自RASのチケットがありません', '取込でチケットを取得すると、独自RAS資産の分だけをここに登録します。'));
+      host.append(emptyState('独自RASのチケットがありません',
+        'チケットを取込済みなら「最新の取込から更新」で反映できます。未取込なら、取込の取得対象で「チケット」を選んで実行してください。'));
       return;
     }
     const cols: Column[] = [
@@ -842,9 +859,9 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
 // hostId で引き継ぐ（取込のたびに消えないように）。チケットは RAS 資産の分だけを載せる。
 // ★権限は自動では反映しない。会社の割当が変わっていない限り再適用は不要で、
 //   全アイテムに1件ずつ SharePoint を呼ぶので取込のたびに走らせると重い。
-async function syncRasFromLatest(tickets?: QamTicket[]): Promise<void> {
+async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: number; tickets: number }> {
   const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
-  if (!hStamp) return; // host 未取込なら何もしない
+  if (!hStamp) return { assets: 0, tickets: 0 }; // host 未取込なら何もしない
   const hSnap = await readSnapshot(backend, 'host', hStamp);
   const hosts = Object.values(hSnap?.records ?? {}) as QamRecord[];
   const agSetten = await buildAgSetten('host', '');
@@ -853,12 +870,22 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<void> {
   const a = await repo.syncRasAssets(assets);
   if (a.added || a.updated || a.removed) recordOp('RAS資産の同期', `追加 ${a.added} / 更新 ${a.updated} / 削除 ${a.removed}`);
 
-  if (!tickets?.length) return;
+  if (!tickets?.length) return { assets: assets.length, tickets: 0 };
   const idByIp: Record<string, string> = {};
   for (const h of hosts) { const ip = h.scalar.IP; if (ip && !(ip in idByIp)) idByIp[ip] = h.key; }
   const rt = deriveRasTickets(tickets, assets, idByIp);
   const t = await repo.syncRasTickets(rt);
   if (t.added || t.updated) recordOp('RASチケットの同期', `追加 ${t.added} / 更新 ${t.updated}`);
+  return { assets: assets.length, tickets: rt.length };
+}
+
+// 保存済みの取込データから RAS の2リストを作り直す。Qualys は呼ばない。
+// ★取込のときにしか同期していないと、機能を足す前から取込済みの環境では
+//   RAS の一覧が空のままになる（取込をやり直さないと出てこない）。その逃げ道。
+async function rebuildRasFromStorage(): Promise<{ assets: number; tickets: number }> {
+  const tStamp = resolveAsof(await getTicketStamps(backend));
+  const snap = tStamp ? await readTickets(backend, tStamp) : null;
+  return syncRasFromLatest(snap?.tickets);
 }
 
 // マスター管理ビュー: 事業会社の登録と、独自RASの2リストに対するアクセス権の割当。
