@@ -71,7 +71,8 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 ## 起動・設定
 
 ```
-1) dist/qam.env.example を dist/qam.env にコピーし、QAM_SP_SITE_URL（保管先サイト）等を設定
+1) dist/qam.env.example を **dist/qam.env** にコピーし、QAM_SP_SITE_URL（保管先サイト）等を設定
+   （起動に必要なファイルは全て dist 配下。dist ごと配布/共有すればよい）
 2) qam-launch.bat をダブルクリック
 3) 開いたブラウザで利用。終了は UI の「終了」アイコン
 ```

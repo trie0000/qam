@@ -59,19 +59,8 @@ function Set-QamEnvValue {
     [Environment]::SetEnvironmentVariable($Key, $Value)
 }
 
-if (-not $EnvFile) {
-    $EnvFile = Join-Path $PSScriptRoot 'qam.env'
-    # 旧配置（配布物が server\ と dist\ に分かれていた頃）の qam.env も拾う。
-    # 設定ファイルは gitignore で配らないので、置き場所を変えた途端に
-    # 全員が接続先を見失うのを防ぐ。
-    if (-not (Test-Path -LiteralPath $EnvFile)) {
-        $legacy = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'server') 'qam.env'
-        if (Test-Path -LiteralPath $legacy) {
-            Write-Host "[qam] 旧配置の設定を使用: $legacy （dist\qam.env へ移動してください）" -ForegroundColor Yellow
-            $EnvFile = $legacy
-        }
-    }
-}
+# 設定は配布物と同じフォルダ（dist）に置く。起動に要るものは全て dist 内で完結させる。
+if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot 'qam.env' }
 Import-QamEnv $EnvFile
 # 管理データは SharePoint に置くので、ローカルのデータディレクトリは持たない。
 # 残るのはログの置き場だけ。QAM_LOG_DIR > 旧 QAM_DATA_DIR(後方互換) > %LOCALAPPDATA%\qam。
