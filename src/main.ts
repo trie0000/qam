@@ -2,6 +2,7 @@
 import css from './styles/app.css';
 import { scopeCss } from './ui/scope-css';
 import { BUILD, BUILDTIME, ENTITIES, LS, RELAY, fmtStamp, datetimeToStamp, stampNow, today } from './config';
+import { needsCredentialPrompt, passwordInputAction } from './creds';
 import { el, esc, clear, onEnter, uiHost, uiQuery, setUiRoot } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
@@ -1119,7 +1120,7 @@ async function resolveQualysCreds(): Promise<{ base: string; user: string; pass:
   const cfg = await getConfig();
   const creds = qualysCredsFromStorage(cfg);
   if (!creds.base) { toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return null; }
-  if (!creds.user || !(creds.pass || creds.secret)) {
+  if (needsCredentialPrompt(creds)) {
     const got = await promptQualysCreds(creds.user, creds.pass);
     if (!got) return null;
     creds.user = got.user; creds.pass = got.pass;
@@ -1217,7 +1218,7 @@ function buildIpScopeDiagBox(): HTMLElement {
       const cfg = await getConfig();
       const creds = qualysCredsFromStorage(cfg);
       if (!creds.base) { clear(out); toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return; }
-      if (!creds.user || !creds.pass) { const got = await promptQualysCreds(creds.user, creds.pass); if (!got) { clear(out); return; } creds.user = got.user; creds.pass = got.pass; }
+      if (needsCredentialPrompt(creds)) { const got = await promptQualysCreds(creds.user, creds.pass); if (!got) { clear(out); return; } creds.user = got.user; creds.pass = got.pass; }
       setRelayBusy(true);
       const rows = await diagnoseSubscriptionIps(creds);
       setRelayBusy(false);
@@ -1710,7 +1711,11 @@ async function openSettings(): Promise<void> {
       try {
         await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)), spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' });
         if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
-        await storeQualysPassword(pass.value); // 平文は保存しない（DPAPI 暗号文にする）
+        // ★パスワード欄は保存済みでも空で開く（暗号文は復号口が無く画面へ戻せないため）。
+        //   空を「消す」と解釈すると、別項目だけ直して保存したときに保存済みの認証情報が
+        //   消え、取込のたびに再入力を求められる。空＝変更なしとして触らない。
+        //   消したいときは 開発者 →「登録情報のリセット」を使う。
+        if (passwordInputAction(pass.value) === 'save') { if (!(await storeQualysPassword(pass.value))) return false; }
         if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
         if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
         themeHost.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
