@@ -6,10 +6,15 @@ import { scopeCss } from '../src/ui/scope-css';
 describe('overlay 用の CSS スコープ付け', () => {
   it('ホストページ全体に当たるセレクタは root 自身へ読み替える', () => {
     expect(scopeCss('html, body { height: 100%; }')).toContain('#qam-root {');
-    expect(scopeCss('* { box-sizing: border-box; }')).toContain('#qam-root {');
     expect(scopeCss(':root { --ink: #000; }')).toContain('#qam-root {');
     // body の指定がホストに漏れない
     expect(scopeCss('body { margin: 0; }')).not.toMatch(/(^|[^-\w])body\s*\{/);
+  });
+
+  it('* は root 自身と配下すべてへ読み替える（配下の box-sizing が失われない）', () => {
+    // ROOT だけにすると子孫が content-box のまま残り、width:100% の入力欄が
+    // padding+border 分はみ出して、モーダルに余計な横スクロールバーが出る（実測 +18px）。
+    expect(scopeCss('* { box-sizing: border-box; }')).toBe('#qam-root, #qam-root * { box-sizing: border-box; }');
   });
 
   it('通常のセレクタは root 配下へ閉じ込める', () => {

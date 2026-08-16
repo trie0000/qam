@@ -6,12 +6,16 @@
 const ROOT = '#qam-root';
 
 // ホストページ全体に当たるセレクタは、そのままではなく root 自身に読み替える。
-const GLOBAL = new Set(['html', 'body', 'html, body', ':root', '*']);
+const GLOBAL = new Set(['html', 'body', 'html, body', ':root']);
 
 function scopeSelector(sel: string): string {
   return sel.split(',').map((one) => {
     const t = one.trim();
     if (!t) return t;
+    // `*` は「root 自身」ではなく「root と配下すべて」。ROOT だけにすると
+    // `* { box-sizing: border-box }` が配下に効かず、width:100% の入力欄が
+    // padding/border 分だけはみ出して余計なスクロールバーが出る（実測 +18px）。
+    if (t === '*') return `${ROOT}, ${ROOT} *`;
     if (GLOBAL.has(t)) return ROOT;
     if (t === '#qam-root') return ROOT;
     if (t.startsWith('#qam-root')) return t;
