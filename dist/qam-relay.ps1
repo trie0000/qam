@@ -160,7 +160,9 @@ function Invoke-QualysFetch { param($Body)
             'host'   { $url = "$base/api/5.0/fo/asset/host/?action=list&details=All/AGs&truncation_limit=1000" }
             'domain' { $url = "$base/api/2.0/fo/asset/domain/?action=list" }
             # IPs in Subscription（サブスクリプションに登録された IP / IP_RANGE）。件数算出用。
-            'ips'    { $url = "$base/api/2.0/fo/asset/ip/?action=list" }
+            # VM 限定（compliance_enabled=0&certview_enabled=0）。無指定だと CertView/PC 区分の
+            # IP まで含まれ、Qualys UI(VM) の件数と合わなくなる（実測で確認済み）。
+            'ips'    { $url = "$base/api/2.0/fo/asset/ip/?action=list&compliance_enabled=0&certview_enabled=0" }
             # user 一覧は /msp/user_list.php（GET・Basic）。応答 USER_LIST_OUTPUT(XML)。
             'user'   { $url = "$base/msp/user_list.php" }
             default  { throw "未知 kind: $($Body.kind)" }
@@ -406,7 +408,8 @@ function Invoke-QamResolve { param($Body)
 #   並列にできるのは種別間（group / host / domain / user）。
 # ★応答は小さな JSON（種別ごとの成否・ページ数）だけを返し、XML 本体は一時ファイルへ置いて
 #   /qam/fetch-batch/result で生 body として渡す。PS5.1 の ConvertTo-Json は巨大文字列で壊れる。
-$QAM_FETCH_MAX_PARALLEL = 4
+# 種別4つ + IPs in Subscription = 5 を 1 波で流せるようにする（4 だと 1 件が次の波に回る）。
+$QAM_FETCH_MAX_PARALLEL = 5
 $QAM_PAGE_SEP = "`n<!-- page -->`n"   # TS 側が生XMLを分割するときの目印（従来の連結と同じ）
 
 function Get-QamFetchCacheDir {

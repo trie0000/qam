@@ -15,7 +15,7 @@ import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, r
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
-import { downloadEntity, downloadEntitiesParallel, downloadIps, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { downloadEntitiesParallel, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { buildInspectionForm } from './ui/views/schedule-form';
@@ -1475,23 +1475,24 @@ function openIngest(): void {
         // host を取り込むなら IPs in Subscription（登録IP総数）も取得（best-effort）。
         // 件数照合の検証用に、応答XMLを raw/<日付>/ips-<stamp>.xml にも残す。
         let ipCount: number | null = null;
-        if (kinds.includes('host')) {
-          setProg('IPs in Subscription を取得中…', true);
-          const ipRes = await downloadIps(creds);
-          ipCount = ipRes.count;
-          if (ipRes.xml) { try { await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ipRes.xml); } catch { /* XML保存失敗は本処理に影響させない */ } }
+        // 取得は relay 側で並列実行する（listener は逐次なので、ブラウザから並列に投げても
+        // 直列化されてしまう）。IPs in Subscription も同じプールに載せる——別に取ると
+        // その待ち時間だけ並列化の効果が削られる。保存は SharePoint への書き込みなので順に行う。
+        const needIps = kinds.includes('host');
+        const { results, failures, ips } = await downloadEntitiesParallel(kinds, creds, (m) => setProg(m, true), needIps);
+        if (ips) {
+          ipCount = ips.count;
+          if (ips.xml) { try { await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ips.xml); } catch { /* XML保存失敗は本処理に影響させない */ } }
         }
-        // 取得は relay 側で種別ごとに並列実行する（listener は逐次なので、ブラウザから
-        // 並列に投げても直列化されてしまう）。保存は SharePoint への書き込みなので順に行う。
-        const { results, failures } = await downloadEntitiesParallel(kinds, creds, (m) => setProg(m, true));
         for (const dl of results) {
           setProg(`${labelOf(dl.kind)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
           await commitOne(dl.snapshot, dl.raw, dup, ipCount);
         }
         // 1 種別が失敗しても他は取り込む（失敗は名指しで残す）。
         for (const f of failures) {
-          recordOp('取込失敗', `${labelOf(f.kind)}: ${f.error}`, f.kind);
-          toast(`${labelOf(f.kind)} の取得に失敗: ${f.error}`, 'error');
+          const kind = f.kind as QamEntity;
+          recordOp('取込失敗', `${labelOf(kind)}: ${f.error}`, kind);
+          toast(`${labelOf(kind)} の取得に失敗: ${f.error}`, 'error');
         }
         setProg('完了しました', false);
         refresh();
@@ -1946,15 +1947,17 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
     if (held) { recordOp('自動取込スキップ', `${held.owner || '他の利用者'} が取込中`); return; }
     locked = true;
     setRelayBusy(true);
+    // 取得は手動取込と同じ経路（relay 内で並列）。IPs も同じプールに載せる。
     let ipCount: number | null = null;
-    if (pending.includes('host')) {
-      const r = await downloadIps(creds); ipCount = r.count;
-      if (r.xml) await backend.write(`raw/${today}/ips-${stampNow()}.xml`, r.xml).catch(() => undefined);
+    const { results, failures, ips } = await downloadEntitiesParallel(pending, creds, undefined, pending.includes('host'));
+    if (ips) {
+      ipCount = ips.count;
+      if (ips.xml) await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ips.xml).catch(() => undefined);
     }
-    for (const k of pending) {
-      const dl = await downloadEntity(k, creds);
+    for (const dl of results) {
       await commitOne(dl.snapshot, dl.raw, undefined, ipCount, true); // auto=true（非対話）
     }
+    for (const f of failures) recordOp('自動取込失敗', `${f.kind}: ${f.error}`);
     recordOp('自動取込完了', pending.join(','));
   } catch (e) { recordOp('自動取込エラー', (e as Error).message); }
   finally {

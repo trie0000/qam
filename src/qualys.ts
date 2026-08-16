@@ -117,34 +117,35 @@ export function analyzeSubscriptionIps(xml: string, maxPairs = 500): IpDupReport
   return { unique, rawSum, duplicates: rawSum - unique, pairs, truncated };
 }
 
-// IPs in Subscription を Qualys から取得。件数と生XMLを返す（XMLは raw 保存・件数照合の検証用）。
-// 取得不可（権限/エラー）なら count=null（呼び出し側で手入力値にフォールバック）。xml は取れた分を返す。
 export interface IpListResult { count: number | null; xml: string }
-export async function downloadIps(creds: QualysCreds): Promise<IpListResult> {
-  try {
-    // VM限定（compliance_enabled=0&certview_enabled=0）で取得し、VMのAddress Management 件数に一致させる。
-    // フィルタ無しだと CertView/PC 区分のIPまで拾い、UI(VM)より多くなる（実測でVM限定にすると一致）。
-    const base = creds.base.replace(/\/+$/, '');
-    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true, url: `${base}/api/2.0/fo/asset/ip/?action=list&compliance_enabled=0&certview_enabled=0` });
-    if (!res.ok || !res.xml) return { count: null, xml: res.xml || '' };
-    return { count: countSubscriptionIps(res.xml), xml: res.xml };
-  } catch { return { count: null, xml: '' }; }
-}
 
 // 複数種別をまとめて取得する（relay 内部で種別ごとに並列実行）。
 // relay の listener は逐次ループなので、ブラウザから並列に投げても直列化される。
 // そのため「1 リクエストで種別のリストを渡し、relay 側で並列に走らせる」形にしている。
 // ページ送りはカーソル方式（次ページURLが応答に入る）なので、種別内は逐次のまま。
 export interface BatchDownload { kind: QamEntity; snapshot: QamSnapshot; raw: string; pages: number }
+// 並列取得の結果に IPs in Subscription も含める（種別と一緒に取る＝待ち時間が重ならない）。
+export interface BatchResult { results: BatchDownload[]; failures: { kind: string; error: string }[]; ips?: IpListResult }
 export async function downloadEntitiesParallel(
-  kinds: QamEntity[], creds: QualysCreds, onProgress?: (msg: string) => void,
-): Promise<{ results: BatchDownload[]; failures: { kind: QamEntity; error: string }[] }> {
-  onProgress?.(`${kinds.length} 種別を並列で取得中…`);
-  const res = await fetchQualysBatch({ kinds, base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy });
+  kinds: QamEntity[], creds: QualysCreds, onProgress?: (msg: string) => void, withIps = false,
+): Promise<BatchResult> {
+  // IPs in Subscription も同じプールで取る。別に await すると、その待ち時間だけ
+  // 並列化の効果が削られる（種別4つを並列にしても IPs の分は直列に足される）。
+  const all = withIps ? [...kinds, 'ips'] : [...kinds];
+  onProgress?.(`${all.length} 件を並列で取得中…`);
+  const res = await fetchQualysBatch({ kinds: all, base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy });
   if (!res.ok) throw new Error(res.error || '並列取得に失敗しました');
   const results: BatchDownload[] = [];
-  const failures: { kind: QamEntity; error: string }[] = [];
+  const failures: { kind: string; error: string }[] = [];
+  let ips: IpListResult | undefined;
   for (const item of res.items ?? []) {
+    if (item.kind === 'ips') {
+      // 失敗しても取込自体は続ける（ライセンス数が出ないだけ）。
+      if (!item.ok) { ips = { count: null, xml: '' }; continue; }
+      const xml = await fetchBatchResult('ips');
+      ips = { count: countSubscriptionIps(xml), xml };
+      continue;
+    }
     const kind = item.kind as QamEntity;
     if (!item.ok) { failures.push({ kind, error: item.error || '取得に失敗しました' }); continue; }
     onProgress?.(`${kind}: 受け取り中…（${item.pages} ページ）`);
@@ -161,42 +162,7 @@ export async function downloadEntitiesParallel(
     }
     results.push({ kind, snapshot: { entity: kind, datetime, records }, raw, pages: item.pages });
   }
-  return { results, failures };
-}
-
-export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProgress?: DownloadProgress): Promise<DownloadResult> {
-  // 取得は Basic 認証固定。セッションCookieは環境により 401(Bad Login)で拒否され、ページ追従でも
-  // 毎回 401 を出すため使わない（Basic は安定して通る）。
-  const fetchPage = (body: Record<string, unknown>): Promise<FetchResult> =>
-    fetchQualys({ ...body, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true });
-
-  let res = await fetchPage({ kind, base: creds.base });
-  if (!res.ok) throw new Error(`Qualys 取得失敗 (status ${res.status}): ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
-
-  const records: QamRecords = {};
-  const rawPages: string[] = [];
-  const first = parseQualysXml(res.xml, kind);
-  Object.assign(records, first.records);
-  rawPages.push(res.xml);
-  const datetime = first.datetime;
-  onProgress?.({ page: 1, records: Object.keys(records).length });
-
-  let next = res.nextUrl;
-  const seen = new Set<string>([next ?? '']);
-  let guard = 0;
-  while (next && guard++ < 2000) {
-    res = await fetchPage({ url: next });
-    if (!res.ok) throw new Error(`Qualys 取得失敗(ページ ${guard}) (status ${res.status}): ${failReason(res)}`);
-    Object.assign(records, parseQualysXml(res.xml, kind).records);
-    rawPages.push(res.xml);
-    const nx = res.nextUrl;
-    // 次ページURLが進まない/既出なら暴走(同一ページの無限取得)とみなし停止。
-    if (nx && seen.has(nx)) break;
-    if (nx) seen.add(nx);
-    next = nx;
-    onProgress?.({ page: rawPages.length, records: Object.keys(records).length });
-  }
-  return { snapshot: { entity: kind, datetime, records }, raw: rawPages.join('\n<!-- page -->\n'), pages: rawPages.length };
+  return { results, failures, ips };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
