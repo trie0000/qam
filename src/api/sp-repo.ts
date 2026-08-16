@@ -235,6 +235,19 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       throw new Error('他の利用者が同じ資産を更新しています。画面を更新してからやり直してください');
     },
 
+    async setRasCompaniesBulk(updates) {
+      // 全件を1回だけ読み、行キーで引き当てて必要な分だけ書く。
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'DedupKey']);
+      const byKey = new Map(rows.map((x) => [String(x.DedupKey ?? ''), x]));
+      let n = 0;
+      for (const u of updates) {
+        const cur = byKey.get(u.key);
+        if (!cur) continue; // 同期のタイミングで消えた資産。取込全体は止めない。
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, { BusinessCompany: u.businessCompany, ManagementCompany: u.managementCompany }, cur.__etag)) n++;
+      }
+      return n;
+    },
+
     async readRasTickets() {
       const rows = await lists.all(LIST_RAS_TICKETS, ['TicketNumber', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt', 'DedupKey']);
       return rows.map(rowToRasTicket);

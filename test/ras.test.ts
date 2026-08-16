@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   isRasSetten, deriveRasAssets, deriveRasTickets, normalizeRasPerms, registeredCompanies,
   groupIdsFor, canApplyPerms, parseCompanyList, mergeCompanies, pickRoles, buildItemPermPlan,
-  companiesWithoutGroups, assetsWithoutCompany, expandAgIps, rasKeyForIp, RAS_NOT_ALIVE,
+  companiesWithoutGroups, assetsWithoutCompany, expandAgIps, rasKeyForIp, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
+  aliasesFor, parseAliases, buildAliasIndex, planRasCsvImport,
   type RasAsset,
 } from '../src/ras';
 import type { QamRecord, QamTicket } from '../src/types';
@@ -78,10 +79,11 @@ describe('host not alive の拾い上げ', () => {
     expect(rows.find((r) => r.ip === '10.0.0.5')!.hostId).toBe(''); // ホストIDは無い
   });
 
-  it('AssetGroup の最終更新が基準日と同じなら判定を保留する（未スキャンの可能性）', () => {
+  it('AssetGroup の最終更新が基準日と同じなら Scan未実施 として出す', () => {
+    // ★not alive と同じ扱いにすると「応答が無い」と誤解される。区別して一覧には出す。
     const g = [group('g1', 'R100 拠点', ['10.0.0.1', '10.0.0.5'], `${BASE}T09:00:00Z`)];
     const r = derive(g);
-    expect(r.assets.map((x) => x.ip)).toEqual(['10.0.0.1']); // 10.0.0.5 は載せない
+    expect(r.assets.map((x) => `${x.ip}:${x.status}`)).toEqual(['10.0.0.1:', `10.0.0.5:${RAS_NOT_SCANNED}`]);
     expect(r.pendingSetten).toEqual(['R100']);
   });
 
@@ -154,9 +156,9 @@ describe('RASチケットの絞り込み', () => {
 
 describe('アクセス権の設定', () => {
   it('壊れた保存値でも落とさず既定に整える', () => {
-    expect(normalizeRasPerms(null)).toEqual({ adminGroupIds: [], byBusinessCompany: {} });
+    expect(normalizeRasPerms(null)).toEqual({ adminGroupIds: [], byBusinessCompany: {}, aliasesByCompany: {} });
     expect(normalizeRasPerms({ adminGroupIds: ['3', 0, -1, 3], byBusinessCompany: 'x' }))
-      .toEqual({ adminGroupIds: [3], byBusinessCompany: {} });
+      .toEqual({ adminGroupIds: [3], byBusinessCompany: {}, aliasesByCompany: {} });
   });
 
   it('割当が空でも登録済みの会社は残す', () => {
@@ -216,5 +218,93 @@ describe('付与内容の組み立て', () => {
       { key: '2', hostId: '2', settenId: 'R2', ip: '', fqdn: '', status: '', businessCompany: '  ', managementCompany: '' },
     ];
     expect(assetsWithoutCompany(assets).map((a) => a.hostId)).toEqual(['2']);
+  });
+});
+
+describe('略称マスター', () => {
+  it('登録済みの会社にひもづく略称だけを持つ（会社を消したら略称も消える）', () => {
+    const p = normalizeRasPerms({
+      byBusinessCompany: { 'A事業会社': [] },
+      aliasesByCompany: { 'A事業会社': ['A社', 'ＡＡ'], '消えた会社': ['X'] },
+    });
+    expect(aliasesFor('A事業会社', p)).toEqual(['A社', 'ＡＡ']);
+    expect(aliasesFor('消えた会社', p)).toEqual([]);
+  });
+
+  it('入力欄はカンマ・読点・改行で区切る', () => {
+    expect(parseAliases('A社, B社、C社\nA社')).toEqual(['A社', 'B社', 'C社']);
+  });
+
+  it('略称と正式名の両方から引ける（大文字小文字は無視）', () => {
+    const p = normalizeRasPerms({ byBusinessCompany: { 'A事業会社': [] }, aliasesByCompany: { 'A事業会社': ['ACo'] } });
+    const idx = buildAliasIndex(p);
+    expect(idx.get('aco')).toBe('A事業会社');
+    expect(idx.get('a事業会社')).toBe('A事業会社');
+  });
+
+  it('会社を再登録しても略称は消えない', () => {
+    const p = normalizeRasPerms({ byBusinessCompany: { 'A事業会社': [7] }, aliasesByCompany: { 'A事業会社': ['A社'] } });
+    expect(mergeCompanies(p, ['A事業会社', 'B事業会社']).aliasesByCompany).toEqual({ 'A事業会社': ['A社'] });
+  });
+});
+
+describe('管理CSV の取込', () => {
+  const assets: RasAsset[] = [
+    { key: '1', hostId: '1', settenId: 'R100', ip: '10.0.0.1', fqdn: 'a.example', status: '', businessCompany: '', managementCompany: '' },
+    { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, businessCompany: '', managementCompany: '' },
+  ];
+  const perms = normalizeRasPerms({
+    byBusinessCompany: { 'A事業会社': [7], 'B事業会社': [] },
+    aliasesByCompany: { 'A事業会社': ['A社'], 'B事業会社': ['B'] },
+  });
+  const csv = (rows: string[][]) => planRasCsvImport(rows, assets, perms);
+
+  it('IPで突き合わせ、略称を正式名に直して埋める', () => {
+    const r = csv([['IPアドレス', '事業会社', '管理会社'], ['10.0.0.1', 'A社', 'X保守']]);
+    expect(r.updates).toEqual([{ key: '1', businessCompany: 'A事業会社', managementCompany: 'X保守' }]);
+    expect(r.usedHeaders).toEqual({ ip: 'IPアドレス', company: '事業会社', management: '管理会社' });
+  });
+
+  it('host not alive の資産にも当たる（IPしか無くても引ける）', () => {
+    const r = csv([['IP', '事業会社'], ['10.0.0.5', 'B']]);
+    expect(r.updates).toEqual([{ key: rasKeyForIp('10.0.0.5'), businessCompany: 'B事業会社', managementCompany: '' }]);
+  });
+
+  it('IP列が無ければ FQDN で突き合わせる', () => {
+    const r = csv([['FQDN', '事業会社'], ['A.EXAMPLE', 'A社']]);
+    expect(r.updates.map((u) => u.key)).toEqual(['1']); // 大文字小文字は無視
+  });
+
+  it('引き当てられない略称では上書きせず、名前を挙げる', () => {
+    // ★勝手に未登録の会社名を入れると、割当が無い＝管理者しか見られない行が静かに増える。
+    const r = csv([['IP', '事業会社', '管理会社'], ['10.0.0.1', '謎商事', 'X保守']]);
+    expect(r.unresolvedAliases).toEqual(['謎商事']);
+    expect(r.updates).toEqual([{ key: '1', businessCompany: '', managementCompany: 'X保守' }]); // 管理会社だけ入る
+  });
+
+  it('一覧に無い行は件数で返す（黙って捨てない）', () => {
+    const r = csv([['IP', '事業会社'], ['10.9.9.9', 'A社']]);
+    expect(r.unmatchedRows).toBe(1);
+    expect(r.updates).toEqual([]);
+  });
+
+  it('管理会社の列を事業会社の列と取り違えない', () => {
+    // 「会社」だけで拾うと管理会社の列に当たってしまう。
+    const r = csv([['IP', '管理会社', '事業会社'], ['10.0.0.1', 'X保守', 'A社']]);
+    expect(r.updates[0]).toEqual({ key: '1', businessCompany: 'A事業会社', managementCompany: 'X保守' });
+  });
+
+  it('資産を特定する列が無ければ、読めたヘッダを添えて失敗させる', () => {
+    expect(() => csv([['事業会社'], ['A社']])).toThrow(/IP か FQDN.*事業会社/s);
+  });
+
+  it('会社の列が無ければ失敗させる', () => {
+    expect(() => csv([['IP'], ['10.0.0.1']])).toThrow(/事業会社・管理会社/);
+  });
+
+  it('空欄は既存値を消さない', () => {
+    const cur: RasAsset[] = [{ ...assets[0], businessCompany: 'A事業会社', managementCompany: 'X保守' }];
+    const r = planRasCsvImport([['IP', '事業会社', '管理会社'], ['10.0.0.1', '', '']], cur, perms);
+    expect(r.updates).toEqual([]); // 変化なし
   });
 });

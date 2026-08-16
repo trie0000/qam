@@ -28,7 +28,8 @@ import { ticketQuery, resolveTicketMode } from './tickets';
 import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
 import {
   RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
-  companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets, RAS_NOT_ALIVE,
+  companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
+  aliasesFor, parseAliases, planRasCsvImport, type RasCsvPlan,
   type RasAsset, type RasPerms, type RasTicket,
 } from './ras';
 import type { SiteGroup } from './api/sp/perms';
@@ -795,6 +796,11 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     finally { rebuildBtn.removeAttribute('disabled'); }
   });
   toolbar.append(rebuildBtn);
+  if (state.rasTab === 'assets') {
+    const csvBtn = el('button', { class: 'btn btn--sm', title: '既存の管理CSVから事業会社・管理会社を埋めます' }, ['管理CSV取込']);
+    csvBtn.addEventListener('click', () => { void openRasCsvImport(); });
+    toolbar.append(csvBtn);
+  }
   const exportRef: { fn?: () => ExportMatrix } = {};
   const filterRef = {} as FilterRef;
   const columnRef: { open?: (a: HTMLElement) => void } = {};
@@ -806,7 +812,8 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     const rows = assets.filter((a) => matchQ([a.settenId, a.ip, a.fqdn, a.hostId, a.status, a.businessCompany, a.managementCompany]));
     const noCompany = assetsWithoutCompany(assets).length;
     const notAlive = assets.filter((a) => a.status === RAS_NOT_ALIVE).length;
-    count.textContent = `${rows.length} 件${notAlive ? ` / ${RAS_NOT_ALIVE} ${notAlive} 件` : ''}${noCompany ? ` / 事業会社が未設定 ${noCompany} 件` : ''}`;
+    const notScanned = assets.filter((a) => a.status === RAS_NOT_SCANNED).length;
+    count.textContent = `${rows.length} 件${notAlive ? ` / ${RAS_NOT_ALIVE} ${notAlive} 件` : ''}${notScanned ? ` / ${RAS_NOT_SCANNED} ${notScanned} 件` : ''}${noCompany ? ` / 事業会社が未設定 ${noCompany} 件` : ''}`;
     if (!assets.length) {
       host.append(emptyState('独自RASの資産がありません',
         `接続点IDが ${RAS_PREFIX} で始まる資産をここに登録します。既に取込済みなら「最新の取込から更新」を押してください（Qualys へは接続しません）。まだ取込が無ければ先に取込を実行してください。`));
@@ -827,7 +834,9 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       // host list に居ない＝スキャンで応答が無い資産を見分けられるようにする。
       {
         id: 'status', label: 'ステータス', width: 130,
-        render: (a: RasAsset) => (a.status ? `<span class="qam-tag qam-tag--modified">${esc(a.status)}</span>` : ''),
+        render: (a: RasAsset) => (a.status
+          ? `<span class="qam-tag qam-tag--${a.status === RAS_NOT_ALIVE ? 'deleted' : 'modified'}">${esc(a.status)}</span>`
+          : ''),
         sortVal: (a: RasAsset) => a.status,
       },
       { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (a: RasAsset) => esc(a.hostId) },
@@ -904,7 +913,7 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   const derived = deriveRasAssets(hosts, groups, agSetten, registered, dateOfStamp(hStamp));
   const assets = derived.assets;
   if (derived.droppedIps) recordOp('RAS資産の同期', `IPレンジが大きいため ${derived.droppedIps.toLocaleString()} 件の展開を打ち切りました`);
-  if (derived.pendingSetten.length) recordOp('RAS資産の同期', `最終更新が当日のため判定を保留: ${derived.pendingSetten.join(' / ')}`);
+  if (derived.pendingSetten.length) recordOp('RAS資産の同期', `${RAS_NOT_SCANNED} として登録（AssetGroupの最終更新が基準日）: ${derived.pendingSetten.join(' / ')}`);
   const a = await repo.syncRasAssets(assets);
   if (a.added || a.updated || a.removed) recordOp('RAS資産の同期', `追加 ${a.added} / 更新 ${a.updated} / 削除 ${a.removed}`);
 
@@ -924,6 +933,64 @@ async function rebuildRasFromStorage(): Promise<{ assets: number; tickets: numbe
   const tStamp = resolveAsof(await getTicketStamps(backend));
   const snap = tStamp ? await readTickets(backend, tStamp) : null;
   return syncRasFromLatest(snap?.tickets);
+}
+
+// 既存運用の管理CSVから、独自RAS資産の事業会社・管理会社を埋める。
+// ★事業会社は略称で書かれている前提。マスターの略称から正式名へ引き当て、
+//   引き当てられない略称は上書きせず名前を挙げる（未登録の会社名が入ると、
+//   アクセス権の割当が無い＝管理者しか見られない行が静かに増えるため）。
+async function openRasCsvImport(): Promise<void> {
+  const file = el('input', { type: 'file', accept: '.csv', class: 'in' }) as HTMLInputElement;
+  const result = el('div', { class: 'qam-hint', style: 'margin-top:var(--s-3);white-space:pre-wrap' });
+  const body = el('div', {}, [
+    el('div', { class: 'qam-field' }, [el('label', {}, ['管理CSV']), file]),
+    callout('IP か FQDN の列で資産を突き合わせ、事業会社（略称）と管理会社を埋めます。事業会社の略称は「マスター管理」で会社ごとに登録してください。CSV に無い資産は変更しません。'),
+    result,
+  ]);
+  let plan: RasCsvPlan | null = null;
+  let assets: RasAsset[] = [];
+
+  const preview = async (): Promise<void> => {
+    plan = null; result.textContent = '';
+    if (!file.files?.length) return;
+    try {
+      const [rows, a, perms] = await Promise.all([
+        file.files[0].text().then(parseCsv), repo.readRasAssets(), loadRasPerms(),
+      ]);
+      assets = a;
+      plan = planRasCsvImport(rows, assets, perms);
+      const used = Object.entries(plan.usedHeaders).map(([k, v]) => `${({ ip: 'IP', fqdn: 'FQDN', company: '事業会社', management: '管理会社' } as Record<string, string>)[k]}=「${v}」`).join(' / ');
+      const lines = [
+        `読めた列: ${used}`,
+        `更新する資産: ${plan.updates.length.toLocaleString()} 件`,
+        `CSV にあるが一覧に無い行: ${plan.unmatchedRows.toLocaleString()} 件`,
+      ];
+      // 引き当てられない略称は必ず見せる（黙って無視すると「取り込んだのに空のまま」になる）。
+      if (plan.unresolvedAliases.length) {
+        lines.push(`⚠ 正式名に引き当てられない略称 ${plan.unresolvedAliases.length} 件（この列は上書きしません）: ${plan.unresolvedAliases.join(' / ')}`);
+      }
+      result.textContent = lines.join('\n');
+    } catch (e) {
+      result.textContent = '読めませんでした: ' + (e as Error).message;
+    }
+  };
+  file.addEventListener('change', () => { void preview(); });
+
+  openModal({
+    title: '管理CSVの取込', body, primaryLabel: '取り込む', wide: true,
+    onPrimary: async () => {
+      if (!plan) { toast('先に CSV を選んでください', 'error'); return false; }
+      if (!plan.updates.length) { toast('更新する内容がありません', 'info'); return false; }
+      await ensureAuthor();
+      try {
+        const n = await repo.setRasCompaniesBulk(plan.updates);
+        recordOp('RAS管理CSV取込', `${n.toLocaleString()} 件更新${plan.unresolvedAliases.length ? `（未解決の略称 ${plan.unresolvedAliases.length} 件）` : ''}`);
+        toast(`${n.toLocaleString()} 件に事業会社・管理会社を反映しました。権限は「マスター管理 → 権限を反映」で適用してください`, 'ok');
+        refresh();
+        return true;
+      } catch (e) { toast('取込に失敗: ' + (e as Error).message, 'error'); return false; }
+    },
+  });
 }
 
 // マスター管理ビュー: 事業会社の登録と、独自RASの2リストに対するアクセス権の割当。
@@ -1001,7 +1068,7 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
     // 2) 事業会社の一括登録
     const compBox = el('div', { class: 'qam-card' });
     compBox.append(el('div', { class: 'qam-card-title' }, ['事業会社の登録']));
-    compBox.append(el('div', { class: 'qam-hint' }, ['1行1件。Excel から貼り付けられます（タブ区切りは先頭列だけ使います）。ここに登録した会社が、資産一覧の「事業会社」の選択肢になります。']));
+    compBox.append(el('div', { class: 'qam-hint' }, ['1行1件。Excel から貼り付けられます（タブ区切りは先頭列だけ使います）。ここに登録した会社が、資産一覧の「事業会社」の選択肢になります。管理CSV は略称で書かれているので、下の一覧で会社ごとに略称も登録してください。']));
     const ta = el('textarea', { class: 'in', rows: '6', style: 'width:100%;margin:var(--s-3) 0;font-family:var(--font-mono)' }) as HTMLTextAreaElement;
     ta.value = registeredCompanies(perms).join('\n');
     const compBtn = el('button', { class: 'btn btn--sm btn--primary' }, ['登録内容を保存']);
@@ -1029,6 +1096,15 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
       const row = el('div', { style: 'display:flex;align-items:center;gap:var(--s-3);padding:var(--s-2) 0;border-bottom:1px solid var(--line)' });
       row.append(el('span', { style: 'min-width:180px;font-weight:600' }, [c]));
       row.append(el('span', { class: ids.length ? '' : 'qam-hint', style: 'flex:1' }, [ids.length ? ids.map(groupTitle).join(' / ') : '未割当']));
+      // 管理CSV は略称で書かれているので、会社ごとに略称を登録しておく。
+      const al = el('input', { type: 'text', class: 'in', style: 'width:220px', placeholder: '略称（, 区切り）', value: aliasesFor(c, perms).join(', ') }) as HTMLInputElement;
+      al.addEventListener('change', () => {
+        const list = parseAliases(al.value);
+        const next = { ...perms.aliasesByCompany };
+        if (list.length) next[c] = list; else delete next[c];
+        void save({ ...perms, aliasesByCompany: next });
+      });
+      row.append(al);
       const b = el('button', { class: 'btn btn--sm' }, ['グループを選ぶ']);
       b.addEventListener('click', async () => {
         const picked = await pickGroups(`${c} の参照グループ`, `${c} の資産・チケットに読み取りを付けるグループ`, ids);

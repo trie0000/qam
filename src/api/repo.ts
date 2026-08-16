@@ -65,6 +65,8 @@ export interface RecordRepo {
   syncRasAssets(assets: RasAsset[]): Promise<{ added: number; updated: number; removed: number }>;
   /** key は RasAsset.key（ホストID、または host list に無い資産の 'ip:<IP>'）。 */
   setRasCompany(key: string, businessCompany: string, managementCompany: string): Promise<void>;
+  /** CSV取込用の一括更新。1件ずつ setRasCompany を呼ぶと毎回全件読み直しになるため分ける。 */
+  setRasCompaniesBulk(updates: { key: string; businessCompany: string; managementCompany: string }[]): Promise<number>;
 
   readRasTickets(): Promise<RasTicket[]>;
   syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
@@ -83,7 +85,7 @@ let impl: RecordRepo = {
   readComments: notReady, addComment: notReady, editComment: notReady,
   readAnnotations: notReady, setAnnotation: notReady, setAnnotationsBulk: notReady,
   readSharedJson: notReady, writeSharedJson: notReady,
-  readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady,
+  readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady,
   readRasTickets: notReady, syncRasTickets: notReady,
   listSiteGroups: notReady, applyRasPerms: notReady,
   readOps: notReady, logOp: notReady,
@@ -102,6 +104,7 @@ export const repo: RecordRepo = {
   readRasAssets: () => impl.readRasAssets(),
   syncRasAssets: (a) => impl.syncRasAssets(a),
   setRasCompany: (k, b, m) => impl.setRasCompany(k, b, m),
+  setRasCompaniesBulk: (u) => impl.setRasCompaniesBulk(u),
   readRasTickets: () => impl.readRasTickets(),
   syncRasTickets: (t) => impl.syncRasTickets(t),
   listSiteGroups: () => impl.listSiteGroups(),
