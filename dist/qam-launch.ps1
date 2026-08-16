@@ -25,7 +25,7 @@ param(
     [int]$DebugPort = 0,              # 未指定なら qam.env(QAM_CDP_PORT)   → 既定 18099
     [int]$AuthTimeoutSec = 300,       # サインインを待つ上限（MFA を手で通す時間）
     [switch]$KeepOpen,                # 失敗時にウィンドウを残す（調査用）
-    [switch]$Restart                  # 動いている中継サーバを止めてから起動し直す
+    [switch]$Restart                  # 動いている中継サーバを必ず止めてから起動し直す
 )
 $ErrorActionPreference = 'Stop'
 
@@ -113,25 +113,19 @@ function Stop-QamRelay {
 function Start-QamRelay {
     param([int]$Port)
     if (Test-Url "http://127.0.0.1:$Port/qam/health") {
-        # ★既に動いているものをそのまま使う。ただし旧版が隠しウィンドウで起動していると
-        #   「窓が出ない・止め方が分からない」になるので、見えているかを確かめて案内する。
+        # ★ウィンドウを持たない relay（旧版の隠し起動や、前回の残骸）はそのまま使わない。
+        #   使い回すと「窓が出ない・止められない・設定が反映されない」から抜け出せなくなる。
+        #   窓があるものだけ再利用し、無ければ黙って止めて起動し直す。
         $hidden = $false
-        try {
-            foreach ($wp in (Get-WmiObject Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue)) {
-                if ($wp.CommandLine -like '*qam-relay.ps1*') {
-                    $pr = Get-Process -Id $wp.ProcessId -EA SilentlyContinue
-                    if ($pr -and $pr.MainWindowHandle -eq 0) { $hidden = $true }
-                }
+        foreach ($wp in (Get-WmiObject Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue)) {
+            if ($wp.CommandLine -like '*qam-relay.ps1*') {
+                $pr = Get-Process -Id $wp.ProcessId -EA SilentlyContinue
+                if ($pr -and $pr.MainWindowHandle -eq 0) { $hidden = $true }
             }
-        } catch { }
-        if ($hidden) {
-            Write-Warn "中継サーバは起動済みですが、ウィンドウが表示されない状態で動いています（旧版で起動されたもの）"
-            Write-Warn "窓を出して使いたい場合は、いったん停止してから起動し直してください:"
-            Write-Warn "  停止: -Restart を付けて実行する（qam-launch.bat -Restart）"
-        } else {
-            Write-Step "中継サーバは起動済み"
         }
-        return $true
+        if (-not $hidden) { Write-Step "中継サーバは起動済み"; return $true }
+        Write-Step "ウィンドウの無い中継サーバが動いていたので、停止して起動し直します"
+        Stop-QamRelay -Port $Port
     }
     $relay = Join-Path $Root 'qam-relay.ps1'
     if (-not (Test-Path -LiteralPath $relay)) { Write-Warn "qam-relay.ps1 が見つかりません: $relay"; return $false }
