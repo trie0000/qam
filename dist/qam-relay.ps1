@@ -56,6 +56,10 @@ function Set-QamEnvValue {
     # 上書き前に直近の状態を .bak へ退避（万一壊れても復旧できるように）。
     if ($existed) { try { Copy-Item -LiteralPath $Path -Destination "$Path.bak" -Force } catch {} }
     Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
+    # ★稼働中のプロセスへも即反映する。Import-QamEnv は「未設定のときだけ入れる」ので、
+    #   ファイルを書いただけでは既に入っている古い値が残り続ける。
+    #   （設定画面で正しい URL に直しても「保存して再試行」が永久に効かない、の原因）
+    [Environment]::SetEnvironmentVariable($Key, $Value)
 }
 
 if (-not $EnvFile) {

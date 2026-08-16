@@ -41,6 +41,16 @@ function Write-Log {
 function Write-Step { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Cyan; Write-Log "INFO  $Msg" }
 function Write-Warn { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Yellow; Write-Log "WARN  $Msg" }
 
+# 使えるサイト URL か。空だけでなく**雛形のプレースホルダのまま**も未設定として扱う。
+# （プレースホルダを通すと、存在しないホストへ繋ぎに行って認証待ちのタイムアウト
+#   （5分）まで待たされ、最後に理由の分からない失敗になる）
+function Test-QamSiteUrl {
+    param([string]$Url)
+    if (-not $Url) { return $false }
+    if ($Url -match 'YOUR-TENANT|YOUR-SITE|example\.com') { return $false }
+    return [bool]($Url -match '^https://[^/]+\.sharepoint\.com/(sites|teams)/[^/]+')
+}
+
 # 設定ファイルから既定値を拾う（引数 > qam.env）。
 function Get-EnvValue {
     param([string]$Key)
@@ -255,16 +265,34 @@ $AuthProbeJs = @'
 
 # ─── 実行 ────────────────────────────────────────────────────────────────────
 Write-Log '--- 起動 ---'
-if (-not $SiteUrl) { $SiteUrl = Get-EnvValue 'QAM_SP_SITE_URL' }
-if (-not $SiteUrl) {
-    # ★ここで終わると「ブラウザが何も出ない」うえ、サイト URL を設定する画面にも辿り着けない
-    #   （設定画面はアプリの中にあるため）。ローカルの画面を開いて、そこで入力してもらう。
+if (-not (Test-QamSiteUrl $SiteUrl)) { $SiteUrl = Get-EnvValue 'QAM_SP_SITE_URL' }
+if (-not (Test-QamSiteUrl $SiteUrl)) {
+    # ★アプリは SharePoint のページ上でしか動かないので、ローカルの画面を開いても設定できない。
+    #   ここで受け取り、relay 経由(/qam/config)で保存する。relay を通すのは、qam.env へ直接
+    #   書いても**既に動いている relay のメモリ上の値は変わらない**ため。
     Write-Warn 'SharePoint サイト URL が未設定です（qam.env の QAM_SP_SITE_URL）'
-    Write-Warn '設定用にローカルの画面を開きます。表示される画面でサイト URL を入力し、保存してから、もう一度 qam-launch.bat を実行してください'
-    if (-not (Start-QamRelay -Port $RelayPort)) { Write-Warn '中継サーバを起動できませんでした' }
-    try { Start-Process "http://127.0.0.1:$RelayPort/" } catch { Write-Warn "手動で開いてください: http://127.0.0.1:$RelayPort/" }
-    if ($KeepOpen) { Read-Host '終了するには Enter' }
-    exit 1
+    if (-not (Start-QamRelay -Port $RelayPort)) {
+        Write-Warn '中継サーバを起動できませんでした'
+        if ($KeepOpen) { Read-Host '終了するには Enter' }
+        exit 1
+    }
+    $saved = $false
+    for ($i = 1; $i -le 3; $i++) {
+        $answer = (Read-Host '管理データを置く SharePoint サイトの URL（例 https://<テナント>.sharepoint.com/sites/<サイト>）')
+        $answer = ([string]$answer).Trim()
+        if (-not (Test-QamSiteUrl $answer)) { Write-Warn 'URL の形式が違います。https://<テナント>.sharepoint.com/sites/<サイト> の形で入力してください'; continue }
+        try {
+            $body = @{ spSiteUrl = $answer } | ConvertTo-Json -Compress
+            Invoke-RestMethod -Uri "http://127.0.0.1:$RelayPort/qam/config" -Method Post -ContentType 'application/json; charset=utf-8' -Body $body -TimeoutSec 10 | Out-Null
+            $SiteUrl = $answer; $saved = $true; break
+        } catch { Write-Warn "保存に失敗しました: $($_.Exception.Message)" }
+    }
+    if (-not $saved) {
+        Write-Warn ("設定できませんでした。設定ファイルを直接編集してください: " + (Join-Path $Root 'qam.env') + " の QAM_SP_SITE_URL")
+        if ($KeepOpen) { Read-Host '終了するには Enter' }
+        exit 1
+    }
+    Write-Step "サイト URL を保存しました: $SiteUrl"
 }
 Write-Step "接続先: $SiteUrl"
 Write-Step "中継サーバ: http://127.0.0.1:$RelayPort/  デバッグポート: $DebugPort" 
