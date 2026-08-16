@@ -88,6 +88,11 @@ function Set-Cors { param($Resp)
     $Resp.Headers['Access-Control-Allow-Origin'] = (Get-QamAllowedOrigin)
     $Resp.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
     $Resp.Headers['Access-Control-Allow-Headers'] = 'Content-Type'
+    # 取込は Qualys の状態と次ページ URL をカスタムヘッダー(X-QAM-*)で返す。SharePoint ページ
+    # から呼ぶと別オリジンになり、ここで公開しないとブラウザが JS へ渡さない。ヘッダーが
+    # 読めないと「応答が壊れている」と見なされ、中継が 200 を返していても取込が
+    # 「HTTP 200」で失敗する（実測）。
+    $Resp.Headers['Access-Control-Expose-Headers'] = 'X-QAM-Status, X-QAM-Next'
     # バンドルを含め一切キャッシュさせない（古い JS を掴み続けて修正が反映されないのを防ぐ）。
     $Resp.Headers['Cache-Control'] = 'no-store, no-cache, must-revalidate'
 }
