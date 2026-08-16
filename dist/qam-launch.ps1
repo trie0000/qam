@@ -204,7 +204,20 @@ function Invoke-CdpEvaluate {
 #   これで最初の1回も起動でき、配置後は全員が SP 側の最新を使う。
 $LoaderJs = @'
 (async () => {
-  if (document.getElementById('qam-root')) return 'already';
+  // アプリは #qam-host（light DOM のシールド）の Shadow DOM の中に #qam-root を作る。
+  // document.getElementById('qam-root') では見えないので、shadow 越しに探す。
+  // 直下フォールバック（attachShadow 不可の環境）も見る。
+  const findRoot = () => {
+    const host = document.getElementById('qam-host');
+    return (host && host.shadowRoot && host.shadowRoot.getElementById('qam-root'))
+      || (host && host.querySelector && host.querySelector('#qam-root'))
+      || document.getElementById('qam-root');
+  };
+  const healthy = (el) => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width >= 50 && r.height >= 50; };
+  // 生きている overlay があるときだけ 'already'。壊れた残骸なら消して入れ直す
+  // （bat をもう一度叩けば直る、という復旧手段を潰さないため）。
+  if (healthy(findRoot())) return 'already';
+  document.getElementById('qam-host')?.remove();
   // ★アプリ本体に中継サーバの居場所を伝える。
   //   ここを渡さないとアプリは既定ポートを見に行き、設定が取れず
   //   「SharePoint に接続できません」になる（ポートを変えた環境で必ず踏む）。
@@ -219,7 +232,7 @@ $LoaderJs = @'
   // 起動時の失敗を握り潰さない。ここで黙ると「注入は成功したのに何も出ない」になり、
   // 画面にもログにも手がかりが残らない。
   try { (0, eval)(js); } catch (e) { return 'eval-error: ' + (e && e.message) + ' @ ' + String(e && e.stack).split('\n')[1]; }
-  const root = document.getElementById('qam-root');
+  const root = findRoot();
   if (!root) return 'no-root: 本体は読めたが画面を作れていない';
   const r = root.getBoundingClientRect();
   if (r.width < 50 || r.height < 50) return 'invisible: root ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' (CSS が当たっていない)';
