@@ -202,21 +202,21 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
     // --- 独自RAS ---
     async readRasAssets() {
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
       return rows.map(rowToRasAsset);
     },
 
     async syncRasAssets(assets) {
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
       for (const a of assets) {
-        const cur = byKey.get(a.hostId);
+        const cur = byKey.get(a.key);
         if (!cur) { await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a)); added++; continue; }
-        byKey.delete(a.hostId);
+        byKey.delete(a.key);
         // 変化が無いなら書かない（毎回の取込で全行を更新すると SP の版数が無駄に増える）。
         const same = rowToRasAsset(cur);
-        if (same.settenId === a.settenId && same.ip === a.ip && same.fqdn === a.fqdn
+        if (same.settenId === a.settenId && same.ip === a.ip && same.fqdn === a.fqdn && same.status === a.status
           && same.businessCompany === a.businessCompany && same.managementCompany === a.managementCompany) continue;
         if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) updated++;
       }
@@ -225,11 +225,11 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       return { added, updated, removed };
     },
 
-    async setRasCompany(hostId, businessCompany, managementCompany) {
+    async setRasCompany(key, businessCompany, managementCompany) {
       for (let i = 0; i <= MAX_RETRY; i++) {
         const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'DedupKey']);
-        const cur = rows.find((r) => String(r.DedupKey ?? '') === hostId);
-        if (!cur) throw new Error(`RAS資産が見つかりません (hostId=${hostId})`);
+        const cur = rows.find((r) => String(r.DedupKey ?? '') === key);
+        if (!cur) throw new Error(`RAS資産が見つかりません (${key})`);
         if (await lists.update(LIST_RAS_ASSETS, cur.Id, { BusinessCompany: businessCompany, ManagementCompany: managementCompany }, cur.__etag)) return;
       }
       throw new Error('他の利用者が同じ資産を更新しています。画面を更新してからやり直してください');

@@ -11,7 +11,8 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 2: Author 列を RecordedBy へ改名（Author は SharePoint 組み込みの User 型列と衝突し、
 //    列は作られたことになるのに書き込みだけが 400 で失敗する）
 // 3: 独自RAS の資産マスター/チケットのリストを追加
-export const SCHEMA_VERSION = 3;
+// 4: RAS資産に AliveStatus 列を追加（host not alive の表示）
+export const SCHEMA_VERSION = 4;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -87,6 +88,8 @@ export const rasAssetFields: FieldSpec[] = [
   { name: 'SettenId', type: 'Text', indexed: true },
   { name: 'Ip', type: 'Text' },
   { name: 'Fqdn', type: 'Text' },
+  // 'Status' は他のリストテンプレート由来の同名列と紛らわしいので避ける（Created で一度踏んだ）。
+  { name: 'AliveStatus', type: 'Text' }, // '' | 'host not alive'
   { name: 'BusinessCompany', type: 'Text', indexed: true },
   { name: 'ManagementCompany', type: 'Text' },
   { name: 'DedupKey', type: 'Text', indexed: true, enforceUnique: true },
@@ -178,11 +181,14 @@ export const rowToLicense = (r: Record<string, unknown>): QamLicenseSample =>
 
 
 // --- 独自RAS ---
+// DedupKey は行キー（host list 由来はホストID、AssetGroup だけの資産は 'ip:<IP>'）。
+// ホストIDだけにすると、host list に居ない資産（host not alive）が一意に持てない。
 export const rasAssetToRow = (a: RasAsset): Record<string, unknown> =>
-  ({ Title: a.hostId, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn,
-     BusinessCompany: a.businessCompany, ManagementCompany: a.managementCompany, DedupKey: a.hostId });
+  ({ Title: a.ip || a.hostId, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn, AliveStatus: a.status,
+     BusinessCompany: a.businessCompany, ManagementCompany: a.managementCompany, DedupKey: a.key });
 export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
-  ({ hostId: str(r.HostId), settenId: str(r.SettenId), ip: str(r.Ip), fqdn: str(r.Fqdn),
+  ({ key: str(r.DedupKey) || str(r.HostId), hostId: str(r.HostId), settenId: str(r.SettenId),
+     ip: str(r.Ip), fqdn: str(r.Fqdn), status: str(r.AliveStatus),
      businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany) });
 
 export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>

@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   isRasSetten, deriveRasAssets, deriveRasTickets, normalizeRasPerms, registeredCompanies,
   groupIdsFor, canApplyPerms, parseCompanyList, mergeCompanies, pickRoles, buildItemPermPlan,
-  companiesWithoutGroups, assetsWithoutCompany, type RasAsset,
+  companiesWithoutGroups, assetsWithoutCompany, expandAgIps, rasKeyForIp, RAS_NOT_ALIVE,
+  type RasAsset,
 } from '../src/ras';
 import type { QamRecord, QamTicket } from '../src/types';
 
@@ -25,38 +26,117 @@ describe('独自RASの判定', () => {
   });
 });
 
+const group = (id: string, title: string, ips: string[], lastUpdate: string): QamRecord =>
+  ({ key: id, name: title, scalar: { TITLE: title }, set: { IPS: ips }, info: { LAST_UPDATE: lastUpdate }, hash: '' });
+
+const BASE = '2026-08-16'; // 取込日（基準日）
+
 describe('RAS資産の組み立て', () => {
   const hosts = [host('1', '10.0.0.1', 'a.example'), host('2', '10.0.0.2', '', 'b.example'), host('3', '10.0.0.3', 'c.example')];
   const setten = { '1': 'R100', '2': 'AB200', '3': 'R300,AB400' };
+  const derive = (h = hosts, g: QamRecord[] = [], reg = new Map<string, RasAsset>(), base = BASE, limit?: number) =>
+    deriveRasAssets(h, g, setten, reg, base, limit);
 
   it('R始まりの接続点に属する資産だけを拾う', () => {
-    const rows = deriveRasAssets(hosts, setten, new Map());
-    expect(rows.map((r) => r.hostId)).toEqual(['1', '3']);
+    expect(derive().assets.map((r) => r.hostId)).toEqual(['1', '3']);
   });
 
   it('複数の接続点に属していても R 始まりの分だけを持つ', () => {
-    const r = deriveRasAssets(hosts, setten, new Map()).find((x) => x.hostId === '3')!;
-    expect(r.settenId).toBe('R300'); // AB400 は載せない
+    expect(derive().assets.find((x) => x.hostId === '3')!.settenId).toBe('R300'); // AB400 は載せない
   });
 
   it('FQDN が無ければ DNS で埋める', () => {
-    const rows = deriveRasAssets([hosts[1]], { '2': 'R200' }, new Map());
-    expect(rows[0].fqdn).toBe('b.example');
+    expect(deriveRasAssets([hosts[1]], [], { '2': 'R200' }, new Map(), BASE).assets[0].fqdn).toBe('b.example');
+  });
+
+  it('host list にある資産のステータスは空', () => {
+    expect(derive().assets.every((a) => a.status === '')).toBe(true);
   });
 
   it('登録済みの事業会社・管理会社は取込で消えない', () => {
     // ★ここが消えると、取込のたびに手入力が飛ぶ。
-    const prev = new Map<string, RasAsset>([['1', { hostId: '1', settenId: 'R100', ip: 'x', fqdn: 'x', businessCompany: 'A社', managementCompany: 'B保守' }]]);
-    const r = deriveRasAssets(hosts, setten, prev).find((x) => x.hostId === '1')!;
+    const prev = new Map<string, RasAsset>([['1', { key: '1', hostId: '1', settenId: 'R100', ip: 'x', fqdn: 'x', status: '', businessCompany: 'A社', managementCompany: 'B保守' }]]);
+    const r = derive(hosts, [], prev).assets.find((x) => x.hostId === '1')!;
     expect(r.businessCompany).toBe('A社');
     expect(r.managementCompany).toBe('B保守');
     expect(r.ip).toBe('10.0.0.1'); // IP/FQDN は最新のスナップショットで上書き
   });
 });
 
+describe('host not alive の拾い上げ', () => {
+  const hosts = [host('1', '10.0.0.1', 'a.example')];
+  const setten = { '1': 'R100' };
+  const derive = (g: QamRecord[], base = BASE, reg = new Map<string, RasAsset>(), limit?: number) =>
+    deriveRasAssets(hosts, g, setten, reg, base, limit);
+
+  it('AssetGroup にあって host list に無い IP を host not alive として足す', () => {
+    // ★host list だけを見ると、応答が無いホストが一覧から丸ごと抜ける。
+    const g = [group('g1', 'R100 拠点', ['10.0.0.1', '10.0.0.5'], '2026-08-10T00:00:00Z')];
+    const rows = derive(g).assets;
+    expect(rows.map((r) => `${r.ip}:${r.status}`)).toEqual(['10.0.0.1:', `10.0.0.5:${RAS_NOT_ALIVE}`]);
+    expect(rows.find((r) => r.ip === '10.0.0.5')!.key).toBe(rasKeyForIp('10.0.0.5'));
+    expect(rows.find((r) => r.ip === '10.0.0.5')!.hostId).toBe(''); // ホストIDは無い
+  });
+
+  it('AssetGroup の最終更新が基準日と同じなら判定を保留する（未スキャンの可能性）', () => {
+    const g = [group('g1', 'R100 拠点', ['10.0.0.1', '10.0.0.5'], `${BASE}T09:00:00Z`)];
+    const r = derive(g);
+    expect(r.assets.map((x) => x.ip)).toEqual(['10.0.0.1']); // 10.0.0.5 は載せない
+    expect(r.pendingSetten).toEqual(['R100']);
+  });
+
+  it('R始まりでない接続点の AssetGroup は見ない', () => {
+    const g = [group('g2', 'AB200 別拠点', ['10.9.9.9'], '2026-08-10T00:00:00Z')];
+    expect(derive(g).assets.map((x) => x.ip)).toEqual(['10.0.0.1']);
+  });
+
+  it('同じ IP が複数のRAS接続点に登録されていれば接続点IDをまとめる', () => {
+    const g = [
+      group('g1', 'R100 拠点', ['10.0.0.5'], '2026-08-10T00:00:00Z'),
+      group('g2', 'R200 拠点', ['10.0.0.5'], '2026-08-10T00:00:00Z'),
+    ];
+    const row = derive(g).assets.find((x) => x.ip === '10.0.0.5')!;
+    expect(row.settenId).toBe('R100,R200');
+  });
+
+  it('IPレンジは展開し、上限を超えた分は件数で返す（黙って捨てない）', () => {
+    const g = [group('g1', 'R100 拠点', ['10.0.0.10-10.0.0.19'], '2026-08-10T00:00:00Z')];
+    const all = derive(g);
+    expect(all.assets.filter((x) => x.status === RAS_NOT_ALIVE)).toHaveLength(10);
+    const capped = derive(g, BASE, new Map(), 3);
+    expect(capped.assets.filter((x) => x.status === RAS_NOT_ALIVE)).toHaveLength(3);
+    expect(capped.droppedIps).toBe(7);
+  });
+
+  it('not alive の資産にも事業会社を登録でき、取込で消えない', () => {
+    const g = [group('g1', 'R100 拠点', ['10.0.0.5'], '2026-08-10T00:00:00Z')];
+    const prev = new Map<string, RasAsset>([[rasKeyForIp('10.0.0.5'),
+      { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, businessCompany: 'A社', managementCompany: '' }]]);
+    expect(derive(g, BASE, prev).assets.find((x) => x.ip === '10.0.0.5')!.businessCompany).toBe('A社');
+  });
+});
+
+describe('AssetGroup の IP 表記の展開', () => {
+  it('単体とレンジを個々の IP にする', () => {
+    expect(expandAgIps(['10.0.0.1', '10.0.0.4-10.0.0.6'], 100).ips).toEqual(['10.0.0.1', '10.0.0.4', '10.0.0.5', '10.0.0.6']);
+  });
+
+  it('壊れた表記はそのまま1件として残す（黙って消さない）', () => {
+    expect(expandAgIps(['not-an-ip'], 100).ips).toEqual(['not-an-ip']);
+  });
+
+  it('上限に達したら残数を返す', () => {
+    const r = expandAgIps(['10.0.0.1-10.0.0.100'], 10);
+    expect(r.ips).toHaveLength(10);
+    expect(r.dropped).toBe(90);
+  });
+});
+
 describe('RASチケットの絞り込み', () => {
   const assets: RasAsset[] = [
-    { hostId: '1', settenId: 'R100', ip: '10.0.0.1', fqdn: 'a.example', businessCompany: 'A社', managementCompany: '' },
+    { key: '1', hostId: '1', settenId: 'R100', ip: '10.0.0.1', fqdn: 'a.example', status: '', businessCompany: 'A社', managementCompany: '' },
+    // host not alive の行（hostId が空）。ここにチケットが誤って当たらないことも確かめる。
+    { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, businessCompany: 'A社', managementCompany: '' },
   ];
 
   it('RAS資産のチケットだけを残し、事業会社を写す', () => {
@@ -132,8 +212,8 @@ describe('付与内容の組み立て', () => {
 
   it('事業会社が未設定のRAS資産を数えられる', () => {
     const assets: RasAsset[] = [
-      { hostId: '1', settenId: 'R1', ip: '', fqdn: '', businessCompany: 'A社', managementCompany: '' },
-      { hostId: '2', settenId: 'R2', ip: '', fqdn: '', businessCompany: '  ', managementCompany: '' },
+      { key: '1', hostId: '1', settenId: 'R1', ip: '', fqdn: '', status: '', businessCompany: 'A社', managementCompany: '' },
+      { key: '2', hostId: '2', settenId: 'R2', ip: '', fqdn: '', status: '', businessCompany: '  ', managementCompany: '' },
     ];
     expect(assetsWithoutCompany(assets).map((a) => a.hostId)).toEqual(['2']);
   });

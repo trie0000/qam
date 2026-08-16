@@ -279,7 +279,7 @@ describe('取込ロック（重複取込の抑止）', () => {
 
 describe('独自RAS のリスト同期', () => {
   const asset = (hostId: string, ip: string, company = '') =>
-    ({ hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, businessCompany: company, managementCompany: '' });
+    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '', businessCompany: company, managementCompany: '' });
 
   it('資産は追加・更新・削除される', async () => {
     const lists = fakeLists();

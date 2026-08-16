@@ -17,15 +17,63 @@ import type { QamRecord, QamTicket } from './types';
 export const RAS_PREFIX = 'R';
 // 接続点IDは英数字の並び。'R' 始まりだけを対象にする（小文字は別物として扱わない）。
 export const isRasSetten = (settenId: string): boolean => (settenId ?? '').trim().startsWith(RAS_PREFIX);
+// AssetGroup タイトルの先頭〜最初の半角スペースまでが接続点ID（UI 側と同じ規則）。
+// ここは UI に依存させないので、同じ規則をこのファイルにも置く。
+export const settenIdOf = (title: string): string => (title || '').split(' ')[0];
 
 // ── 資産・チケット ───────────────────────────────────────────────────────────
+// ステータス。host list に載っている＝Qualys が生きていると認識している資産は空。
+// AssetGroup には登録されているのに host list に居ないものは、スキャンで応答が無い
+// （host not alive）とみなす。
+export const RAS_NOT_ALIVE = 'host not alive';
+
 export interface RasAsset {
-  hostId: string;
+  /** 行のキー。host list 由来はホストID、AssetGroup 由来だけの資産は 'ip:<IP>'。 */
+  key: string;
+  hostId: string;            // AssetGroup にしか無い資産では空
   settenId: string;
   ip: string;
   fqdn: string;
+  status: string;            // '' | RAS_NOT_ALIVE
   businessCompany: string;   // マスター登録した事業会社（アクセス権の割当キー）
   managementCompany: string; // 自由入力
+}
+
+/** host list に無い資産の行キー。IP しか手掛かりが無いのでそれを使う。 */
+export const rasKeyForIp = (ip: string): string => `ip:${ip}`;
+
+// IPv4 → 整数。不正なら null。AssetGroup の IP_RANGE を展開するのに使う。
+function ipToInt(s: string): number | null {
+  const m = s.trim().match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!m) return null;
+  const p = m.slice(1).map(Number);
+  if (p.some((n) => n > 255)) return null;
+  return ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3];
+}
+const intToIp = (n: number): string => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
+
+/**
+ * AssetGroup の IP 表記（'10.0.0.1' か '10.0.0.1-10.0.0.5'）を個々の IP に展開する。
+ * ★レンジは際限なく大きくなり得る（/16 なら 65,536 件）ので上限を設ける。
+ *   打ち切った分は呼び出し側が件数で気付けるよう、黙って捨てずに残数を返す。
+ */
+export function expandAgIps(entries: string[], limit: number): { ips: string[]; dropped: number } {
+  const out: string[] = [];
+  let dropped = 0;
+  for (const raw of entries) {
+    const e = raw.trim();
+    if (!e) continue;
+    const dash = e.indexOf('-');
+    if (dash < 0) { if (out.length < limit) out.push(e); else dropped++; continue; }
+    const a = ipToInt(e.slice(0, dash));
+    const b = ipToInt(e.slice(dash + 1));
+    if (a === null || b === null || b < a) { if (out.length < limit) out.push(e); else dropped++; continue; }
+    for (let n = a; n <= b; n++) {
+      if (out.length >= limit) { dropped += b - n + 1; break; }
+      out.push(intToIp(n));
+    }
+  }
+  return { ips: [...new Set(out)], dropped };
 }
 
 export interface RasTicket {
@@ -39,38 +87,104 @@ export interface RasTicket {
   created: string;
 }
 
-// host スナップショットから独自RAS資産を組み立てる。
-// 登録済みの事業会社/管理会社は hostId で引き継ぐ（取込のたびに入力が消えないように）。
-// agSetten: hostId → 接続点ID（複数AG所属はカンマ区切り）。
+// 独自RAS資産を組み立てる。元は2つ:
+//   1. host list … Qualys が生きていると認識しているホスト（IP/FQDN が取れる）
+//   2. AssetGroup の IP … host list に居ない＝スキャンで応答が無い（host not alive）
+// ★host list だけを見ると not alive のホストが丸ごと抜ける。AssetGroup に登録が
+//   あるのに host list に居ない IP を拾って補う。
+//
+// ただし「AssetGroup を今日更新した」場合は、IP を足した直後でまだスキャンが
+// 回っていないだけの可能性がある。それを not alive と決めつけないよう、
+// AssetGroup の最終更新日が基準日（＝取込日）と同じものは対象外にする。
+//
+// registered: 行キー → 登録済みの事業会社/管理会社（取込で入力が消えないように引き継ぐ）。
+// agSetten:   hostId → 接続点ID（複数AG所属はカンマ区切り）。
+export interface DeriveRasResult {
+  assets: RasAsset[];
+  /** IP レンジが大きすぎて展開を打ち切った件数（0 なら打ち切りなし）。 */
+  droppedIps: number;
+  /** 最終更新日が基準日と同じで、判断を保留した AssetGroup の接続点ID。 */
+  pendingSetten: string[];
+}
+
+// 1 つの AssetGroup から展開する IP の上限。RAS の接続点にレンジが入っていると
+// 際限なく増える（/16 で 65,536 件）ので歯止めを置く。
+export const AG_IP_EXPAND_LIMIT = 1024;
+
 export function deriveRasAssets(
-  hosts: QamRecord[], agSetten: Record<string, string>, registered: Map<string, RasAsset>,
-): RasAsset[] {
+  hosts: QamRecord[],
+  groups: QamRecord[],
+  agSetten: Record<string, string>,
+  registered: Map<string, RasAsset>,
+  baseDate: string,
+  limit = AG_IP_EXPAND_LIMIT,
+): DeriveRasResult {
   const out: RasAsset[] = [];
+  const seenIp = new Set<string>();
   for (const h of hosts) {
     // 複数の接続点に属することがあるので、R 始まりのものだけを見る。
     const setten = (agSetten[h.key] ?? '').split(',').map((s) => s.trim()).filter(isRasSetten);
     if (!setten.length) continue;
     const prev = registered.get(h.key);
+    const ip = h.scalar.IP ?? '';
+    if (ip) seenIp.add(ip);
     out.push({
+      key: h.key,
       hostId: h.key,
       settenId: setten.join(','),
-      ip: h.scalar.IP ?? '',
+      ip,
       fqdn: h.scalar.FQDN || h.scalar.DNS || '',
+      status: '', // host list に居る＝生きている
       businessCompany: prev?.businessCompany ?? '',
       managementCompany: prev?.managementCompany ?? '',
     });
   }
-  return out.sort((a, b) => a.settenId.localeCompare(b.settenId) || a.ip.localeCompare(b.ip));
+
+  // AssetGroup 側に登録があって host list に居ない IP を拾う。
+  let droppedIps = 0;
+  const pendingSetten: string[] = [];
+  const byIp = new Map<string, RasAsset>();
+  for (const g of groups) {
+    const sid = settenIdOf(g.name);
+    if (!isRasSetten(sid)) continue;
+    // 「今日更新された AssetGroup」は、IP を足した直後でまだスキャンされていない
+    // 可能性があるので判断を保留する（not alive と決めつけない）。
+    const updated = (g.info.LAST_UPDATE ?? '').slice(0, 10);
+    if (updated && baseDate && updated >= baseDate) { pendingSetten.push(sid); continue; }
+    const { ips, dropped } = expandAgIps(g.set.IPS ?? [], limit);
+    droppedIps += dropped;
+    for (const ip of ips) {
+      if (seenIp.has(ip)) continue; // host list にある＝生きているので既に載せた
+      const key = rasKeyForIp(ip);
+      const hit = byIp.get(ip);
+      if (hit) { // 同じ IP が複数の RAS 接続点に登録されている
+        if (!hit.settenId.split(',').includes(sid)) hit.settenId += `,${sid}`;
+        continue;
+      }
+      const prev = registered.get(key);
+      const row: RasAsset = {
+        key, hostId: '', settenId: sid, ip, fqdn: '', status: RAS_NOT_ALIVE,
+        businessCompany: prev?.businessCompany ?? '',
+        managementCompany: prev?.managementCompany ?? '',
+      };
+      byIp.set(ip, row);
+      out.push(row);
+    }
+  }
+  out.sort((a, b) => a.settenId.localeCompare(b.settenId) || a.ip.localeCompare(b.ip));
+  return { assets: out, droppedIps, pendingSetten: [...new Set(pendingSetten)].sort() };
 }
 
 // チケットを独自RAS資産の分だけに絞る。事業会社は資産側の登録値を写す
 // （チケットのリストだけでアクセス権を組めるようにするため）。
 export function deriveRasTickets(tickets: QamTicket[], assets: RasAsset[], idByIp: Record<string, string>): RasTicket[] {
-  const byHost = new Map(assets.map((a) => [a.hostId, a]));
+  // host not alive の行は hostId が空。空同士で当たらないよう、キーのある行だけを索引化する。
+  const byHost = new Map(assets.filter((a) => a.hostId).map((a) => [a.hostId, a]));
   const out: RasTicket[] = [];
   for (const t of tickets) {
     // チケットに HOST_ID が入らない環境があるので IP からも引く。
     const hostId = t.hostId || idByIp[t.ip] || '';
+    if (!hostId) continue;
     const a = byHost.get(hostId);
     if (!a) continue;
     out.push({

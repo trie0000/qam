@@ -28,7 +28,7 @@ import { ticketQuery, resolveTicketMode } from './tickets';
 import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
 import {
   RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
-  companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets,
+  companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets, RAS_NOT_ALIVE,
   type RasAsset, type RasPerms, type RasTicket,
 } from './ras';
 import type { SiteGroup } from './api/sp/perms';
@@ -803,9 +803,10 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
   if (state.rasTab === 'assets') {
     const [assets, perms] = await Promise.all([repo.readRasAssets(), loadRasPerms()]);
     const companies = registeredCompanies(perms);
-    const rows = assets.filter((a) => matchQ([a.settenId, a.ip, a.fqdn, a.hostId, a.businessCompany, a.managementCompany]));
+    const rows = assets.filter((a) => matchQ([a.settenId, a.ip, a.fqdn, a.hostId, a.status, a.businessCompany, a.managementCompany]));
     const noCompany = assetsWithoutCompany(assets).length;
-    count.textContent = `${rows.length} 件${noCompany ? ` / 事業会社が未設定 ${noCompany} 件` : ''}`;
+    const notAlive = assets.filter((a) => a.status === RAS_NOT_ALIVE).length;
+    count.textContent = `${rows.length} 件${notAlive ? ` / ${RAS_NOT_ALIVE} ${notAlive} 件` : ''}${noCompany ? ` / 事業会社が未設定 ${noCompany} 件` : ''}`;
     if (!assets.length) {
       host.append(emptyState('独自RASの資産がありません',
         `接続点IDが ${RAS_PREFIX} で始まる資産をここに登録します。既に取込済みなら「最新の取込から更新」を押してください（Qualys へは接続しません）。まだ取込が無ければ先に取込を実行してください。`));
@@ -823,11 +824,17 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       { id: 'settenId', label: '接続点ID', mono: true, width: 120, render: (a: RasAsset) => esc(a.settenId) },
       { id: 'ip', label: 'IP', mono: true, width: 140, render: (a: RasAsset) => esc(a.ip) },
       { id: 'fqdn', label: 'FQDN', render: (a: RasAsset) => esc(a.fqdn) },
+      // host list に居ない＝スキャンで応答が無い資産を見分けられるようにする。
+      {
+        id: 'status', label: 'ステータス', width: 130,
+        render: (a: RasAsset) => (a.status ? `<span class="qam-tag qam-tag--modified">${esc(a.status)}</span>` : ''),
+        sortVal: (a: RasAsset) => a.status,
+      },
       { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (a: RasAsset) => esc(a.hostId) },
       {
         id: 'businessCompany', label: '事業会社', width: 180,
         render: (a: RasAsset) => selectCell(a.businessCompany, companies, async (v) => {
-          await repo.setRasCompany(a.hostId, v, a.managementCompany);
+          await repo.setRasCompany(a.key, v, a.managementCompany);
           a.businessCompany = v;
           recordOp('RAS事業会社の変更', `${a.settenId} ${a.ip}: ${v || '(未設定)'}`);
         }),
@@ -836,14 +843,14 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       {
         id: 'managementCompany', label: '管理会社', width: 180,
         render: (a: RasAsset) => editableCell(a.managementCompany, '（クリックで入力）', async (v) => {
-          await repo.setRasCompany(a.hostId, a.businessCompany, v);
+          await repo.setRasCompany(a.key, a.businessCompany, v);
           a.managementCompany = v;
         }),
         sortVal: (a: RasAsset) => a.managementCompany,
       },
     ];
     host.append(renderTable({
-      viewId: 'ras.assets', columns: cols, rows, getKey: (a: RasAsset) => a.hostId,
+      viewId: 'ras.assets', columns: cols, rows, getKey: (a: RasAsset) => a.key,
       selected: state.selected, exportRef, filterRef, columnRef,
     }));
     addExportButtons(toolbar, '独自RAS資産一覧', exportRef, columnRef);
@@ -886,9 +893,18 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   if (!hStamp) return { assets: 0, tickets: 0 }; // host 未取込なら何もしない
   const hSnap = await readSnapshot(backend, 'host', hStamp);
   const hosts = Object.values(hSnap?.records ?? {}) as QamRecord[];
+  // host list に居ない資産（host not alive）を拾うため、AssetGroup 側の登録IPも見る。
+  const gStamp = resolveAsof(await getSnapshotStamps(backend, 'group'));
+  const gSnap = gStamp ? await readSnapshot(backend, 'group', gStamp) : null;
+  const groups = Object.values(gSnap?.records ?? {}) as QamRecord[];
   const agSetten = await buildAgSetten('host', '');
-  const registered = new Map((await repo.readRasAssets()).map((a) => [a.hostId, a]));
-  const assets = deriveRasAssets(hosts, agSetten, registered);
+  const registered = new Map((await repo.readRasAssets()).map((a) => [a.key, a]));
+  // 基準日は host を取り込んだ日。AssetGroup の最終更新がこの日なら、IP を足した直後で
+  // まだスキャンされていない可能性があるので not alive とは判定しない。
+  const derived = deriveRasAssets(hosts, groups, agSetten, registered, dateOfStamp(hStamp));
+  const assets = derived.assets;
+  if (derived.droppedIps) recordOp('RAS資産の同期', `IPレンジが大きいため ${derived.droppedIps.toLocaleString()} 件の展開を打ち切りました`);
+  if (derived.pendingSetten.length) recordOp('RAS資産の同期', `最終更新が当日のため判定を保留: ${derived.pendingSetten.join(' / ')}`);
   const a = await repo.syncRasAssets(assets);
   if (a.added || a.updated || a.removed) recordOp('RAS資産の同期', `追加 ${a.added} / 更新 ${a.updated} / 削除 ${a.removed}`);
 

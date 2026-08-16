@@ -63,7 +63,8 @@ export interface RecordRepo {
   readRasAssets(): Promise<RasAsset[]>;
   /** 取込で作った資産一覧を反映する（登録済みの会社は呼び出し側が引き継いで渡す）。 */
   syncRasAssets(assets: RasAsset[]): Promise<{ added: number; updated: number; removed: number }>;
-  setRasCompany(hostId: string, businessCompany: string, managementCompany: string): Promise<void>;
+  /** key は RasAsset.key（ホストID、または host list に無い資産の 'ip:<IP>'）。 */
+  setRasCompany(key: string, businessCompany: string, managementCompany: string): Promise<void>;
 
   readRasTickets(): Promise<RasTicket[]>;
   syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
@@ -100,7 +101,7 @@ export const repo: RecordRepo = {
   writeSharedJson: (k, v) => impl.writeSharedJson(k, v),
   readRasAssets: () => impl.readRasAssets(),
   syncRasAssets: (a) => impl.syncRasAssets(a),
-  setRasCompany: (h, b, m) => impl.setRasCompany(h, b, m),
+  setRasCompany: (k, b, m) => impl.setRasCompany(k, b, m),
   readRasTickets: () => impl.readRasTickets(),
   syncRasTickets: (t) => impl.syncRasTickets(t),
   listSiteGroups: () => impl.listSiteGroups(),
