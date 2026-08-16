@@ -28,6 +28,15 @@ try {
     for ($i = 0; $i -lt 30; $i++) { try { if ((Invoke-RestMethod "$base/qam/health" -TimeoutSec 2).ok) { $up = $true; break } } catch { Start-Sleep -Milliseconds 300 } }
     Assert-Eq $up $true 'relay: /qam/health'
 
+    # fetch-batch の worker は別 runspace なので、自前関数を渡し忘れると
+    # 「用語 'Get-QamPassword' は認識されません」で取得が失敗する（実際に踏んだ）。
+    # 到達不能なホストを指定し、"関数が見つからない" 系のエラーにならないことを検査する。
+    $bodyB = @{ kinds = @('group'); base = 'https://qualys.invalid'; user = 'u'; pass = 'p' } | ConvertTo-Json -Compress
+    $rb = Invoke-RestMethod "$base/qam/fetch-batch" -Method Post -ContentType 'application/json' -Body $bodyB -TimeoutSec 120
+    $item = @($rb.items)[0]
+    $missing = [bool]($item.error -match 'Get-Qam|Unprotect-Qam|not recognized|\u8a8d\u8b58\u3055\u308c\u307e\u305b\u3093')
+    Assert-Eq $missing $false 'fetch-batch: worker が自前関数を解決できている'
+
     # config GET/POST
     $cfg = Invoke-RestMethod "$base/qam/config" -Method Post -ContentType 'application/json' -Body (@{ retentionDays = 45; proxy = 'http://px:8080' } | ConvertTo-Json)
     Assert-Eq $cfg.retentionDays 45 'config: retentionDays 永続化'

@@ -102,7 +102,10 @@ function Start-QamRelay {
     $relay = Join-Path $Root 'qam-relay.ps1'
     if (-not (Test-Path -LiteralPath $relay)) { Write-Warn "qam-relay.ps1 が見つかりません: $relay"; return $false }
     Write-Step "中継サーバを起動します"
-    Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' `
+    # ★ウィンドウは隠さない。隠すと止め方が分からず、ポートを変えても古い relay が
+    #   生き残って「設定が反映されない」ことになる。ログも見えるようにしておく。
+    #   このウィンドウを閉じる = 中継サーバの停止。
+    Start-Process -FilePath 'powershell.exe' `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $relay, '-Port', $Port)
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 500

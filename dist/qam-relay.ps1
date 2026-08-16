@@ -422,15 +422,22 @@ function Invoke-QamFetchBatch {
     $dir = Get-QamFetchCacheDir
 
     # worker は別 runspace で動くので、必要な関数は定義文字列を渡して作り直す。
-    # （Invoke-QualysFetch は Get-QamText1 と Add-QamLog を使う。ログは worker では捨てる）
-    $fetchDef = ${function:Invoke-QualysFetch}.ToString()
-    $textDef  = ${function:Get-QamText1}.ToString()
+    # ★手で列挙すると必ず取りこぼす（実際 Get-QamPassword → Unprotect-QamSecret の
+    #   2 段の依存を落として「用語 'Get-QamPassword' は認識されません」で取得が失敗した）。
+    #   自前の関数（*-Qam* と Invoke-QualysFetch）はまとめて渡し、依存を取りこぼさない。
+    $helperDefs = @{}
+    foreach ($f in (Get-ChildItem function: | Where-Object { $_.Name -like '*-Qam*' -or $_.Name -eq 'Invoke-QualysFetch' })) {
+        $helperDefs[$f.Name] = $f.ScriptBlock.ToString()
+    }
 
     $worker = {
-        param($fetchDef, $textDef, $kind, $req, $outPath, $sep)
-        Set-Item -Path function:Get-QamText1 -Value ([ScriptBlock]::Create($textDef))
+        param($helperDefs, $kind, $req, $outPath, $sep)
+        # 渡された自前関数をこの runspace に復元する（依存関係ごと丸ごと）。
+        foreach ($name in $helperDefs.Keys) {
+            Set-Item -Path ("function:" + $name) -Value ([ScriptBlock]::Create($helperDefs[$name]))
+        }
+        # ログは relay 本体のスコープに依存するので、worker では捨てる。
         Set-Item -Path function:Add-QamLog -Value ([ScriptBlock]::Create('param([string]$Text)'))
-        Set-Item -Path function:Invoke-QualysFetch -Value ([ScriptBlock]::Create($fetchDef))
         $out = [ordered]@{ kind = $kind; ok = $false; pages = 0; bytes = 0; error = $null }
         try {
             $pages = New-Object System.Collections.ArrayList
@@ -469,7 +476,7 @@ function Invoke-QamFetchBatch {
         if (Test-Path -LiteralPath $outPath) { Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue }
         $ps = [PowerShell]::Create()
         $ps.RunspacePool = $pool
-        [void]$ps.AddScript($worker).AddArgument($fetchDef).AddArgument($textDef).AddArgument($k).AddArgument($Body).AddArgument($outPath).AddArgument($QAM_PAGE_SEP)
+        [void]$ps.AddScript($worker).AddArgument($helperDefs).AddArgument($k).AddArgument($Body).AddArgument($outPath).AddArgument($QAM_PAGE_SEP)
         $jobs += [pscustomobject]@{ Kind = $k; PS = $ps; Handle = $ps.BeginInvoke() }
     }
     Write-Host ("[qam] fetch-batch 開始: {0} (並列 {1})" -f ($kinds -join ','), $cap) -ForegroundColor Cyan
