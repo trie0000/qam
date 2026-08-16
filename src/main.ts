@@ -1215,10 +1215,8 @@ function buildIpScopeDiagBox(): HTMLElement {
   btn.addEventListener('click', async () => {
     btn.setAttribute('disabled', 'true'); clear(out); out.append(el('div', { class: 'qam-count' }, ['取得中…（4回 asset/ip を呼び出します）']));
     try {
-      const cfg = await getConfig();
-      const creds = qualysCredsFromStorage(cfg);
-      if (!creds.base) { clear(out); toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return; }
-      if (needsCredentialPrompt(creds)) { const got = await promptQualysCreds(creds.user, creds.pass); if (!got) { clear(out); return; } creds.user = got.user; creds.pass = got.pass; }
+      const creds = await resolveQualysCreds();
+      if (!creds) { clear(out); return; }
       setRelayBusy(true);
       const rows = await diagnoseSubscriptionIps(creds);
       setRelayBusy(false);
@@ -1398,10 +1396,9 @@ async function openUserAdd(): Promise<void> {
       const assetGroups = (Object.values(gSnap?.records ?? {}) as QamRecord[])
         .map((g) => g.name).filter((t) => settenId(t) === sid);
       if (!assetGroups.length) { toast(`接続点ID「${sid}」に一致する AssetGroup が見つかりません（group を取込済みか確認してください）`, 'error'); return false; }
-      // 認証情報（個人設定・ブラウザ保持。未設定ならその場で促す）。
-      const creds = qualysCredsFromStorage(cfg);
-      if (!creds.base) { toast('設定で Qualys 接続先(POD)を入力してください', 'error'); return false; }
-      if (!creds.user || !creds.pass) { const got = await promptQualysCreds(creds.user, creds.pass); if (!got) return false; creds.user = got.user; creds.pass = got.pass; }
+      // 認証情報の解決は resolveQualysCreds に一本化（暗号文で保存済みなら聞かない）。
+      const creds = await resolveQualysCreds();
+      if (!creds) return false;
       const scanType = scan.value as ScanType;
       const picked = role.value as UserRole;
       const finalRole = scanType === 'dynamic' ? 'Reader（動的固定）' : picked;
@@ -1453,16 +1450,10 @@ function openIngest(): void {
       const ingestOwner = localStorage.getItem(LS.author) || '';
       let locked = false;
       try {
-        const cfg = await getConfig();
-        // アカウント・パスワードは個人設定(ブラウザ保持)。旧 env 設定があれば後方互換でフォールバック。
-        const creds = qualysCredsFromStorage(cfg);
-        if (!creds.base) { setProg('設定で Qualys 接続先(POD)を入力してください', false); toast('接続先が未設定です', 'error'); return; }
-        // アカウント/パスワードが未設定なら、その場で登録を促す（保存して続行）。
-        if (!creds.user || !creds.pass) {
-          const got = await promptQualysCreds(creds.user, creds.pass);
-          if (!got) { setProg('Qualys アカウント/パスワードが未登録のため中止しました', false); return; }
-          creds.user = got.user; creds.pass = got.pass;
-        }
+        // 認証情報の解決は resolveQualysCreds に一本化する（判定を各所で書くと、
+        // 暗号文(secret)で保存済みなのに平文だけ見て毎回聞く、という取りこぼしが起きる）。
+        const creds = await resolveQualysCreds();
+        if (!creds) { setProg('Qualys 接続先/アカウントが未登録のため中止しました', false); return; }
         const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
         // ダウンロード前の重複チェック: 対象種別に本日分の取込が既にあれば、ダウンロード前に1回だけ確認する。
         const today = dateOfStamp(stampNow());
@@ -1941,7 +1932,9 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
   try {
     const cfg = await getConfig();
     const creds = qualysCredsFromStorage(cfg);
-    if (!creds.base || !creds.user || !creds.pass) { recordOp('自動取込中止', '接続先/認証情報が未設定（このプロファイルに保存が必要）'); return; }
+    // 無人実行なので入力は促せない。判定は共通の needsCredentialPrompt を使う
+    // （平文だけを見ると、暗号文(secret)で保存済みでも「未設定」と誤判定する）。
+    if (!creds.base || needsCredentialPrompt(creds)) { recordOp('自動取込中止', '接続先/認証情報が未設定（このプロファイルに保存が必要）'); return; }
     const today = dateOfStamp(stampNow());
     const todayDone = async (k: QamEntity): Promise<boolean> => (await getSnapshotStamps(backend, k)).some((s) => dateOfStamp(s) === today);
     const pending: QamEntity[] = [];
