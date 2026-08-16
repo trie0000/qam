@@ -41,6 +41,19 @@ function Write-Log {
 function Write-Step { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Cyan; Write-Log "INFO  $Msg" }
 function Write-Warn { param([string]$Msg) Write-Host "[qam] $Msg" -ForegroundColor Yellow; Write-Log "WARN  $Msg" }
 
+# ─── バンドルの読込元（env に集約。画面には設定欄を置かない＝二重管理を避ける）───
+#   sp    … SharePoint の <ライブラリ>/app から読む（本番。配置すれば全員に反映される）
+#   local … relay の配信フォルダから読む（開発中。ビルドし直すだけで反映される）
+# 既定は sp。SP にまだ置いていない初回だけ relay へ自動フォールバックする。
+function Get-QamBundleSource {
+    $v = (Get-EnvValue 'QAM_BUNDLE_SOURCE')
+    if ($v) { $v = $v.Trim().ToLower() }
+    if ($v -ne 'local' -and $v -ne 'sp') { $v = 'sp' }
+    return $v
+}
+# local のときの読込元 base（既定は relay と同じポート）。別ホストに置くときだけ指定する。
+function Get-QamBundleLocalBase { return (Get-EnvValue 'QAM_BUNDLE_LOCAL_BASE').TrimEnd('/') }
+
 # 使えるサイト URL か。空だけでなく**雛形のプレースホルダのまま**も未設定として扱う。
 # （プレースホルダを通すと、存在しないホストへ繋ぎに行って認証待ちのタイムアウト
 #   （5分）まで待たされ、最後に理由の分からない失敗になる）
@@ -235,9 +248,18 @@ $LoaderJs = @'
   const m = location.pathname.match(/^\/(?:sites|teams)\/[^\/]+/);
   const web = location.origin + (m ? m[0] : '');
   const tryFetch = async (u, opt) => { try { const r = await fetch(u, opt); return r.ok ? await r.text() : null; } catch (e) { return null; } };
-  let js = await tryFetch(web + '/QamData/app/qam.bundle.js?t=' + Date.now(), { credentials: 'include' });
-  let from = 'sharepoint';
-  if (!js) { js = await tryFetch('http://127.0.0.1:__RELAY_PORT__/qam/bundle/qam.bundle.js', {}); from = 'relay'; }
+  // 読込元は env(QAM_BUNDLE_SOURCE) で決まる。画面には設定欄が無い（env に一本化）。
+  const source = '__BUNDLE_SOURCE__';
+  const localUrl = '__BUNDLE_LOCAL_BASE__/qam/bundle/qam.bundle.js';
+  const spUrl = web + '/__SP_LIBRARY__/app/qam.bundle.js?t=' + Date.now();
+  let js = null; let from = source;
+  if (source === 'local') {
+    js = await tryFetch(localUrl, {});
+  } else {
+    js = await tryFetch(spUrl, { credentials: 'include' });
+    // SP にまだ置いていない初回だけ relay から読む（ブートストラップ）。
+    if (!js) { js = await tryFetch(localUrl, {}); from = 'relay'; }
+  }
   if (!js) return 'bundle-missing';
   // 起動時の失敗を握り潰さない。ここで黙ると「注入は成功したのに何も出ない」になり、
   // 画面にもログにも手がかりが残らない。
@@ -250,6 +272,14 @@ $LoaderJs = @'
 })()
 '@
 $LoaderJs = $LoaderJs.Replace('__RELAY_PORT__', [string]$RelayPort)
+$bundleSource = Get-QamBundleSource
+$bundleLocalBase = Get-QamBundleLocalBase
+if (-not $bundleLocalBase) { $bundleLocalBase = "http://127.0.0.1:$RelayPort" }
+$spLibrary = (Get-EnvValue 'QAM_SP_LIBRARY'); if (-not $spLibrary) { $spLibrary = 'QamData' }
+$LoaderJs = $LoaderJs.Replace('__BUNDLE_SOURCE__', $bundleSource)
+$LoaderJs = $LoaderJs.Replace('__BUNDLE_LOCAL_BASE__', $bundleLocalBase)
+$LoaderJs = $LoaderJs.Replace('__SP_LIBRARY__', $spLibrary)
+Write-Step "バンドル読込元: $bundleSource (local base=$bundleLocalBase, ライブラリ=$spLibrary)"
 
 # 認証が通ったかの判定（SP の API が引けるか）。
 $AuthProbeJs = @'

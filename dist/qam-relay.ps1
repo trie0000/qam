@@ -625,6 +625,11 @@ function Invoke-Route { param($Ctx)
                 scheduleTimeZone = if ($env:QAM_SCHEDULE_TIME_ZONE) { $env:QAM_SCHEDULE_TIME_ZONE } else { 'JP' }
                 spSiteUrl = $env:QAM_SP_SITE_URL
                 spLibrary = if ($env:QAM_SP_LIBRARY) { $env:QAM_SP_LIBRARY } else { 'QamData' }
+                # ★以下は qam.env でのみ設定する（画面には出すが編集させない）。
+                #   二重管理を避けるため、POST では受け付けない。
+                bundleSource = if ($env:QAM_BUNDLE_SOURCE) { ([string]$env:QAM_BUNDLE_SOURCE).ToLower() } else { 'sp' }
+                bundleLocalBase = if ($env:QAM_BUNDLE_LOCAL_BASE) { $env:QAM_BUNDLE_LOCAL_BASE } else { "http://127.0.0.1:$Port" }
+                logDir = $LogFull
                 regions = $env:QAM_REGIONS
             }; return
         }

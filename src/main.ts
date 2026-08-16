@@ -1693,6 +1693,15 @@ async function openSettings(): Promise<void> {
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
       field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [`${BUILD}${BUILDTIME ? '  (' + BUILDTIME + ')' : ''}`])),
+      // ★ここから下は qam.env でのみ設定する（画面では変更できない）。
+      //   画面と env の二重管理をやめ、設定は env に一本化する方針。
+      field('バンドル読込元（qam.env: QAM_BUNDLE_SOURCE）', el('div', { class: 'qam-count', style: 'user-select:text' }, [
+        `${cfg.bundleSource || 'sp'}${(cfg.bundleSource || 'sp') === 'local' ? `  ← ${cfg.bundleLocalBase || ''}` : '  ← SharePoint の ' + (cfg.spLibrary || 'QamData') + '/app'}`,
+      ]), 'sp=SharePoint に配置した本体を読む（本番） / local=中継サーバの配信フォルダから読む（開発）。変更は qam.env で行う。'),
+      field('中継サーバのポート（qam.env: QAM_RELAY_PORT）', el('div', { class: 'qam-count', style: 'user-select:text' }, [String(cfg.port || '')]),
+        'ポートを変えるときは qam.env を直し、中継サーバを再起動する。'),
+      field('ログの置き場（qam.env: QAM_LOG_DIR）', el('div', { class: 'qam-count', style: 'user-select:text' }, [cfg.logDir || '']),
+        'relay.log / api-audit.log の出力先。未設定なら %LOCALAPPDATA%\\qam。'),
     ] },
   ];
   const nav = el('div', { class: 'qam-settings-nav' });

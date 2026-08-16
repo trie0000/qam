@@ -90,7 +90,9 @@ export async function resolveHosts(names: string[]): Promise<ResolveRow[]> {
 // scannerAppliance: 既定スキャナー（既定 External）。scheduleTimeZone: 既定タイムゾーン（既定 JP）。
 // regions: 地域区分「ラベル=コード」のカンマ区切り（空なら既定6区分）。ドメイン名の末尾に使う。
 // spSiteUrl / spLibrary: 管理データの保管先（SharePoint）。SPO を読む前に要るのでローカル設定に置く。
-export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string; spSiteUrl: string; spLibrary: string }
+export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string; spSiteUrl: string; spLibrary: string;
+  // ↓ qam.env でのみ設定する（画面は表示のみ。POST では受け付けない）
+  bundleSource: string; bundleLocalBase: string; logDir: string }
 // 設定は relay が持つが、SharePoint ページ上で動くとき relay は Qualys 取得にしか要らない。
 // relay が落ちていても保管先の判断はできるよう、直近値を控えておいて代用する。
 const CFG_CACHE = 'qam:config-cache';
