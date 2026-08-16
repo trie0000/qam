@@ -81,6 +81,10 @@ body {
 .qam-pick--all { font-weight: 600; }
 .qam-pick input:disabled { cursor: default; }
 .qam-pick:has(input:disabled) { opacity: .5; cursor: default; }
+/* 設定系ビューの区切りカード（マスター管理など、縦に積む画面用）。 */
+.qam-card { border: 1px solid var(--line); border-radius: var(--r-4); background: var(--paper); padding: var(--s-6); }
+.qam-card-title { font-size: var(--fs-md); font-weight: 600; margin-bottom: var(--s-2); }
+
 /* 補足説明（選べない理由など）。本文より小さく淡く。 */
 .qam-hint { margin-top: var(--s-2); font-size: var(--fs-xs); color: var(--ink-4); }
 .qam-hint:empty { display: none; }

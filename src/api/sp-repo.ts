@@ -7,10 +7,13 @@ import { createSpListClient, type SpItem, type SpListClient } from './sp/list';
 import { createSpHttp, type SpHttp, type SpHttpOptions } from './sp/http';
 import {
   ALL_LISTS, LIST_ANNOTATIONS, LIST_COMMENTS, LIST_INSPECTIONS, LIST_LICENSES, LIST_OPS,
-  LIST_SETTINGS, LOCK_INGEST,
+  LIST_SETTINGS, LOCK_INGEST, LIST_RAS_ASSETS, LIST_RAS_TICKETS,
   annotKey, annotToRow, commentToRow, inspectionToRow, licenseToRow, opToRow,
   rowToComment, rowToInspection, rowToLicense, rowToOp,
+  rasAssetToRow, rowToRasAsset, rasTicketToRow, rowToRasTicket,
 } from './sp/schema';
+import { createSpPermsClient, type SiteGroup, type SpPermsClient } from './sp/perms';
+import { buildItemPermPlan, canApplyPerms, pickRoles, type RasAsset, type RasPerms, type RasTicket } from '../ras';
 import type { AnnotationUpdate, IngestLock, RecordRepo } from './repo';
 import type { QamComment, QamEntity } from '../types';
 import type { QamLicenseSample, QamManualInspection, QamOp } from '../store';
@@ -20,10 +23,14 @@ const MAX_RETRY = 4;
 export interface SpRepoOptions extends SpHttpOptions {
   http?: SpHttp;            // 既に作ってあれば共有する（ダイジェストを使い回す）
   listClient?: SpListClient; // テスト用の差し替え
+  permsClient?: SpPermsClient; // テスト用の差し替え
 }
 
 export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Promise<void> } {
-  const lists = o.listClient ?? createSpListClient({ http: o.http ?? createSpHttp(o) });
+  const http = o.http ?? createSpHttp(o);
+  const lists = o.listClient ?? createSpListClient({ http });
+  // 権限操作はリスト操作と別クライアント（使うのは独自RASの2リストだけ）。
+  const permsApi = (): SpPermsClient => (o.permsClient ?? createSpPermsClient(http));
   const now = o.now ?? (() => Date.now());
 
   // 取込ロック: SettingKey='lock:ingest' の 1 行を claim する。
@@ -169,6 +176,113 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const cur = await lockRow();
       // 期限切れで他の人が引き継いだ後なら、その行は消さない。
       if (cur && String(cur.Owner ?? '') === owner) await lists.remove(LIST_SETTINGS, cur.Id);
+    },
+
+    // --- 共有 JSON（設定リストの 1 行）---
+    async readSharedJson(key, fallback) {
+      const row = (await lists.all(LIST_SETTINGS, ['SettingKey', 'Value']))
+        .find((r) => String(r.SettingKey ?? '') === key);
+      if (!row) return fallback;
+      try { return JSON.parse(String(row.Value ?? '')); } catch { return fallback; }
+    },
+
+    async writeSharedJson(key, value) {
+      const json = JSON.stringify(value);
+      for (let i = 0; i <= MAX_RETRY; i++) {
+        const row = (await lists.all(LIST_SETTINGS, ['SettingKey', 'Value']))
+          .find((r) => String(r.SettingKey ?? '') === key);
+        if (!row) {
+          try { await lists.add(LIST_SETTINGS, { Title: key, SettingKey: key, Value: json }); return; }
+          catch { continue; } // 一意制約＝同時に他の人が作った。読み直して更新へ回る。
+        }
+        if (await lists.update(LIST_SETTINGS, row.Id, { Value: json }, row.__etag)) return;
+      }
+      throw new Error(`共有設定の保存に失敗しました (${key})`);
+    },
+
+    // --- 独自RAS ---
+    async readRasAssets() {
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
+      return rows.map(rowToRasAsset);
+    },
+
+    async syncRasAssets(assets) {
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
+      const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
+      let added = 0; let updated = 0; let removed = 0;
+      for (const a of assets) {
+        const cur = byKey.get(a.hostId);
+        if (!cur) { await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a)); added++; continue; }
+        byKey.delete(a.hostId);
+        // 変化が無いなら書かない（毎回の取込で全行を更新すると SP の版数が無駄に増える）。
+        const same = rowToRasAsset(cur);
+        if (same.settenId === a.settenId && same.ip === a.ip && same.fqdn === a.fqdn
+          && same.businessCompany === a.businessCompany && same.managementCompany === a.managementCompany) continue;
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) updated++;
+      }
+      // Qualys から消えた資産は行も消す（一覧に幽霊が残らないように）。
+      for (const left of byKey.values()) { await lists.remove(LIST_RAS_ASSETS, left.Id); removed++; }
+      return { added, updated, removed };
+    },
+
+    async setRasCompany(hostId, businessCompany, managementCompany) {
+      for (let i = 0; i <= MAX_RETRY; i++) {
+        const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'DedupKey']);
+        const cur = rows.find((r) => String(r.DedupKey ?? '') === hostId);
+        if (!cur) throw new Error(`RAS資産が見つかりません (hostId=${hostId})`);
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, { BusinessCompany: businessCompany, ManagementCompany: managementCompany }, cur.__etag)) return;
+      }
+      throw new Error('他の利用者が同じ資産を更新しています。画面を更新してからやり直してください');
+    },
+
+    async readRasTickets() {
+      const rows = await lists.all(LIST_RAS_TICKETS, ['TicketNumber', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'Created', 'DedupKey']);
+      return rows.map(rowToRasTicket);
+    },
+
+    async syncRasTickets(tickets) {
+      const rows = await lists.all(LIST_RAS_TICKETS, ['TicketNumber', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'Created', 'DedupKey']);
+      const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
+      let added = 0; let updated = 0; let removed = 0;
+      for (const t of tickets) {
+        const cur = byKey.get(t.number);
+        if (!cur) { await lists.add(LIST_RAS_TICKETS, rasTicketToRow(t)); added++; continue; }
+        byKey.delete(t.number);
+        const same = rowToRasTicket(cur);
+        if (same.state === t.state && same.businessCompany === t.businessCompany
+          && same.ip === t.ip && same.fqdn === t.fqdn && same.settenId === t.settenId) continue;
+        if (await lists.update(LIST_RAS_TICKETS, cur.Id, rasTicketToRow(t), cur.__etag)) updated++;
+      }
+      // ★取得は「直近1ヶ月の変化分」のことがあるので、載っていないチケットは消さない。
+      //   消すと、動きが無かっただけのオープン中チケットが毎回消えてしまう。
+      return { added, updated, removed };
+    },
+
+    listSiteGroups(): Promise<SiteGroup[]> { return permsApi().listSiteGroups(); },
+
+    async applyRasPerms(perms: RasPerms, onProgress) {
+      // 管理者グループ未設定のまま継承を解除すると、誰も更新できないアイテムができる。
+      if (!canApplyPerms(perms)) throw new Error('管理者グループが未設定です。先に管理者グループを割り当ててください');
+      const api = permsApi();
+      const roles = pickRoles(await api.roleDefinitions());
+      // 実行者がどの管理者グループにも属していなければ、自分の権限だけは残す（ロックアウト防止）。
+      const myGroups = new Set(await api.currentUserGroupIds());
+      const inAdmin = perms.adminGroupIds.some((g) => myGroups.has(g));
+      const keep = inAdmin ? null : await api.currentUserId();
+
+      const targets: { list: string; items: { id: number; businessCompany: string }[] }[] = [
+        { list: LIST_RAS_ASSETS, items: (await lists.all(LIST_RAS_ASSETS, ['BusinessCompany'])).map((r) => ({ id: r.Id, businessCompany: String(r.BusinessCompany ?? '') })) },
+        { list: LIST_RAS_TICKETS, items: (await lists.all(LIST_RAS_TICKETS, ['BusinessCompany'])).map((r) => ({ id: r.Id, businessCompany: String(r.BusinessCompany ?? '') })) },
+      ];
+      const total = targets.reduce((n, t) => n + t.items.length, 0);
+      let done = 0;
+      for (const t of targets) {
+        for (const plan of buildItemPermPlan(t.items, perms)) {
+          await api.applyItemPerms(t.list, plan, roles, keep);
+          onProgress?.(++done, total);
+        }
+      }
+      return { items: total };
     },
   };
 }

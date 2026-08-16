@@ -18,6 +18,8 @@ import {
   type FileBackend, type QamLicenseSample, type QamManualInspection, type QamOp,
 } from '../store';
 import type { QamComment, QamEntity } from '../types';
+import type { RasAsset, RasPerms, RasTicket } from '../ras';
+import type { SiteGroup } from './sp/perms';
 
 export interface AnnotationUpdate { id: string; field: string; value: string }
 
@@ -52,6 +54,24 @@ export interface RecordRepo {
    */
   acquireIngestLock(owner: string, ttlMin: number): Promise<IngestLock | null>;
   releaseIngestLock(owner: string): Promise<void>;
+
+  // --- 独自RAS ---
+  /** 共有設定に置く任意の JSON（事業会社マスター＋アクセス権の割当）。 */
+  readSharedJson<T>(key: string, fallback: T): Promise<T>;
+  writeSharedJson(key: string, value: unknown): Promise<void>;
+
+  readRasAssets(): Promise<RasAsset[]>;
+  /** 取込で作った資産一覧を反映する（登録済みの会社は呼び出し側が引き継いで渡す）。 */
+  syncRasAssets(assets: RasAsset[]): Promise<{ added: number; updated: number; removed: number }>;
+  setRasCompany(hostId: string, businessCompany: string, managementCompany: string): Promise<void>;
+
+  readRasTickets(): Promise<RasTicket[]>;
+  syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
+
+  /** サイトの権限グループ（アクセス権画面の選択肢）。 */
+  listSiteGroups(): Promise<SiteGroup[]>;
+  /** 2リストの全アイテムへアクセス権を適用する。進捗は onProgress に返す。 */
+  applyRasPerms(perms: RasPerms, onProgress?: (done: number, total: number) => void): Promise<{ items: number }>;
 }
 
 // 実体は起動時に決まる（SharePoint リスト）。呼び出し側は `repo` を使い続けられるよう委譲にする。
@@ -61,6 +81,10 @@ const notReady = (): never => { throw new Error('保管先が未初期化です�
 let impl: RecordRepo = {
   readComments: notReady, addComment: notReady, editComment: notReady,
   readAnnotations: notReady, setAnnotation: notReady, setAnnotationsBulk: notReady,
+  readSharedJson: notReady, writeSharedJson: notReady,
+  readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady,
+  readRasTickets: notReady, syncRasTickets: notReady,
+  listSiteGroups: notReady, applyRasPerms: notReady,
   readOps: notReady, logOp: notReady,
   readManualInspections: notReady, appendManualInspection: notReady,
   readLicenses: notReady, recordLicense: notReady,
@@ -72,6 +96,15 @@ export const repo: RecordRepo = {
   addComment: (c) => impl.addComment(c),
   editComment: (e, id, ts, text) => impl.editComment(e, id, ts, text),
   readAnnotations: (e) => impl.readAnnotations(e),
+  readSharedJson: (k, f) => impl.readSharedJson(k, f),
+  writeSharedJson: (k, v) => impl.writeSharedJson(k, v),
+  readRasAssets: () => impl.readRasAssets(),
+  syncRasAssets: (a) => impl.syncRasAssets(a),
+  setRasCompany: (h, b, m) => impl.setRasCompany(h, b, m),
+  readRasTickets: () => impl.readRasTickets(),
+  syncRasTickets: (t) => impl.syncRasTickets(t),
+  listSiteGroups: () => impl.listSiteGroups(),
+  applyRasPerms: (p, cb) => impl.applyRasPerms(p, cb),
   setAnnotation: (e, id, f, v) => impl.setAnnotation(e, id, f, v),
   setAnnotationsBulk: (e, u) => impl.setAnnotationsBulk(e, u),
   readOps: () => impl.readOps(),

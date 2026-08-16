@@ -5,11 +5,13 @@
 // SCHEMA_VERSION は列を足したときに上げる（ensureLists の再実行判定に使う）。
 import type { FieldSpec } from './list';
 import type { QamComment, QamEntity } from '../../types';
+import type { RasAsset, RasTicket } from '../../ras';
 import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 
 // 2: Author 列を RecordedBy へ改名（Author は SharePoint 組み込みの User 型列と衝突し、
 //    列は作られたことになるのに書き込みだけが 400 で失敗する）
-export const SCHEMA_VERSION = 2;
+// 3: 独自RAS の資産マスター/チケットのリストを追加
+export const SCHEMA_VERSION = 3;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -17,6 +19,9 @@ export const LIST_OPS = 'QamOps';
 export const LIST_INSPECTIONS = 'QamInspections';
 export const LIST_LICENSES = 'QamLicenses';
 export const LIST_SETTINGS = 'QamSettings';
+// 独自RAS は事業会社ごとにアイテム単位で参照権限を分けるので、スナップショットではなくリストで持つ。
+export const LIST_RAS_ASSETS = 'QamRasAssets';
+export const LIST_RAS_TICKETS = 'QamRasTickets';
 
 // Title は SP の必須列。一覧で何の行か分かる値を入れておく（検索・並び替えにも効く）。
 export const commentFields: FieldSpec[] = [
@@ -75,6 +80,32 @@ export const settingsFields: FieldSpec[] = [
   { name: 'ExpiresAt', type: 'Text' },
 ];
 
+// 独自RAS の資産マスター。1資産1行。BusinessCompany がアクセス権の割当キーなので必ず索引を張る。
+// DedupKey は hostId（同じ資産が二重に増えないように一意制約）。
+export const rasAssetFields: FieldSpec[] = [
+  { name: 'HostId', type: 'Text', indexed: true },
+  { name: 'SettenId', type: 'Text', indexed: true },
+  { name: 'Ip', type: 'Text' },
+  { name: 'Fqdn', type: 'Text' },
+  { name: 'BusinessCompany', type: 'Text', indexed: true },
+  { name: 'ManagementCompany', type: 'Text' },
+  { name: 'DedupKey', type: 'Text', indexed: true, enforceUnique: true },
+];
+
+// 独自RAS 資産で見つかった脆弱性チケット。BusinessCompany は資産から写す
+// （このリスト単体でアクセス権を組めるようにするため。結合しないと権限が付けられない）。
+export const rasTicketFields: FieldSpec[] = [
+  { name: 'TicketNumber', type: 'Text', indexed: true },
+  { name: 'State', type: 'Text' },
+  { name: 'HostId', type: 'Text', indexed: true },
+  { name: 'Ip', type: 'Text' },
+  { name: 'Fqdn', type: 'Text' },
+  { name: 'SettenId', type: 'Text' },
+  { name: 'BusinessCompany', type: 'Text', indexed: true },
+  { name: 'Created', type: 'Text' },
+  { name: 'DedupKey', type: 'Text', indexed: true, enforceUnique: true },
+];
+
 export const ALL_LISTS: { title: string; fields: FieldSpec[] }[] = [
   { title: LIST_COMMENTS, fields: commentFields },
   { title: LIST_ANNOTATIONS, fields: annotationFields },
@@ -82,6 +113,8 @@ export const ALL_LISTS: { title: string; fields: FieldSpec[] }[] = [
   { title: LIST_INSPECTIONS, fields: inspectionFields },
   { title: LIST_LICENSES, fields: licenseFields },
   { title: LIST_SETTINGS, fields: settingsFields },
+  { title: LIST_RAS_ASSETS, fields: rasAssetFields },
+  { title: LIST_RAS_TICKETS, fields: rasTicketFields },
 ];
 
 /** 取込の排他クレーム行のキー。 */
@@ -142,3 +175,19 @@ export const licenseToRow = (s: QamLicenseSample): Record<string, unknown> =>
   ({ Title: s.ts, Ts: s.ts, Ips: s.ips, Scanned: s.scanned });
 export const rowToLicense = (r: Record<string, unknown>): QamLicenseSample =>
   ({ ts: str(r.Ts), ips: num(r.Ips), scanned: num(r.Scanned) });
+
+
+// --- 独自RAS ---
+export const rasAssetToRow = (a: RasAsset): Record<string, unknown> =>
+  ({ Title: a.hostId, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn,
+     BusinessCompany: a.businessCompany, ManagementCompany: a.managementCompany, DedupKey: a.hostId });
+export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
+  ({ hostId: str(r.HostId), settenId: str(r.SettenId), ip: str(r.Ip), fqdn: str(r.Fqdn),
+     businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany) });
+
+export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
+  ({ Title: t.number, TicketNumber: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
+     SettenId: t.settenId, BusinessCompany: t.businessCompany, Created: t.created, DedupKey: t.number });
+export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
+  ({ number: str(r.TicketNumber), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
+     settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), created: str(r.Created) });

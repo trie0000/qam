@@ -52,7 +52,7 @@ export interface AnnotApi {
 }
 
 // その場編集セル（1行テキスト）。フォーカスを外すと保存・Escで取消・Enterで確定。
-function editableCell(initial: string, placeholder: string, onSave: (v: string) => Promise<void>): HTMLElement {
+export function editableCell(initial: string, placeholder: string, onSave: (v: string) => Promise<void>): HTMLElement {
   const cell = el('div', { class: 'qam-edit-cell' });
   let current = initial;
   function view(): void {
@@ -328,3 +328,37 @@ export function historyColumns(entity: QamEntity, comments: CommentApi): Column[
 export const HISTORY_DEFAULT_HIDDEN: Record<QamEntity, string[]> = {
   group: ['id'], host: ['id'], domain: ['old', 'new'], user: [],
 };
+
+// その場編集セル（選択式）。候補はマスター登録した値。空欄も選べる（＝未設定に戻せる）。
+// 未登録の値が入っている行でも候補に足して表示する（黙って別の値に化けないように）。
+export function selectCell(initial: string, options: string[], onSave: (v: string) => Promise<void>): HTMLElement {
+  const cell = el('div', { class: 'qam-edit-cell' });
+  let current = initial;
+  function view(): void {
+    clear(cell);
+    const v = el('div', { class: 'qam-edit-view' + (current ? '' : ' is-empty'), title: current || '（クリックで選択）' }, [current || '（クリックで選択）']);
+    v.addEventListener('click', (e) => { e.stopPropagation(); edit(); });
+    cell.append(v);
+  }
+  function edit(): void {
+    clear(cell);
+    const sel = el('select', { class: 'qam-edit-in' }) as HTMLSelectElement;
+    const cand = [...new Set([current, ...options].filter((x) => x !== ''))];
+    sel.append(el('option', { value: '' }, ['（未設定）']));
+    for (const o of cand) sel.append(el('option', { value: o, selected: o === current }, [o]));
+    sel.addEventListener('click', (e) => e.stopPropagation());
+    let closed = false;
+    const finish = async (commit: boolean): Promise<void> => {
+      if (closed) return; closed = true;
+      const v = sel.value;
+      if (commit && v !== current) { try { await onSave(v); current = v; } catch { /* 失敗時は表示に戻す */ } }
+      view();
+    };
+    sel.addEventListener('change', () => { void finish(true); });
+    sel.addEventListener('blur', () => { void finish(true); });
+    sel.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); void finish(false); } });
+    cell.append(sel); sel.focus();
+  }
+  view();
+  return cell;
+}

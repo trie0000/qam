@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createSpRepo } from '../src/api/sp-repo';
 import { createSpListClient, type SpItem, type SpListClient } from '../src/api/sp/list';
-import { LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, LIST_SETTINGS, LOCK_INGEST, annotKey } from '../src/api/sp/schema';
+import { LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, LIST_SETTINGS, LOCK_INGEST, LIST_RAS_ASSETS, LIST_RAS_TICKETS, annotKey } from '../src/api/sp/schema';
 
 // リストを模した最小の実装。行の追加/更新/削除がそのまま観測できる。
 function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: Record<string, SpItem[]>; ensured: string[] } {
@@ -40,7 +40,10 @@ describe('SharePoint リスト実装（記録系）', () => {
     expect(lists.ensured).toContain(LIST_COMMENTS);
     expect(lists.ensured).toContain(LIST_ANNOTATIONS);
     expect(lists.ensured).toContain(LIST_SETTINGS); // 共有設定＋排他クレーム行
-    expect(lists.ensured).toHaveLength(6);
+    // 独自RAS はアイテム単位でアクセス権を分けるので、専用のリストが要る。
+    expect(lists.ensured).toContain(LIST_RAS_ASSETS);
+    expect(lists.ensured).toContain(LIST_RAS_TICKETS);
+    expect(lists.ensured).toHaveLength(8);
   });
 
   it('メモは行として足され、entity+id で絞れる', async () => {
@@ -271,5 +274,73 @@ describe('取込ロック（重複取込の抑止）', () => {
     await r.acquireIngestLock('田中', 15);
     await r.releaseIngestLock('田中');
     expect(lists.rows[LIST_SETTINGS]).toHaveLength(0);
+  });
+});
+
+describe('独自RAS のリスト同期', () => {
+  const asset = (hostId: string, ip: string, company = '') =>
+    ({ hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, businessCompany: company, managementCompany: '' });
+
+  it('資産は追加・更新・削除される', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('1', '10.0.0.1'), asset('2', '10.0.0.2')]);
+    expect(lists.rows[LIST_RAS_ASSETS]).toHaveLength(2);
+    // 1 は IP 変更 / 2 は Qualys から消えた / 3 は新規
+    const r = await repo.syncRasAssets([asset('1', '10.0.0.9'), asset('3', '10.0.0.3')]);
+    expect(r).toEqual({ added: 1, updated: 1, removed: 1 });
+    expect((lists.rows[LIST_RAS_ASSETS] ?? []).map((x) => x.HostId).sort()).toEqual(['1', '3']);
+  });
+
+  it('変化が無ければ書き込まない（版数を無駄に増やさない）', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('1', '10.0.0.1')]);
+    const before = lists.rows[LIST_RAS_ASSETS][0].__etag;
+    const r = await repo.syncRasAssets([asset('1', '10.0.0.1')]);
+    expect(r).toEqual({ added: 0, updated: 0, removed: 0 });
+    expect(lists.rows[LIST_RAS_ASSETS][0].__etag).toBe(before);
+  });
+
+  it('事業会社を登録しても取込で消えない（同期は登録値をそのまま書く）', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('1', '10.0.0.1')]);
+    await repo.setRasCompany('1', 'A社', 'B保守');
+    expect(lists.rows[LIST_RAS_ASSETS][0].BusinessCompany).toBe('A社');
+    // 呼び出し側が引き継いだ値で同期する（deriveRasAssets が既存値を持ってくる）
+    await repo.syncRasAssets([{ ...asset('1', '10.0.0.1', 'A社'), managementCompany: 'B保守' }]);
+    expect(lists.rows[LIST_RAS_ASSETS][0].BusinessCompany).toBe('A社');
+    expect(lists.rows[LIST_RAS_ASSETS][0].ManagementCompany).toBe('B保守');
+  });
+
+  it('チケットは載っていない分を消さない', async () => {
+    // ★取得が「直近1ヶ月の変化分」のことがある。消すと、動きが無かっただけの
+    //   オープン中チケットが毎回消えてしまう。
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    const t = (n: string, state = 'OPEN') =>
+      ({ number: n, state, hostId: '1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100', businessCompany: 'A社', created: '2026-08-01T00:00:00Z' });
+    await repo.syncRasTickets([t('11'), t('12')]);
+    const r = await repo.syncRasTickets([t('11', 'CLOSED')]);
+    expect(r).toEqual({ added: 0, updated: 1, removed: 0 });
+    expect((lists.rows[LIST_RAS_TICKETS] ?? []).map((x) => x.TicketNumber).sort()).toEqual(['11', '12']);
+    expect(lists.rows[LIST_RAS_TICKETS].find((x) => x.TicketNumber === '11')!.State).toBe('CLOSED');
+  });
+
+  it('共有 JSON は設定リストの1行に入り、読み書きできる', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    expect(await repo.readSharedJson('ras:perms', { adminGroupIds: [] })).toEqual({ adminGroupIds: [] });
+    await repo.writeSharedJson('ras:perms', { adminGroupIds: [5] });
+    expect(await repo.readSharedJson('ras:perms', null)).toEqual({ adminGroupIds: [5] });
+    await repo.writeSharedJson('ras:perms', { adminGroupIds: [6] }); // 上書き（行は増やさない）
+    expect((lists.rows[LIST_SETTINGS] ?? []).filter((r) => r.SettingKey === 'ras:perms')).toHaveLength(1);
+    expect(await repo.readSharedJson('ras:perms', null)).toEqual({ adminGroupIds: [6] });
+  });
+
+  it('壊れた共有 JSON は既定値にフォールバックする', async () => {
+    const lists = fakeLists({ [LIST_SETTINGS]: [{ Id: 1, __etag: '"1"', SettingKey: 'ras:perms', Value: '{壊れ' }] });
+    expect(await repoOf(lists).readSharedJson('ras:perms', { adminGroupIds: [] })).toEqual({ adminGroupIds: [] });
   });
 });

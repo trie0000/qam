@@ -10,7 +10,7 @@ import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column } from './ui/table';
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
-import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
+import { assetColumns, historyColumns, editableCell, selectCell, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, resolveHosts, protectSecret } from './relay';
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
@@ -25,6 +25,12 @@ import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, buil
 import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type AssetRegistry, type RegistrySource } from './precheck';
 import { parseQualysXml } from './ingest/parse';
 import { ticketQuery, resolveTicketMode } from './tickets';
+import {
+  RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
+  companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets,
+  type RasAsset, type RasPerms, type RasTicket,
+} from './ras';
+import type { SiteGroup } from './api/sp/perms';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
   getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, getTicketStamps, readTickets, writeTickets, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, type QamOp,
@@ -44,7 +50,7 @@ function recordOp(action: string, detail: string, entity?: QamEntity): void {
 const GUARD_RATIO = 0.5;
 
 const state = {
-  mode: 'assets' as 'assets' | 'history' | 'tickets' | 'ops' | 'licenses' | 'inspection' | 'quick',
+  mode: 'assets' as 'assets' | 'history' | 'tickets' | 'ras' | 'master' | 'ops' | 'licenses' | 'inspection' | 'quick',
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
@@ -57,6 +63,7 @@ const state = {
   licenseHidden: new Set<number>(), // ライセンス推移グラフで非表示にした年度
   inspAsof: '',                     // 四半期検査で表示する取込日（空＝最新）
   ticketAsof: '',                   // チケット一覧で表示する取込日時（空＝最新）
+  rasTab: 'assets' as 'assets' | 'tickets', // 独自RAS のタブ
 };
 
 // Unique Hosts Scanned（Qualys）= 実際にスキャン済み（最終スキャン日時あり）の一意ホスト数。host 一覧から算出。
@@ -206,7 +213,7 @@ function renderLeft(): void {
   clear(left);
   left.append(el('div', { class: 'qam-navhead' }, ['ビュー']));
   const nav = el('div', { class: 'qam-nav' });
-  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['tickets', 'チケット一覧', 'alert'], ['inspection', '四半期検査', 'check'], ['quick', '簡易検査', 'send'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
+  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['tickets', 'チケット一覧', 'alert'], ['ras', '独自RAS', 'send'], ['inspection', '四半期検査', 'check'], ['quick', '簡易検査', 'send'], ['licenses', 'ライセンス数推移', 'trend'], ['master', 'マスター管理', 'settings'], ['ops', '操作履歴', 'message']];
   for (const [m, label, ic] of modes) {
     const b = el('button', { 'aria-current': String(state.mode === m), html: `${icon(ic, 16)}<span>${label}</span>` });
     b.addEventListener('click', () => { state.mode = m; state.selected.clear(); refresh(); });
@@ -230,16 +237,21 @@ async function refresh(): Promise<void> {
     t.addEventListener('click', () => { state.entity = e.key; state.selected.clear(); refresh(); });
     tabs.append(t);
   }
+  if (state.mode === 'ras') for (const [k, label] of [['assets', '資産一覧'], ['tickets', 'チケット一覧']] as const) {
+    const t = el('button', { class: 'qam-tab', 'aria-current': String(state.rasTab === k) }, [label]);
+    t.addEventListener('click', () => { state.rasTab = k; state.selected.clear(); refresh(); });
+    tabs.append(t);
+  }
   // subbar
   const subbar = el('div', { class: 'qam-subbar' });
-  const titles = { assets: '資産一覧', history: '変更履歴', tickets: 'チケット一覧', ops: '操作履歴', licenses: 'ライセンス数推移', inspection: '四半期検査', quick: '簡易検査' } as const;
+  const titles = { assets: '資産一覧', history: '変更履歴', tickets: 'チケット一覧', ras: '独自RAS', master: 'マスター管理', ops: '操作履歴', licenses: 'ライセンス数推移', inspection: '四半期検査', quick: '簡易検査' } as const;
   const title = el('span', { class: 'qam-title' }, [titles[state.mode]]);
   const count = el('span', { class: 'qam-count' });
   subbar.append(title, count, el('span', { class: 'qam-spacer' }));
   // toolbar
   const toolbar = el('div', { class: 'qam-toolbar' });
   // 検索/全文表示は表ビュー用。ダッシュボード型（推移・四半期検査）では出さない。
-  if (state.mode !== 'licenses' && state.mode !== 'inspection' && state.mode !== 'quick') {
+  if (state.mode !== 'licenses' && state.mode !== 'inspection' && state.mode !== 'quick' && state.mode !== 'master') {
     const search = el('div', { class: 'qam-search', html: icon('search', 14) });
     const sIn = el('input', { type: 'text', placeholder: '検索（ID / 名前 / IP / FQDN）', value: state.q }) as HTMLInputElement;
     onEnter(sIn, () => { state.q = sIn.value.trim(); refresh(); });
@@ -264,7 +276,7 @@ async function refresh(): Promise<void> {
   }
 
   const filterBar = el('div', { class: 'qam-filterbar' });
-  const scrollable = state.mode === 'licenses' || state.mode === 'inspection'; // 縦に積むダッシュボードはビュー全体をスクロール
+  const scrollable = state.mode === 'licenses' || state.mode === 'inspection' || state.mode === 'master'; // 縦に積むダッシュボードはビュー全体をスクロール
   const tableHost = el('div', { style: 'min-height:0;overflow:' + (scrollable ? 'auto' : 'hidden') });
   tableHost.append(el('div', { class: 'qam-tablewrap' }, [skeleton()]));
   main.append(tabs, subbar, toolbar, filterBar, tableHost);
@@ -272,6 +284,8 @@ async function refresh(): Promise<void> {
   if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'history') await renderHistory(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'tickets') await renderTickets(subbar, count, toolbar, filterBar, tableHost);
+  else if (state.mode === 'ras') await renderRas(count, toolbar, filterBar, tableHost);
+  else if (state.mode === 'master') await renderMaster(count, tableHost);
   else if (state.mode === 'licenses') await renderLicenses(count, tableHost);
   else if (state.mode === 'inspection') await renderInspection(count, tableHost);
   else if (state.mode === 'quick') await renderQuickInspect(count, tableHost);
@@ -734,6 +748,258 @@ async function renderTickets(subbar: HTMLElement, count: HTMLElement, toolbar: H
   addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, 'チケット一覧', exportRef, columnRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
+}
+
+// 独自RAS ビュー（タブ: 資産一覧 / チケット一覧）。
+// データは SharePoint のリスト（QamRasAssets / QamRasTickets）。スナップショットではなく
+// リストなのは、事業会社ごとにアイテム単位で参照権限を分けるため。
+const RAS_PERMS_KEY = 'ras:perms';
+const loadRasPerms = async (): Promise<RasPerms> => normalizeRasPerms(await repo.readSharedJson(RAS_PERMS_KEY, null));
+
+async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
+  clear(leftCalHost);
+  const exportRef: { fn?: () => ExportMatrix } = {};
+  const filterRef = {} as FilterRef;
+  const columnRef: { open?: (a: HTMLElement) => void } = {};
+  clear(host);
+
+  if (state.rasTab === 'assets') {
+    const [assets, perms] = await Promise.all([repo.readRasAssets(), loadRasPerms()]);
+    const companies = registeredCompanies(perms);
+    const rows = assets.filter((a) => matchQ([a.settenId, a.ip, a.fqdn, a.hostId, a.businessCompany, a.managementCompany]));
+    const noCompany = assetsWithoutCompany(assets).length;
+    count.textContent = `${rows.length} 件${noCompany ? ` / 事業会社が未設定 ${noCompany} 件` : ''}`;
+    if (!assets.length) {
+      host.append(emptyState('独自RASの資産がありません', `接続点IDが ${RAS_PREFIX} で始まる資産を、取込のときに自動で登録します。まず取込を実行してください。`));
+      return;
+    }
+    // 事業会社が未登録だと管理者しか見られない行になるので、気付けるように注意を出す。
+    // 事業会社を変えても SharePoint 側の権限は自動では変わらない（反映は明示操作）。
+    // ここを黙っていると「登録したのに相手に見えない」で詰まるので、画面に出しておく。
+    toolbar.append(el('span', { class: 'qam-hint' }, [
+      noCompany
+        ? `事業会社が未設定の資産が ${noCompany} 件（未設定の行は管理者以外に見えません）。変更後は「マスター管理 → 権限を反映」が必要です`
+        : '事業会社を変更したら「マスター管理 → 権限を反映」で SharePoint の権限に反映してください',
+    ]));
+    const cols: Column[] = [
+      { id: 'settenId', label: '接続点ID', mono: true, width: 120, render: (a: RasAsset) => esc(a.settenId) },
+      { id: 'ip', label: 'IP', mono: true, width: 140, render: (a: RasAsset) => esc(a.ip) },
+      { id: 'fqdn', label: 'FQDN', render: (a: RasAsset) => esc(a.fqdn) },
+      { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (a: RasAsset) => esc(a.hostId) },
+      {
+        id: 'businessCompany', label: '事業会社', width: 180,
+        render: (a: RasAsset) => selectCell(a.businessCompany, companies, async (v) => {
+          await repo.setRasCompany(a.hostId, v, a.managementCompany);
+          a.businessCompany = v;
+          recordOp('RAS事業会社の変更', `${a.settenId} ${a.ip}: ${v || '(未設定)'}`);
+        }),
+        sortVal: (a: RasAsset) => a.businessCompany,
+      },
+      {
+        id: 'managementCompany', label: '管理会社', width: 180,
+        render: (a: RasAsset) => editableCell(a.managementCompany, '（クリックで入力）', async (v) => {
+          await repo.setRasCompany(a.hostId, a.businessCompany, v);
+          a.managementCompany = v;
+        }),
+        sortVal: (a: RasAsset) => a.managementCompany,
+      },
+    ];
+    host.append(renderTable({
+      viewId: 'ras.assets', columns: cols, rows, getKey: (a: RasAsset) => a.hostId,
+      selected: state.selected, exportRef, filterRef, columnRef,
+    }));
+    addExportButtons(toolbar, '独自RAS資産一覧', exportRef, columnRef);
+  } else {
+    const tickets = await repo.readRasTickets();
+    const rows = tickets.filter((t) => matchQ([t.number, t.state, t.hostId, t.ip, t.fqdn, t.settenId, t.businessCompany]));
+    count.textContent = `${rows.length} 件`;
+    if (!tickets.length) {
+      host.append(emptyState('独自RASのチケットがありません', '取込でチケットを取得すると、独自RAS資産の分だけをここに登録します。'));
+      return;
+    }
+    const cols: Column[] = [
+      { id: 'number', label: 'チケットID', mono: true, width: 110, render: (t: RasTicket) => esc(t.number), sortVal: (t: RasTicket) => t.number.padStart(12, '0') },
+      { id: 'state', label: 'ステータス', width: 110, render: (t: RasTicket) => esc(t.state) },
+      { id: 'settenId', label: '接続点ID', mono: true, width: 120, render: (t: RasTicket) => esc(t.settenId) },
+      { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (t: RasTicket) => esc(t.hostId) },
+      { id: 'ip', label: 'IP', mono: true, width: 140, render: (t: RasTicket) => esc(t.ip) },
+      { id: 'fqdn', label: 'FQDN', render: (t: RasTicket) => esc(t.fqdn) },
+      { id: 'businessCompany', label: '事業会社', width: 180, render: (t: RasTicket) => esc(t.businessCompany) },
+      { id: 'created', label: 'チケットオープン日時', mono: true, width: 170, render: (t: RasTicket) => esc(fmtJst(t.created)), sortVal: (t: RasTicket) => t.created },
+    ];
+    host.append(renderTable({
+      viewId: 'ras.tickets', columns: cols, rows, getKey: (t: RasTicket) => t.number,
+      selected: state.selected, exportRef, filterRef, columnRef,
+    }));
+    addExportButtons(toolbar, '独自RASチケット一覧', exportRef, columnRef);
+  }
+  addFilterUI(toolbar, filterBar, filterRef);
+  host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
+}
+
+// 独自RAS の2リストを最新の取込内容に合わせる。
+// 資産は host スナップショット由来（接続点IDが R 始まりのもの）。事業会社/管理会社の入力は
+// hostId で引き継ぐ（取込のたびに消えないように）。チケットは RAS 資産の分だけを載せる。
+// ★権限は自動では反映しない。会社の割当が変わっていない限り再適用は不要で、
+//   全アイテムに1件ずつ SharePoint を呼ぶので取込のたびに走らせると重い。
+async function syncRasFromLatest(tickets?: QamTicket[]): Promise<void> {
+  const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
+  if (!hStamp) return; // host 未取込なら何もしない
+  const hSnap = await readSnapshot(backend, 'host', hStamp);
+  const hosts = Object.values(hSnap?.records ?? {}) as QamRecord[];
+  const agSetten = await buildAgSetten('host', '');
+  const registered = new Map((await repo.readRasAssets()).map((a) => [a.hostId, a]));
+  const assets = deriveRasAssets(hosts, agSetten, registered);
+  const a = await repo.syncRasAssets(assets);
+  if (a.added || a.updated || a.removed) recordOp('RAS資産の同期', `追加 ${a.added} / 更新 ${a.updated} / 削除 ${a.removed}`);
+
+  if (!tickets?.length) return;
+  const idByIp: Record<string, string> = {};
+  for (const h of hosts) { const ip = h.scalar.IP; if (ip && !(ip in idByIp)) idByIp[ip] = h.key; }
+  const rt = deriveRasTickets(tickets, assets, idByIp);
+  const t = await repo.syncRasTickets(rt);
+  if (t.added || t.updated) recordOp('RASチケットの同期', `追加 ${t.added} / 更新 ${t.updated}`);
+}
+
+// マスター管理ビュー: 事業会社の登録と、独自RASの2リストに対するアクセス権の割当。
+//   管理者グループ   … 全アイテムにフルコントロール（更新できる人。共通・必須）
+//   事業会社グループ … その事業会社のアイテムに読み取り（参照だけ）
+// 割当を変えただけでは SharePoint には効かない。「権限を反映」で全アイテムへ適用する。
+async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void> {
+  clear(leftCalHost);
+  let perms = await loadRasPerms();
+  let groups: SiteGroup[] = [];
+  let groupsError = '';
+  try { groups = await repo.listSiteGroups(); }
+  catch (e) { groupsError = (e as Error).message; }
+  const groupTitle = (id: number): string => groups.find((g) => g.id === id)?.title ?? `(不明なグループ #${id})`;
+
+  const save = async (next: RasPerms): Promise<void> => {
+    await repo.writeSharedJson(RAS_PERMS_KEY, next);
+    perms = next;
+    paint();
+  };
+
+  // グループ選択モーダル（管理者用・事業会社用で共用）。
+  function pickGroups(title: string, note: string, selected: number[]): Promise<number[] | null> {
+    return new Promise((resolve) => {
+      if (!groups.length) {
+        toast(groupsError || 'サイトの権限グループを取得できませんでした', 'error');
+        resolve(null); return;
+      }
+      const sel = new Set(selected);
+      const list = el('div', { style: 'max-height:50vh;overflow:auto;border:1px solid var(--line);border-radius:var(--r-3)' });
+      const search = el('input', { type: 'text', class: 'in', placeholder: 'グループ名で絞り込み', style: 'width:100%;margin-bottom:var(--s-3)' }) as HTMLInputElement;
+      const paintList = (): void => {
+        clear(list);
+        const qy = search.value.trim().toLowerCase();
+        const hit = groups.filter((g) => !qy || g.title.toLowerCase().includes(qy));
+        if (!hit.length) { list.append(el('div', { class: 'qam-hint', style: 'padding:var(--s-4)' }, ['一致するグループがありません'])); return; }
+        for (const g of hit) {
+          const cb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+          cb.checked = sel.has(g.id);
+          cb.addEventListener('change', () => { cb.checked ? sel.add(g.id) : sel.delete(g.id); });
+          list.append(el('label', { class: 'qam-pick', style: 'display:flex;border:0;border-radius:0' }, [cb, g.title]));
+        }
+      };
+      search.addEventListener('input', paintList);
+      paintList();
+      let decided = false;
+      openModal({
+        title, body: el('div', {}, [el('div', { class: 'qam-hint', style: 'margin-bottom:var(--s-3)' }, [note]), search, list]),
+        primaryLabel: '決定',
+        onPrimary: () => { decided = true; resolve([...sel]); return true; },
+        // ×/Esc/キャンセルで閉じたときは変更なし。onClose は決定時にも走るので二重解決を防ぐ。
+        onClose: () => { if (!decided) resolve(null); },
+      });
+    });
+  }
+
+  function paint(): void {
+    clear(host);
+    const wrap = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-6);padding:0 var(--s-2) var(--s-8);max-width:900px' });
+
+    // 1) 管理者グループ（共通・必須）
+    const adminBox = el('div', { class: 'qam-card' });
+    adminBox.append(el('div', { class: 'qam-card-title' }, ['管理者グループ（更新権限・共通）']));
+    adminBox.append(el('div', { class: 'qam-hint' }, ['ここに入れたグループは、独自RASの資産・チケット全件にフルコントロールが付きます。未設定のままでは権限を反映できません（誰も更新できないアイテムができるため）。']));
+    const adminList = el('div', { class: 'qam-chip-row', style: 'margin:var(--s-3) 0' });
+    if (perms.adminGroupIds.length) for (const id of perms.adminGroupIds) adminList.append(el('span', { class: 'qam-pick' }, [groupTitle(id)]));
+    else adminList.append(el('span', { class: 'qam-hint' }, ['未設定']));
+    const adminBtn = el('button', { class: 'btn btn--sm' }, ['グループを選ぶ']);
+    adminBtn.addEventListener('click', async () => {
+      const picked = await pickGroups('管理者グループ', '独自RASの全アイテムにフルコントロールを付けるグループ', perms.adminGroupIds);
+      if (picked) await save({ ...perms, adminGroupIds: picked });
+    });
+    adminBox.append(adminList, adminBtn);
+
+    // 2) 事業会社の一括登録
+    const compBox = el('div', { class: 'qam-card' });
+    compBox.append(el('div', { class: 'qam-card-title' }, ['事業会社の登録']));
+    compBox.append(el('div', { class: 'qam-hint' }, ['1行1件。Excel から貼り付けられます（タブ区切りは先頭列だけ使います）。ここに登録した会社が、資産一覧の「事業会社」の選択肢になります。']));
+    const ta = el('textarea', { class: 'in', rows: '6', style: 'width:100%;margin:var(--s-3) 0;font-family:var(--font-mono)' }) as HTMLTextAreaElement;
+    ta.value = registeredCompanies(perms).join('\n');
+    const compBtn = el('button', { class: 'btn btn--sm btn--primary' }, ['登録内容を保存']);
+    compBtn.addEventListener('click', async () => {
+      const names = parseCompanyList(ta.value);
+      // ★一覧から消える会社に割当があると、その資産が管理者しか見られなくなる。先に知らせる。
+      const dropped = registeredCompanies(perms).filter((c) => !names.includes(c));
+      if (dropped.length && !(await confirmModal('事業会社の削除', `${dropped.join(' / ')} を登録から外します。これらに割り当てたグループも消えるため、該当する資産・チケットは管理者しか見られなくなります。よろしいですか？`))) return;
+      await save(mergeCompanies(perms, names));
+      recordOp('事業会社マスター更新', `${names.length} 社（削除 ${dropped.length} 社）`);
+      toast('事業会社を保存しました', 'ok');
+    });
+    compBox.append(ta, compBtn);
+
+    // 3) 事業会社ごとの参照グループ
+    const mapBox = el('div', { class: 'qam-card' });
+    mapBox.append(el('div', { class: 'qam-card-title' }, ['事業会社ごとの参照グループ']));
+    const noGroup = companiesWithoutGroups(perms);
+    if (noGroup.length) mapBox.append(el('div', { class: 'qam-hint' }, [`割当が無い事業会社: ${noGroup.join(' / ')}（管理者しか見られません）`]));
+    const table = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-2);margin-top:var(--s-3)' });
+    const companies = registeredCompanies(perms);
+    if (!companies.length) table.append(el('div', { class: 'qam-hint' }, ['まず事業会社を登録してください']));
+    for (const c of companies) {
+      const ids = groupIdsFor(c, perms);
+      const row = el('div', { style: 'display:flex;align-items:center;gap:var(--s-3);padding:var(--s-2) 0;border-bottom:1px solid var(--line)' });
+      row.append(el('span', { style: 'min-width:180px;font-weight:600' }, [c]));
+      row.append(el('span', { class: ids.length ? '' : 'qam-hint', style: 'flex:1' }, [ids.length ? ids.map(groupTitle).join(' / ') : '未割当']));
+      const b = el('button', { class: 'btn btn--sm' }, ['グループを選ぶ']);
+      b.addEventListener('click', async () => {
+        const picked = await pickGroups(`${c} の参照グループ`, `${c} の資産・チケットに読み取りを付けるグループ`, ids);
+        if (picked) await save({ ...perms, byBusinessCompany: { ...perms.byBusinessCompany, [c]: picked } });
+      });
+      row.append(b);
+      table.append(row);
+    }
+    mapBox.append(table);
+
+    // 4) 反映
+    const applyBox = el('div', { class: 'qam-card' });
+    applyBox.append(el('div', { class: 'qam-card-title' }, ['権限を反映']));
+    applyBox.append(el('div', { class: 'qam-hint' }, ['上の割当を SharePoint のアイテム単位権限として全件に適用します。件数に比例して時間がかかります（1件ずつ SharePoint に問い合わせるため）。']));
+    const prog = el('div', { class: 'qam-hint', style: 'margin-top:var(--s-2)' });
+    const applyBtn = el('button', { class: 'btn btn--primary', style: 'margin-top:var(--s-3)' }, ['権限を反映']);
+    applyBtn.addEventListener('click', async () => {
+      if (!canApplyPerms(perms)) { toast('先に管理者グループを設定してください', 'error'); return; }
+      if (!(await confirmModal('権限の反映', '独自RASの資産・チケットの全アイテムに、現在の割当を適用します。既存のアイテム単位権限は置き換えられます。実行しますか？'))) return;
+      applyBtn.setAttribute('disabled', 'true');
+      try {
+        const r = await repo.applyRasPerms(perms, (done, total) => { prog.textContent = `${done} / ${total} 件`; });
+        recordOp('RASアクセス権の反映', `${r.items} 件に適用`);
+        toast(`${r.items} 件に権限を反映しました`, 'ok');
+      } catch (e) {
+        prog.textContent = '';
+        toast('権限の反映に失敗: ' + (e as Error).message, 'error');
+      } finally { applyBtn.removeAttribute('disabled'); }
+    });
+    applyBox.append(prog, applyBtn);
+
+    wrap.append(adminBox, compBox, mapBox, applyBox);
+    host.append(wrap);
+    count.textContent = `事業会社 ${companies.length} 社`;
+  }
+  paint();
 }
 
 // ライセンス数推移ビュー: 年度（4月〜翌3月）ごとの折れ線を 12 ヶ月 x 軸に重ね描き。凡例で年度の表示/非表示を切替。
@@ -1636,6 +1902,12 @@ function openIngest(): void {
           setProg(`チケット: 保存中…（${tickets.tickets.length.toLocaleString()} 件）`, true);
           await commitTickets(tickets);
         }
+        // 独自RAS のリストを最新に合わせる（host を取り込んだとき、またはチケットを取ったとき）。
+        if (kinds.includes('host') || tickets) {
+          setProg('独自RASの資産・チケットを更新中…', true);
+          try { await syncRasFromLatest(tickets?.tickets); }
+          catch (e) { recordOp('RAS同期の失敗', (e as Error).message); toast('独自RASの更新に失敗: ' + (e as Error).message, 'error'); }
+        }
         if (inspection && inspAfter) {
           const r = inspection.raw;
           if (!r.scans && !r.maps && !r.scanSchedules && !r.mapSchedules) {
@@ -2123,6 +2395,10 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
       await commitOne(dl.snapshot, dl.raw, undefined, ipCount, true); // auto=true（非対話）
     }
     if (tickets) await commitTickets(tickets);
+    if (pending.includes('host') || tickets) {
+      try { await syncRasFromLatest(tickets?.tickets); }
+      catch (e) { recordOp('RAS同期の失敗', (e as Error).message); }
+    }
     for (const f of failures) recordOp('自動取込失敗', `${f.kind}: ${f.error}`);
     recordOp('自動取込完了', pending.join(','));
   } catch (e) { recordOp('自動取込エラー', (e as Error).message); }
