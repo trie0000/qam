@@ -1,7 +1,7 @@
 // Qualys API ダウンロード: relay 経由でプロキシ取得し、Host の nextUrl ページングを辿って
 // 全件をマージ → 正規化スナップショットにする。XML アップロードと同じ正規化(parse)に合流。
 import { parseQualysXml } from './ingest/parse';
-import { fetchQualys, qualysUserAdd, qualysScheduleAdd, type FetchResult } from './relay';
+import { fetchQualys, fetchQualysBatch, fetchBatchResult, PAGE_SEP, qualysUserAdd, qualysScheduleAdd, type FetchResult } from './relay';
 import { SCHEDULE_PATHS, scheduleParams, validateSchedule, type ScheduleInput } from './schedule';
 import type { QamEntity, QamInspectionRaw, QamRecords, QamSnapshot } from './types';
 
@@ -129,6 +129,39 @@ export async function downloadIps(creds: QualysCreds): Promise<IpListResult> {
     if (!res.ok || !res.xml) return { count: null, xml: res.xml || '' };
     return { count: countSubscriptionIps(res.xml), xml: res.xml };
   } catch { return { count: null, xml: '' }; }
+}
+
+// 複数種別をまとめて取得する（relay 内部で種別ごとに並列実行）。
+// relay の listener は逐次ループなので、ブラウザから並列に投げても直列化される。
+// そのため「1 リクエストで種別のリストを渡し、relay 側で並列に走らせる」形にしている。
+// ページ送りはカーソル方式（次ページURLが応答に入る）なので、種別内は逐次のまま。
+export interface BatchDownload { kind: QamEntity; snapshot: QamSnapshot; raw: string; pages: number }
+export async function downloadEntitiesParallel(
+  kinds: QamEntity[], creds: QualysCreds, onProgress?: (msg: string) => void,
+): Promise<{ results: BatchDownload[]; failures: { kind: QamEntity; error: string }[] }> {
+  onProgress?.(`${kinds.length} 種別を並列で取得中…`);
+  const res = await fetchQualysBatch({ kinds, base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy });
+  if (!res.ok) throw new Error(res.error || '並列取得に失敗しました');
+  const results: BatchDownload[] = [];
+  const failures: { kind: QamEntity; error: string }[] = [];
+  for (const item of res.items ?? []) {
+    const kind = item.kind as QamEntity;
+    if (!item.ok) { failures.push({ kind, error: item.error || '取得に失敗しました' }); continue; }
+    onProgress?.(`${kind}: 受け取り中…（${item.pages} ページ）`);
+    const raw = await fetchBatchResult(kind);
+    // relay は複数ページを PAGE_SEP で連結して返す。ページごとに解析して records を統合する
+    // （XML 文書としては 1 ページ 1 文書なので、まとめてパースはできない）。
+    const records: QamRecords = {};
+    let datetime = '';
+    for (const page of raw.split(PAGE_SEP)) {
+      if (!page.trim()) continue;
+      const parsed = parseQualysXml(page, kind);
+      Object.assign(records, parsed.records);
+      if (!datetime) datetime = parsed.datetime;
+    }
+    results.push({ kind, snapshot: { entity: kind, datetime, records }, raw, pages: item.pages });
+  }
+  return { results, failures };
 }
 
 export async function downloadEntity(kind: QamEntity, creds: QualysCreds, onProgress?: DownloadProgress): Promise<DownloadResult> {

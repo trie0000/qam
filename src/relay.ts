@@ -40,6 +40,22 @@ export async function fetchQualys(body: Record<string, unknown>): Promise<FetchR
 }
 
 // Qualys ユーザ登録（/msp/user.php?action=add）。relay が Basic 認証＋プロキシで叩く。
+// 取込の並列取得。種別のリストを 1 リクエストで渡し、relay 内部で並列に取得させる。
+// 返るのは種別ごとのサマリだけ。XML 本体は fetchBatchResult で 1 種別ずつ生 body で受け取る
+// （巨大な XML を JSON に包むと PS5.1 側が壊れるため）。
+export interface FetchBatchItem { kind: string; ok: boolean; pages: number; bytes: number; error?: string }
+export interface FetchBatchResult { ok: boolean; items?: FetchBatchItem[]; error?: string }
+export const fetchQualysBatch = (body: { kinds: string[]; base: string; user: string; pass?: string; secret?: string; proxy: string }): Promise<FetchBatchResult> =>
+  postJson('/qam/fetch-batch', body);
+
+// 取得済み XML（複数ページは PAGE_SEP 連結）を受け取る。取り出すと relay 側からは消える。
+export const PAGE_SEP = '\n<!-- page -->\n';
+export async function fetchBatchResult(kind: string): Promise<string> {
+  const r = await fetch(`${RELAY}/qam/fetch-batch/result?kind=${encodeURIComponent(kind)}`);
+  if (!r.ok) { const d = await r.json().catch(() => ({} as any)); throw new Error(d.error || `取得結果を読めません (HTTP ${r.status})`); }
+  return await r.text();
+}
+
 export interface UserAddResult { ok: boolean; login?: string; error?: string; status?: number }
 export const qualysUserAdd = (body: { base: string; user: string; pass: string; secret?: string; proxy: string; author?: string; fields: Record<string, string> }): Promise<UserAddResult> =>
   postJson('/qam/qualys/user-add', body);

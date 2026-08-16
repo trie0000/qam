@@ -14,7 +14,7 @@ import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, r
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
-import { downloadEntity, downloadIps, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { downloadEntity, downloadEntitiesParallel, downloadIps, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { buildInspectionForm } from './ui/views/schedule-form';
@@ -1489,11 +1489,17 @@ function openIngest(): void {
           ipCount = ipRes.count;
           if (ipRes.xml) { try { await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ipRes.xml); } catch { /* XML保存失敗は本処理に影響させない */ } }
         }
-        for (const k of kinds) {
-          setProg(`${labelOf(k)}: ダウンロード中…`, true);
-          const dl = await downloadEntity(k, creds, (p) => setProg(`${labelOf(k)}: ${p.page} ページ目・${p.records.toLocaleString()} 件取得…`, true));
-          setProg(`${labelOf(k)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
+        // 取得は relay 側で種別ごとに並列実行する（listener は逐次なので、ブラウザから
+        // 並列に投げても直列化されてしまう）。保存は SharePoint への書き込みなので順に行う。
+        const { results, failures } = await downloadEntitiesParallel(kinds, creds, (m) => setProg(m, true));
+        for (const dl of results) {
+          setProg(`${labelOf(dl.kind)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
           await commitOne(dl.snapshot, dl.raw, dup, ipCount);
+        }
+        // 1 種別が失敗しても他は取り込む（失敗は名指しで残す）。
+        for (const f of failures) {
+          recordOp('取込失敗', `${labelOf(f.kind)}: ${f.error}`, f.kind);
+          toast(`${labelOf(f.kind)} の取得に失敗: ${f.error}`, 'error');
         }
         setProg('完了しました', false);
         refresh();

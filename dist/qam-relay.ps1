@@ -479,6 +479,103 @@ function Invoke-QamResolve { param($Body)
     return [ordered]@{ ok = $true; results = @($results) }
 }
 
+# ─── 取込の並列化（runspace プール） ─────────────────────────────────────────
+# relay の request loop は GetContext() の逐次ループで、1 リクエストずつしか処理しない。
+# そのためブラウザから種別ごとに並列で叩いても listener で待たされ、実質直列になる。
+# そこで「種別のリストを 1 リクエストで受け、relay 内部で並列に取得する」形にする。
+# ★ページ送りは前ページの応答に次ページ URL が入るカーソル方式なので並列化できない。
+#   並列にできるのは種別間（group / host / domain / user）。
+# ★応答は小さな JSON（種別ごとの成否・ページ数）だけを返し、XML 本体は一時ファイルへ置いて
+#   /qam/fetch-batch/result で生 body として渡す。PS5.1 の ConvertTo-Json は巨大文字列で壊れる。
+$QAM_FETCH_MAX_PARALLEL = 4
+$QAM_PAGE_SEP = "`n<!-- page -->`n"   # TS 側が生XMLを分割するときの目印（従来の連結と同じ）
+
+function Get-QamFetchCacheDir {
+    $dir = Join-Path $LogFull 'fetch-cache'
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction SilentlyContinue | Out-Null }
+    return $dir
+}
+
+function Invoke-QamFetchBatch {
+    param($Body)
+    $kinds = @($Body.kinds | Where-Object { $_ })
+    if (-not $kinds.Count) { throw 'kinds が空です' }
+    $dir = Get-QamFetchCacheDir
+
+    # worker は別 runspace で動くので、必要な関数は定義文字列を渡して作り直す。
+    # （Invoke-QualysFetch は Get-QamText1 と Add-QamLog を使う。ログは worker では捨てる）
+    $fetchDef = ${function:Invoke-QualysFetch}.ToString()
+    $textDef  = ${function:Get-QamText1}.ToString()
+
+    $worker = {
+        param($fetchDef, $textDef, $kind, $req, $outPath, $sep)
+        Set-Item -Path function:Get-QamText1 -Value ([ScriptBlock]::Create($textDef))
+        Set-Item -Path function:Add-QamLog -Value ([ScriptBlock]::Create('param([string]$Text)'))
+        Set-Item -Path function:Invoke-QualysFetch -Value ([ScriptBlock]::Create($fetchDef))
+        $out = [ordered]@{ kind = $kind; ok = $false; pages = 0; bytes = 0; error = $null }
+        try {
+            $pages = New-Object System.Collections.ArrayList
+            $body = @{ kind = $kind; base = $req.base; user = $req.user; pass = $req.pass; secret = $req.secret; proxy = $req.proxy; noSession = $true }
+            $res = Invoke-QualysFetch ([pscustomobject]$body)
+            if (-not $res.ok) { $out.error = "status $($res.status)"; return $out }
+            [void]$pages.Add([string]$res.xml)
+            $next = $res.nextUrl
+            $seen = New-Object System.Collections.Generic.HashSet[string]
+            $guard = 0
+            while ($next -and $guard -lt 2000) {
+                $guard++
+                if (-not $seen.Add([string]$next)) { break }   # 同じページを繰り返したら停止
+                $res = Invoke-QualysFetch ([pscustomobject]@{ url = $next; user = $req.user; pass = $req.pass; secret = $req.secret; proxy = $req.proxy; noSession = $true })
+                if (-not $res.ok) { $out.error = "ページ $guard で失敗 (status $($res.status))"; break }
+                [void]$pages.Add([string]$res.xml)
+                $next = $res.nextUrl
+            }
+            $text = ($pages -join $sep)
+            [IO.File]::WriteAllText($outPath, $text, [Text.Encoding]::UTF8)
+            $out.pages = $pages.Count
+            $out.bytes = [Text.Encoding]::UTF8.GetByteCount($text)
+            $out.ok = -not $out.error
+        } catch {
+            $out.error = $_.Exception.Message
+        }
+        return $out
+    }
+
+    $cap = [Math]::Min($kinds.Count, $QAM_FETCH_MAX_PARALLEL)
+    $pool = [RunspaceFactory]::CreateRunspacePool(1, $cap)
+    $pool.Open()
+    $jobs = @()
+    foreach ($k in $kinds) {
+        $outPath = Join-Path $dir ("$k.xml")
+        if (Test-Path -LiteralPath $outPath) { Remove-Item -LiteralPath $outPath -Force -ErrorAction SilentlyContinue }
+        $ps = [PowerShell]::Create()
+        $ps.RunspacePool = $pool
+        [void]$ps.AddScript($worker).AddArgument($fetchDef).AddArgument($textDef).AddArgument($k).AddArgument($Body).AddArgument($outPath).AddArgument($QAM_PAGE_SEP)
+        $jobs += [pscustomobject]@{ Kind = $k; PS = $ps; Handle = $ps.BeginInvoke() }
+    }
+    Write-Host ("[qam] fetch-batch 開始: {0} (並列 {1})" -f ($kinds -join ','), $cap) -ForegroundColor Cyan
+    Add-QamLog ("FETCH-BATCH start: " + ($kinds -join ',') + " parallel=$cap")
+
+    $items = @()
+    foreach ($j in $jobs) {
+        try {
+            $r = $j.PS.EndInvoke($j.Handle)
+            $one = $null; if ($r) { foreach ($o in $r) { $one = $o; break } }
+            if (-not $one) { throw '結果が返りませんでした' }
+            $items += $one
+        } catch {
+            # 1 種別の失敗で他を巻き込まない（items[].ok=false で個別に返す）。
+            $items += [ordered]@{ kind = $j.Kind; ok = $false; pages = 0; bytes = 0; error = $_.Exception.Message }
+        } finally { $j.PS.Dispose() }
+    }
+    $pool.Close(); $pool.Dispose()
+    foreach ($i in $items) {
+        Write-Host ("[qam] fetch-batch {0}: ok={1} pages={2} bytes={3} {4}" -f $i.kind, $i.ok, $i.pages, $i.bytes, $i.error) -ForegroundColor DarkCyan
+        Add-QamLog ("FETCH-BATCH {0}: ok={1} pages={2} bytes={3} {4}" -f $i.kind, $i.ok, $i.pages, $i.bytes, $i.error)
+    }
+    return [ordered]@{ ok = $true; items = $items }
+}
+
 # ─── ルーティング ────────────────────────────────────────────────────────────
 $IndexHtml = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QAM — Qualys Asset Management</title></head><body><div id="qam-root"></div><script src="/qam/bundle/qam.bundle.js"></script></body></html>'
 
@@ -531,6 +628,29 @@ function Invoke-Route { param($Ctx)
         '^/qam/qualys/user-add$' {
             try { Send-Json $Ctx (Invoke-QualysUserAdd (Get-Body $req | ConvertFrom-Json)) }
             catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            return
+        }
+        '^/qam/fetch-batch$' {
+            # 種別のリストを 1 リクエストで受け、relay 内部で並列取得する。
+            # 返すのは小さな JSON のサマリだけ（XML 本体は result で取りに来てもらう）。
+            try { Send-Json $Ctx (Invoke-QamFetchBatch (Get-Body $req | ConvertFrom-Json)) }
+            catch {
+                $msg = $_.Exception.Message
+                Write-Host "[qam] fetch-batch ERROR: $msg" -ForegroundColor Red
+                Add-QamLog "FETCH-BATCH error: $msg"
+                Send-Json $Ctx @{ ok = $false; error = $msg } 502
+            }
+            return
+        }
+        '^/qam/fetch-batch/result$' {
+            # 取得済み XML を生 body で返して片付ける（JSON に包むと PS5.1 が巨大文字列で壊れる）。
+            $kind = [string]$q['kind']
+            if ($kind -notmatch '^[a-z]+$') { Send-Json $Ctx @{ error = '不正な kind' } 400; return }
+            $f = Join-Path (Get-QamFetchCacheDir) ("$kind.xml")
+            if (-not (Test-Path -LiteralPath $f)) { Send-Json $Ctx @{ error = "取得結果がありません: $kind" } 404; return }
+            $bytes = [IO.File]::ReadAllBytes($f)
+            Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue
+            Send-Bytes $Ctx $bytes 'application/xml; charset=utf-8'
             return
         }
         '^/qam/fetch$' {
