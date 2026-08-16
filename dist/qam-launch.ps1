@@ -246,8 +246,8 @@ if (-not $SiteUrl) { $SiteUrl = Get-EnvValue 'QAM_SP_SITE_URL' }
 if (-not $SiteUrl) {
     # ★ここで終わると「ブラウザが何も出ない」うえ、サイト URL を設定する画面にも辿り着けない
     #   （設定画面はアプリの中にあるため）。ローカルの画面を開いて、そこで入力してもらう。
-    Write-Warn 'SharePoint サイト URL が未設定です（server\qam.env の QAM_SP_SITE_URL）'
-    Write-Warn '設定用にローカルの画面を開きます。表示される画面でサイト URL を入力し、保存してから、もう一度 qam-start.bat を実行してください'
+    Write-Warn 'SharePoint サイト URL が未設定です（qam.env の QAM_SP_SITE_URL）'
+    Write-Warn '設定用にローカルの画面を開きます。表示される画面でサイト URL を入力し、保存してから、もう一度 qam-launch.bat を実行してください'
     if (-not (Start-QamRelay -Port $RelayPort)) { Write-Warn '中継サーバを起動できませんでした' }
     try { Start-Process "http://127.0.0.1:$RelayPort/" } catch { Write-Warn "手動で開いてください: http://127.0.0.1:$RelayPort/" }
     if ($KeepOpen) { Read-Host '終了するには Enter' }

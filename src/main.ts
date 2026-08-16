@@ -1828,7 +1828,7 @@ function openHelp(): void {
 
     <h3>起動</h3>
     <ul>
-      <li><b>qam-start.bat</b> をダブルクリック → relay が起動し、既定ブラウザで自動的に開きます。</li>
+      <li><b>qam-launch.bat</b> をダブルクリック → relay が起動し、既定ブラウザで自動的に開きます。</li>
       <li>「中継サーバに接続できません」が出たら、relay（別ウィンドウ）が起動しているか確認し「再接続」を押します。</li>
     </ul>
 
@@ -1964,7 +1964,7 @@ function showRelayDownModal(): void {
       el('span', { style: 'color:var(--danger);flex:none', html: icon('alert', 20) }),
       el('div', {}, ['QAM のローカル中継サーバ（127.0.0.1）に接続できません。データの読み書きには中継サーバが必要です。']),
     ]),
-    el('div', { style: 'margin-top:var(--s-4)' }, [callout('qam-start.bat（または qam-start.ps1）を実行して中継サーバを起動してから、「再接続」を押してください。')]),
+    el('div', { style: 'margin-top:var(--s-4)' }, [callout('qam-launch.bat（または qam-launch.ps1）を実行して中継サーバを起動してから、「再接続」を押してください。')]),
   ]);
   relayModal = openModal({
     title: '中継サーバに接続できません',
@@ -2070,7 +2070,7 @@ async function initStorage(): Promise<{ ok: true } | { ok: false; reason: string
     try {
       cfg = await getConfig();
     } catch {
-      return { ok: false, reason: `中継サーバ(${RELAY})に接続できません。設定を読めないため起動できません。qam-start.bat から起動しているか確認してください。` };
+      return { ok: false, reason: `中継サーバ(${RELAY})に接続できません。設定を読めないため起動できません。qam-launch.bat から起動しているか確認してください。` };
     }
     const siteUrl = (cfg.spSiteUrl || '').trim();
     const library = (cfg.spLibrary || '').trim() || 'QamData';
@@ -2106,7 +2106,7 @@ function showStorageDownModal(reason: string, onRetry: () => void): void {
     el('div', { style: 'margin-top:var(--s-4)' }, [callout(reason)]),
     el('div', { style: 'margin-top:var(--s-4)' }, [callout(
       'このアプリは SharePoint のページ上で動かす必要があります（サインイン情報を使うため）。'
-      + 'ブラウザで 127.0.0.1 を直接開いても接続できません。qam-start.bat から起動してください。',
+      + 'ブラウザで 127.0.0.1 を直接開いても接続できません。qam-launch.bat から起動してください。',
     )]),
     el('div', { class: 'qam-form-sec' }, ['接続先の設定']),
     el('div', { class: 'qam-field' }, [el('label', {}, ['SharePoint サイト URL']), site]),

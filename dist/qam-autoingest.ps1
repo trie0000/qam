@@ -27,7 +27,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot 'server\qam.env' }
+if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot 'qam.env' }
 # qam.env から Port / DataDir を解決。
 $DataDir = $env:QAM_DATA_DIR
 if (Test-Path -LiteralPath $EnvFile) {
@@ -62,7 +62,7 @@ if (Test-AllDone) { Add-AutoLog "本日($today)分は取込済み。起動をキ
 $health = "http://127.0.0.1:$Port/qam/health"
 function Test-Up { param([string]$Url) try { return ((Invoke-WebRequest -Uri $Url -TimeoutSec 2 -UseBasicParsing -ErrorAction Stop).StatusCode -eq 200) } catch { return $false } }
 if (-not (Test-Up $health)) {
-    $relay = Join-Path $PSScriptRoot 'server\qam-relay.ps1'
+    $relay = Join-Path $PSScriptRoot 'qam-relay.ps1'
     if (-not (Test-Path -LiteralPath $relay)) { Add-AutoLog "relay が見つかりません: $relay"; exit 3 }
     $relayCwd = if ($PSScriptRoot -like '\\*') { $env:SystemRoot } else { $PSScriptRoot }
     Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$relay`"") -WorkingDirectory $relayCwd -WindowStyle Hidden | Out-Null

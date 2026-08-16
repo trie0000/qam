@@ -15,7 +15,7 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 追加インストール不要（PowerShell は標準搭載、Node はビルド時のみ）。
 
 ```
-[qam-start.bat ダブルクリック]
+[qam-launch.bat ダブルクリック]
   └→ qam-relay.ps1 が http://127.0.0.1:<port>/ を起動（管理者権限不要・PS 5.1）
        └→ 既定ブラウザで開く → TSバンドル(qam.bundle.js)を配信
 
@@ -61,8 +61,8 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 ## 起動・設定
 
 ```
-1) server/qam.env.example を qam.env にコピーして QAM_DATA_DIR 等を設定
-2) qam-start.bat をダブルクリック
+1) dist/qam.env.example を qam.env にコピーして QAM_DATA_DIR 等を設定
+2) qam-launch.bat をダブルクリック
 3) 開いたブラウザで利用。終了は UI の「終了」アイコン
 ```
 
@@ -74,7 +74,7 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 > アプリ内のヘルプ（右上の「?」）にも同じ内容があります。
 
 ### 起動・終了
-- **`qam-start.bat` をダブルクリック** → relay（別ウィンドウ）が起動し、既定ブラウザで自動的に開く。
+- **`qam-launch.bat` をダブルクリック** → relay（別ウィンドウ）が起動し、既定ブラウザで自動的に開く。
 - 「中継サーバに接続できません」が出たら、relay ウィンドウの起動を確認して「再接続」。
 - 終了は UI 右上の「終了」アイコン（relay を停止）。
 
@@ -261,7 +261,7 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 ヘッドレス Edge は専用プロファイルの localStorage の認証情報を使う（**パスワードを env/リポジトリに置かない**）。
 最初に 1 度だけ手動で保存する。
 
-1. `qam-start.bat` を起動（relay を立てる）。
+1. `qam-launch.bat` を起動（relay を立てる）。
 2. 専用プロファイルで Edge を開く（`<port>` は qam.env の `QAM_RELAY_PORT`、既定 18090）。
 
    PowerShell の場合（先頭に呼び出し演算子 `&`、env は `$env:`）:
@@ -317,9 +317,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "<配置先>\qam-autoingest.
 
 **管理データの保管先は SharePoint のリスト／ライブラリに一本化**している。全員が同じデータを見る。
 
-1. `server/qam.env` に **SharePoint サイト URL**（`QAM_SP_SITE_URL`）を書く
+1. `dist/qam.env` に **SharePoint サイト URL**（`QAM_SP_SITE_URL`）を書く
    （ライブラリ `QamData` とリスト `Qam*` は初回起動時に自動作成される）
-2. **`qam-start.bat`** を実行 → 中継サーバ起動 → 専用プロファイルの Edge 起動 → サインイン →
+2. **`qam-launch.bat`** を実行 → 中継サーバ起動 → 専用プロファイルの Edge 起動 → サインイン →
    SharePoint のページ上でアプリが起動する
 3. 初回だけ 設定 → 開発者 →「**アプリを SharePoint に配置**」を実行する
    （以降は全員が SharePoint 上の本体を読む。更新もこの配置を実行するだけで全員に反映される）

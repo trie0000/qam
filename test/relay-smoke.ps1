@@ -9,7 +9,7 @@ $tmp = Join-Path $PSScriptRoot '.tmp-relay'
 if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force }
 $data = Join-Path $tmp 'data'; $bundle = Join-Path $tmp 'dist'; $envf = Join-Path $tmp 'qam.env'
 New-Item -ItemType Directory -Path $data, $bundle -Force | Out-Null
-$relay = Resolve-Path "$PSScriptRoot/../server/qam-relay.ps1"
+$relay = Resolve-Path "$PSScriptRoot/../dist/qam-relay.ps1"
 
 $script:pass = 0; $script:fail = 0
 function Assert-Eq($a, $e, $m) { if ("$a" -eq "$e") { $script:pass++; Write-Host "  ok  : $m" -ForegroundColor Green } else { $script:fail++; Write-Host "  FAIL: $m (expected=$e actual=$a)" -ForegroundColor Red } }

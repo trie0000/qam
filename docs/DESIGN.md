@@ -181,8 +181,8 @@ qam/
   server/
     qam-relay.ps1           薄い relay（配信/プロキシ取得/ファイルIO・PS 5.1）
     qam.env.example
-  qam-start.bat             （ASCII のみ・末尾 pause）        ← §18
-  qam-start.ps1             （UTF-8 with BOM）                ← §18 文字化け防止
+  qam-launch.bat             （ASCII のみ・末尾 pause）        ← §18
+  qam-launch.ps1             （UTF-8 with BOM）                ← §18 文字化け防止
   build.js  package.json  tsconfig.json  vitest.config.ts
   test/*.test.ts            vitest（parse/diff/store）
   docs/DESIGN.md  QUALYS_XML.md  README.md

@@ -7,7 +7,7 @@
 #   3) UNC データディレクトリ配下のファイル read/write/list/remove
 # パース/差分/ストレージ書式の解釈は全て TS 側。relay はパス安全性だけ担保する。
 # 127.0.0.1 で listen するので管理者権限不要。設定は 引数 > 環境変数 > qam.env。
-#   実行: powershell -ExecutionPolicy Bypass -File qam-relay.ps1   （通常は qam-start.bat 経由）
+#   実行: powershell -ExecutionPolicy Bypass -File qam-relay.ps1   （通常は qam-launch.bat 経由）
 # =============================================================================
 [CmdletBinding()]
 param(
@@ -58,12 +58,25 @@ function Set-QamEnvValue {
     Set-Content -LiteralPath $Path -Value $lines -Encoding UTF8
 }
 
-if (-not $EnvFile) { $EnvFile = Join-Path $PSScriptRoot 'qam.env' }
+if (-not $EnvFile) {
+    $EnvFile = Join-Path $PSScriptRoot 'qam.env'
+    # 旧配置（配布物が server\ と dist\ に分かれていた頃）の qam.env も拾う。
+    # 設定ファイルは gitignore で配らないので、置き場所を変えた途端に全員が
+    # 「QAM_DATA_DIR 未設定」で起動できなくなるのを防ぐ。
+    if (-not (Test-Path -LiteralPath $EnvFile)) {
+        $legacy = Join-Path (Join-Path (Split-Path $PSScriptRoot -Parent) 'server') 'qam.env'
+        if (Test-Path -LiteralPath $legacy) {
+            Write-Host "[qam] 旧配置の設定を使用: $legacy （dist\qam.env へ移動してください）" -ForegroundColor Yellow
+            $EnvFile = $legacy
+        }
+    }
+}
 Import-QamEnv $EnvFile
 if (-not $DataDir) { $DataDir = $env:QAM_DATA_DIR }
 if (-not $DataDir) { Write-Host '[qam] QAM_DATA_DIR が未設定です。qam.env を設定してください。' -ForegroundColor Red; exit 2 }
 if (-not $Port) { $Port = if ($env:QAM_RELAY_PORT) { [int]$env:QAM_RELAY_PORT } else { 18090 } }
-if (-not $BundleDir) { $BundleDir = if ($env:QAM_BUNDLE_DIR) { $env:QAM_BUNDLE_DIR } else { Join-Path (Split-Path $PSScriptRoot -Parent) 'dist' } }
+# 配布物は全て dist にまとまっている（このスクリプトも dist 配下）ので、バンドルは同じフォルダ。
+if (-not $BundleDir) { $BundleDir = if ($env:QAM_BUNDLE_DIR) { $env:QAM_BUNDLE_DIR } else { $PSScriptRoot } }
 if (-not (Test-Path -LiteralPath $DataDir)) { New-Item -ItemType Directory -Path $DataDir -Force | Out-Null }
 # UNC パス（\\server\share\…）に対し Resolve-Path .Path / [IO.Path]::GetFullPath は
 # プロバイダ接頭辞や「パス形式非対応」例外を招く。env の値をそのまま素のパスとして使う（末尾区切りのみ除去）。

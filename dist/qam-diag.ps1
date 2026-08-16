@@ -1,6 +1,6 @@
 ﻿# =============================================================================
 # qam-diag.ps1 — 起動しないときに、どこで止まっているかを切り分ける
-# 使い方: powershell -NoProfile -ExecutionPolicy Bypass -File server\qam-diag.ps1
+# 使い方: powershell -NoProfile -ExecutionPolicy Bypass -File qam-diag.ps1
 # =============================================================================
 $ErrorActionPreference = 'Continue'
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -65,7 +65,7 @@ if (Test-Path $log) {
     Get-Content $log -Tail 20
 } else {
     Write-Host ''
-    Write-Host "ログはまだありません（$log）。qam-start.bat を一度実行してから、もう一度この診断を実行してください。" -ForegroundColor Yellow
+    Write-Host "ログはまだありません（$log）。qam-launch.bat を一度実行してから、もう一度この診断を実行してください。" -ForegroundColor Yellow
 }
 Write-Host ''
 Read-Host '終了するには Enter'
