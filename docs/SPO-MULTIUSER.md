@@ -42,7 +42,7 @@ SharePoint ページ内の JS から直接は叩けない。relay が担う 2 �
   2) 専用プロファイルの Edge を起動（--remote-debugging-port / --remote-allow-origins=*）
   3) 認証完了を待つ（_api/web への fetch が通るまでポーリング）
   4) CDP の Runtime.evaluate でローダを注入 → SP ページに overlay としてマウント
-  5) 失敗時は従来フロー（ローカル relay の画面）へフォールバック
+  5) SP にバンドルがまだ無い初回だけ relay から読む（初回ブートストラップ）
 ```
 
 - ヘッドレス不可・専用プロファイルは `%LOCALAPPDATA%` 配下・既存プロファイルは移動しない

@@ -26,7 +26,7 @@ Host 一覧は 1000 件超で末尾 `<WARNING><URL>`（`id_min` 付き次バッ�
 
 ## 2. ストレージ
 
-`<QAM_DATA_DIR>/` 配下（README 記載のレイアウト）。DB は使わずファイル。
+SharePoint（ドキュメントライブラリ＋リスト）。DB は使わずファイルとリスト。README 記載のレイアウト。
 
 ```
 snapshots/ group/<date>.json host/<date>.json domain/<date>.json  日次フル状態（保存期間内）
@@ -147,21 +147,22 @@ LeftPane(200px) | Tabs: [AssetGroup][Host][Domain]
 ## 5. relay エンドポイント（薄い中継・§18 準拠・PS 5.1）
 
 prefix `http://127.0.0.1:<QAM_RELAY_PORT>/`。全レスポンスに CORS、全リクエスト 1 行ログ。
-relay は I/O とプロキシ取得のみ。**パース/差分/ストレージ書式の解釈は TS 側**が持つ。
+relay は Qualys 中継・設定・DPAPI・名前解決のみ。**パース/差分/ストレージ書式の解釈は TS 側**が持つ。
 
 | メソッド/パス | 役割 |
 |---|---|
 | `GET /qam/health` | 起動確認（launcher が待機） |
 | `GET /`・`GET /qam/bundle/*` | TS バンドル(qam.bundle.js)・version・静的配信 |
 | `POST /qam/fetch` | Qualys API を**プロキシ + Basic 認証**で取得し XML を返す（body: kind, base, user, pass, proxy）。Host ページングを follow |
-| `GET /qam/file?path=` | UNC データ配下のファイル読込（path は `QAM_DATA_DIR` 配下に限定） |
-| `POST /qam/file` | ファイル書込（body: path, content）。append フラグで jsonl 追記 |
-| `GET /qam/file/list?dir=` | ディレクトリ一覧（スナップショット日付列挙等） |
+| `POST /qam/qualys/user-add`・`/qam/qualys/schedule-add` | Qualys への登録（監査ログに実行者・パラメータを残す） |
+| `POST /qam/secret/protect` | Qualys パスワードの DPAPI 保護（復号口はブラウザに無い） |
+| `POST /qam/resolve` | FQDN の名前解決（ブラウザからは引けない） |
 | `GET/POST /qam/config` | 既定値（プロキシ/POD/保存期間）の照会・変更（env へ永続化） |
 | `POST /qam/shutdown` | 「終了」アイコン（relay 停止） |
 
-ストレージのレイアウト（snapshots/history/comments）と差分・剪定・asof 解決・件数急減ガードは
-**TS 側のロジック**で、`/qam/file` 越しに read/write する。relay はパス安全性（データ配下限定）だけ担保。
+ストレージのレイアウト（snapshots/history 等）と差分・剪定・asof 解決・件数急減ガードは
+**TS 側のロジック**で、SharePoint REST（同一オリジンの Cookie）越しに read/write する。
+relay はローカルファイルを扱わない。
 
 ## 6. ファイル構成（§1 / §2）
 

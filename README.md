@@ -1,7 +1,7 @@
 # QAM — Qualys Asset Management
 
 Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改廃履歴（追加・変更・削除）**を
-ローカルで参照・記録するツール。
+記録・参照するツール。管理データは **SharePoint** に保管し、アプリは **SharePoint のページ上**で動く。
 
 - 取り込み：**Qualys API から直接ダウンロード**（プロキシ経由）／一覧 **XML アップロード**の両方
 - 差分：前回スナップショットと比較し、**変更だけ**を履歴として蓄積
@@ -11,26 +11,32 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 ## アーキテクチャ（TS アプリ + 薄い PowerShell relay）
 
 既存の内製ツールと同じ構成。**アプリ本体は TypeScript（ブラウザ、esbuild バンドル）**、
-**PowerShell は薄い relay**（配信＋プロキシ取得＋ファイル IO）に徹する。配布先 Windows に
+**PowerShell は薄い relay**（ブラウザに出来ないことだけを代行）に徹する。配布先 Windows に
 追加インストール不要（PowerShell は標準搭載、Node はビルド時のみ）。
 
 ```
 [qam-launch.bat ダブルクリック]
-  └→ qam-relay.ps1 が http://127.0.0.1:<port>/ を起動（管理者権限不要・PS 5.1）
-       └→ 既定ブラウザで開く → TSバンドル(qam.bundle.js)を配信
+  └→ qam-relay.ps1 を起動（127.0.0.1・管理者権限不要・PS 5.1）
+  └→ 専用プロファイルの Edge で SharePoint サイトを開く（サインインは通常どおり対話）
+       └→ CDP でバンドルを注入 → アプリが overlay（Shadow DOM）として起動
 
   ブラウザ(TS) … XMLパース / 差分計算 / 表示 / フィルタ / テーブル
-       │  GET/POST http://127.0.0.1:<port>
+       ├── SharePoint REST（同一オリジンの Cookie）… 管理データの読み書き
+       │
+       │  GET/POST http://127.0.0.1:<port>   ※別オリジンなので CORS 許可は SP サイトに限定
        ▼
   qam-relay.ps1（薄い中継・PS 5.1）
-       ├ /qam/fetch   : Qualys API を「プロキシ経由 + Basic認証」で取得（CORS/プロキシ回避）
-       ├ /qam/file    : UNC 共有のファイル read/write/list（ブラウザが書けない部分）
-       └ /qam/bundle  : TSバンドル配信・version
+       ├ /qam/fetch    : Qualys API を「プロキシ経由 + Basic認証」で取得（CORS/プロキシ回避）
+       ├ /qam/qualys/* : Qualys への登録（ユーザ・スケジュール）＋監査ログ
+       ├ /qam/config   : 設定(qam.env)の読み書き
+       ├ /qam/secret/* : Qualys パスワードの DPAPI 保護（復号口はブラウザに無い）
+       ├ /qam/resolve  : FQDN の名前解決（ブラウザからは引けない）
+       └ /qam/bundle   : TSバンドル配信・version（SP に配置する前の初回ブートストラップ用）
 ```
 
-ブラウザは UNC への書き込みもプロキシ経由アクセスもできないため relay は必須だが、**重い/変わりやすい
-ロジックは全部 TS** に置き、relay は I/O とプロキシ取得だけの最小実装にする。データは UNC 共有
-（`QAM_DATA_DIR`）に集約。
+**アプリは SharePoint のページ上でしか動かない**（管理データの読み書きにサインイン情報を使うため）。
+127.0.0.1 を直接開いても保管先に繋がらない。relay が要るのは Qualys アクセス・設定・DPAPI・名前解決で、
+**relay が落ちていても保存済みデータの参照はできる**。
 
 ### Qualys API ダウンロード（プロキシ経由）
 - 接続先 POD・**アカウント/パスワード**・**プロキシ URL** は**設定画面**から登録（既定値は env）。
@@ -38,30 +44,34 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
   Host 一覧の `WARNING/URL`（`id_min`）ページングは relay 側で follow。
 - **認証情報は env かブラウザ設定（localStorage）で保持し、コード/リポジトリには置かない。**
 
-## データ配置（DB なし＝ファイル）
+## データ配置（SharePoint）
 
-プログラムとデータは分離（データ場所は env）。**指定日の資産状況を表示**できるよう
-日次フルスナップショットを保存期間内だけ保持し、**改廃履歴とコメントは永続**で持つ。
+管理データは SharePoint に置く。ファイル系はドキュメントライブラリ、記録系はリスト。
+ライブラリとリストは初回起動時に自動作成される。
 
 ```
-<QAM_DATA_DIR>/
-  snapshots/ group/<date>.json host/<date>.json domain/<date>.json  日次フル状態（保存期間内・現況/指定日参照）
-  history/   group.jsonl host.jsonl domain.jsonl                     改廃イベント（追記のみ・永続）
-  comments/  comments.jsonl                                          作業履歴コメント（追記のみ・永続）
-  runs.jsonl                                                         取込メタ（日付/件数/completed）
-  raw/<date>/{group,host,domain}.xml.gz                              生XML（保存期間内）
+<SharePoint サイト>/
+  <ライブラリ QamData>/
+    snapshots/<種別>/<取込日時>.json   取込時点のフル状態（保存期間内・現況/指定時点の参照）
+    history/<種別>.jsonl               改廃イベント（追記のみ・永続）
+    raw/<日付>/…                       生XML（保存期間内）
+    inspection/<日付>.json             四半期検査の取得結果（取込日ごと）
+    runs.jsonl                         取込メタ（日時/件数）
+    app/qam.bundle.js                  配置したアプリ本体（設定→開発者から配置）
+  リスト QamComments / QamAnnotations / QamOps / QamInspections / QamLicenses / QamSettings
 ```
 
 - 同一性キー：AssetGroup=`ID` / Host=`ID`（IP・DNS はキーにしない）/ Domain=ドメイン文字列。
-- **保存期間（日）は設定画面から変更可能**。期間を過ぎた `snapshots/*/<date>` と `raw/<date>` を剪定する。
-- **改廃履歴 `history/` とコメント `comments/` は剪定しない**（嵩張らず、これが恒久記録）。
-- **指定日の資産状況** = その日（無ければ直前）のスナップショットを表示。保存期間より前の日付は
+- **保存期間（日）は設定画面から変更可能**。期間を過ぎた `snapshots/` と `raw/` を剪定する。
+- **改廃履歴とメモ・注釈・操作履歴・ライセンス推移は剪定しない**（これが恒久記録）。
+- **指定時点の資産状況** = その時点（無ければ直前）のスナップショットを表示。保存期間より前は
   スナップショットが無いため、改廃履歴ビューで変化を追う。
+- ローカルには**ログだけ**が残る（`QAM_LOG_DIR`、未設定なら `%LOCALAPPDATA%\qam`）。
 
 ## 起動・設定
 
 ```
-1) dist/qam.env.example を qam.env にコピーして QAM_DATA_DIR 等を設定
+1) dist/qam.env.example を dist/qam.env にコピーし、QAM_SP_SITE_URL（保管先サイト）等を設定
 2) qam-launch.bat をダブルクリック
 3) 開いたブラウザで利用。終了は UI の「終了」アイコン
 ```
@@ -82,7 +92,7 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 - **個人設定**：記入者名（操作履歴・メモの作業者）、Qualys アカウント／パスワード、テーマ、文字サイズ。
   ※ Qualys 認証情報・記入者名は各自のブラウザに保存され共有されない。
 - **共通設定**：Qualys 接続先 POD、プロキシ URL、保存期間（日）、ライセンス上限、
-  ユーザ登録の business_unit／国（country）、自動バックアップ間隔（分）・保管（日）、バックアップからの復元、
+  ユーザ登録の business_unit／国（country）、
   四半期検査の年度開始月・対象の接続点ID パターン、検査登録の既定値（SCAN／MAP のオプションプロファイル・
   スキャナー・タイムゾーン）。
 - **開発者**：データのリセット（資産／履歴／メモを種類選択）、登録情報のリセット、ビルド情報。
@@ -212,7 +222,7 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
   **共通設定の既定値**が初期表示され、その場で変更できる。
 - relay 側は書き込み先を 4 パスに限定している（スケジュール scan/map・AssetGroup・ドメイン）。
 - **更新系 API の監査ログ**：**実行者・発行した API（メソッドとURL）・パラメータ・結果**を
-  `<QAM_DATA_DIR>/api-audit.log` に必ず出力する（認証情報は書かない）。参照系は対象外。
+  `<ログ置き場>/api-audit.log` に必ず出力する（認証情報は書かない）。参照系は対象外。
 
 ### 検査一覧（実行履歴・予約済み）
 
@@ -230,9 +240,9 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 - 氏名（全角スペース区切り「姓 名」・英字は半角化）／会社名／メール／検査対象区分（静的・動的）／権限（Scanner・Reader、動的は Reader 固定）／接続点 ID。
 - Qualys の `/msp/user.php?action=add` で作成（接続点 ID→所属 AssetGroup、必須項目は共通設定／既定値で補完、SAML はサブスク設定前提で登録メールは送らない）。
 
-### バックアップ・復元（共通設定）
-- 起動時に間隔ごと 1 回、**全データを zip で自動退避**（生 XML・ログ・設定は除外）。期限切れは自動削除。
-- 「今すぐバックアップ」で手動退避、「バックアップから復元」でその時点の状態へ巻き戻し。
+### バックアップ・復元
+- ツール側にバックアップ機能は持たない。管理データは SharePoint にあるので、
+  **バージョン履歴とごみ箱**が復旧手段になる（ライブラリ・リストとも標準機能）。
 
 ### 操作履歴
 - 取込・編集・削除・自動取込などの操作を、作業者と日時（JST）つきで記録。
@@ -254,7 +264,7 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 3. **Edge ヘッドレス**で `?autoingest=<種別>` を開く（専用 `--user-data-dir` プロファイル）
 4. 当日スナップショットが揃う／上限時間（既定 40 分）まで監視して Edge を終了
 
-完了の記録は `<QAM_DATA_DIR>/autoingest.log` に残る。
+完了の記録は `<ログ置き場>/autoingest.log` に残る。
 
 ### 事前準備①：認証情報を専用 Edge プロファイルに保存（1 回だけ）
 
@@ -280,7 +290,7 @@ Qualys VMDR の **AssetGroup / Host / Domain** の登録状況と、その**改�
 powershell -NoProfile -ExecutionPolicy Bypass -File "<配置先>\qam-autoingest.ps1"
 ```
 
-`<QAM_DATA_DIR>\autoingest.log` に「Edge 起動 → 取込 → 完了」が出れば成功。
+`<ログ置き場>\autoingest.log` に「Edge 起動 → 取込 → 完了」が出れば成功。
 
 ### タスク登録手順
 
