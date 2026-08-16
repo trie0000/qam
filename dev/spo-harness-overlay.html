@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>QAM — overlay 検証（ホストの !important CSS ＋ 後付け固定ヘッダー）</title>
+<style>
+  /* ホストページ（SharePoint 相当）の敵対的 CSS。
+     素の要素セレクタ＋!important は light DOM では QAM に勝ってしまう。 */
+  body { margin: 0; font: 14px/1.6 serif; user-select: none; }
+  button { background: #c00 !important; color: #ff0 !important; border: 3px dashed #0f0 !important;
+           font-family: "Comic Sans MS", cursive !important; border-radius: 0 !important; padding: 12px !important; }
+  input, select, textarea { background: #ffb !important; border: 3px solid #f0f !important; font-family: serif !important; }
+  table, th, td { border: 2px solid #f00 !important; }
+  div { line-height: 3 !important; }
+  .host-header {
+    position: fixed; top: 0; left: 0; right: 0; height: 48px; z-index: 1000000;
+    background: #0b5cab; color: #fff; display: flex; align-items: center; padding: 0 16px;
+  }
+  #fake-host-body { padding: 80px 16px; }
+</style>
+</head>
+<body>
+  <div id="fake-host-body">ホストページ本文（QAM が覆うべき領域）</div>
+  <script>
+    // バンドルは毎回最新を読む（検証中のキャッシュ事故を避ける）。
+    const s = document.createElement('script');
+    s.src = '../dist/qam.bundle.js?t=' + Date.now();
+    // ホスト(SPA)が QAM の後から自分のヘッダーを body へ追加するケースを再現。
+    s.onload = () => {
+      const h = document.createElement('div');
+      h.className = 'host-header';
+      h.textContent = 'HOST HEADER (position:fixed, z-index:1000000, QAM より後に append)';
+      document.body.append(h);
+    };
+    document.head.appendChild(s);
+  </script>
+</body>
+</html>

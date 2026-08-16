@@ -1,6 +1,6 @@
 // 共通テーブル（Notion §25 準拠）: 行/全件選択・ソート・列幅リサイズ・列入替（pointer 自前実装）・
 // 列幅/順序/ソートの localStorage 永続化・選択時バルクバー常設。
-import { el, clear, uiHost } from './dom';
+import { el, clear, uiHost, uiQuery, uiElementFromPoint, uiEventTarget } from './dom';
 import { icon } from '../icons';
 import { LS } from '../config';
 
@@ -88,9 +88,9 @@ function bindTableKeyNav(): void {
   document.addEventListener('mousemove', (e) => { lastMx = e.clientX; lastMy = e.clientY; });
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'PageUp' && e.key !== 'PageDown') return;
-    const t = e.target as HTMLElement | null;
+    const t = uiEventTarget(e); // shadow では e.target がホスト要素に付け替わる
     if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return; // 入力欄の操作は邪魔しない
-    const w = (document.elementFromPoint(lastMx, lastMy) as HTMLElement | null)?.closest('.qam-tablewrap') as HTMLElement | null;
+    const w = uiElementFromPoint(lastMx, lastMy)?.closest('.qam-tablewrap') as HTMLElement | null;
     if (!w) return;
     const page = Math.max(40, w.clientHeight - 40); // 1ページ＝表示高さ（少し重ねる）
     w.scrollTop += (e.key === 'PageDown' ? page : -page);
@@ -134,7 +134,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
   }
 
   // 列表示メニュー（チェックで表示/非表示）。body 直下に1つだけ置く。
-  document.getElementById('qam-colmenu')?.remove();
+  uiQuery('#qam-colmenu')?.remove();
   const colPop = el('div', { class: 'qam-colmenu', id: 'qam-colmenu' });
   uiHost().append(colPop);
   const openAt = (anchor: HTMLElement): void => {
@@ -240,9 +240,9 @@ export function renderTable(opts: TableOpts): HTMLElement {
 
   colPop.addEventListener('click', (e) => e.stopPropagation());
   if (!colMenuBound) {
-    document.addEventListener('click', () => document.getElementById('qam-colmenu')?.classList.remove('on'));
+    document.addEventListener('click', () => uiQuery('#qam-colmenu')?.classList.remove('on'));
     // ESC で列フィルタ/列表示メニューを閉じる（検索ボックスにフォーカスがあっても document まで伝播する）。
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.getElementById('qam-colmenu')?.classList.remove('on'); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') uiQuery('#qam-colmenu')?.classList.remove('on'); });
     colMenuBound = true;
   }
 
@@ -459,7 +459,7 @@ export function renderTable(opts: TableOpts): HTMLElement {
       const move = (ev: PointerEvent) => {
         if (!dragging && Math.abs(ev.clientX - startX) < 6) return;
         dragging = true;
-        const el2 = document.elementFromPoint(ev.clientX, ev.clientY) as HTMLElement | null;
+        const el2 = uiElementFromPoint(ev.clientX, ev.clientY);
         const overTh = el2?.closest('th[data-col]') as HTMLElement | null;
         table.querySelectorAll('th.qam-drag-over').forEach((x) => x.classList.remove('qam-drag-over'));
         if (overTh && overTh.dataset.col !== c.id) { overTh.classList.add('qam-drag-over'); overId = overTh.dataset.col!; }

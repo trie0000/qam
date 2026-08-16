@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QAM — 単体ページ（relay 配信相当）の回帰確認</title>
+</head>
+<body>
+  <!-- relay の IndexHtml と同じ構成（light DOM の #qam-root） -->
+  <div id="qam-root"></div>
+  <script>
+    const s = document.createElement('script');
+    s.src = '../dist/qam.bundle.js?t=' + Date.now();
+    document.head.appendChild(s);
+  </script>
+</body>
+</html>

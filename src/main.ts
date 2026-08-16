@@ -2,7 +2,7 @@
 import css from './styles/app.css';
 import { scopeCss } from './ui/scope-css';
 import { BUILD, BUILDTIME, ENTITIES, IS_OVERLAY, LS, RELAY, fmtStamp, datetimeToStamp, stampNow, today } from './config';
-import { el, esc, clear, onEnter, uiHost } from './ui/dom';
+import { el, esc, clear, onEnter, uiHost, uiQuery, setUiRoot } from './ui/dom';
 import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
@@ -105,11 +105,34 @@ function matchAsset(r: QamRecord, q: string): boolean {
 }
 
 // ---- shell ----
-// SharePoint ページへ overlay として注入されたときは、既存ページを壊さないよう
-// スタイルを #qam-root 配下に閉じ込める（単体ページのときは従来どおり全体に効かせる）。
-const style = document.createElement('style');
-style.textContent = IS_OVERLAY ? scopeCss(css) : css;
-document.head.append(style);
+// overlay（SharePoint ページ上）では Shadow DOM に隔離する。
+// ★ ホストページの CSS は `button { … !important }` のような素の要素セレクタを持つため、
+//   light DOM では #qam-root 配下に閉じ込めても **!important には勝てない**（ボタン・入力・
+//   モーダルの見た目が化け、こちらの position/z-index も上書きされて帯の裏に隠れる）。
+//   shadow 境界ならセレクタ自体が届かないので、この種の崩れが原理的に起きない。
+// ★ ホスト要素には `all: initial !important` を当てる。継承する性質（font / color /
+//   user-select 等）だけは shadow の中にも入るので、ここで断つ。
+// ★ attachShadow が使えない環境では従来どおり host 直下に置く（機能は動く）。
+// 単体ページ（relay 配信）はホストの干渉が無いので従来どおり document へ流す。
+const uiScope: ParentNode = (() => {
+  if (!IS_OVERLAY) {
+    const s = document.createElement('style');
+    s.textContent = css;
+    document.head.append(s);
+    return document;
+  }
+  document.getElementById('qam-host')?.remove(); // 再注入時の残骸
+  const shield = document.createElement('div');
+  shield.id = 'qam-host';
+  shield.style.cssText = 'all: initial !important';
+  document.body.append(shield);
+  let mount: ParentNode = shield;
+  try { mount = shield.attachShadow({ mode: 'open' }); } catch { /* 未対応環境は host 直下 */ }
+  const s = document.createElement('style');
+  s.textContent = scopeCss(css); // #qam-root 配下へ閉じ込め（shadow 内でもそのまま効く）
+  mount.appendChild(s);
+  return mount;
+})();
 
 // 注意書きのコールアウト（小さめ・左アクセント線）。
 function callout(text: string): HTMLElement {
@@ -117,18 +140,18 @@ function callout(text: string): HTMLElement {
 }
 
 
-const root = document.getElementById('qam-root') ?? (() => {
-  // overlay: 画面全体を覆う専用コンテナを自前で作る。
+const root = IS_OVERLAY ? (() => {
+  // overlay: 画面全体を覆う専用コンテナを shadow の中に作る。
+  // 位置と重なり順は shadow 内の CSS（.qam-overlay）で持つ。ホスト側の !important は
+  // shadow 境界を越えられないので、ここが後から上書きされることはない。
   const d = document.createElement('div');
   d.id = 'qam-root';
   d.className = 'qam-overlay';
-  // ★位置と重なり順だけは inline で持たせる。SharePoint のヘッダは z-index が
-  //   100 万台なので、スタイルシート側の値では負けて上端が帯に隠れる（取込ボタンが
-  //   見えなくなる）。inline なら後から読み込まれるホスト側 CSS にも上書きされない。
-  d.style.cssText = 'position:fixed;inset:0;z-index:2147483647;overflow:auto';
-  document.body.append(d);
+  uiScope.appendChild(d);
   return d;
-})();
+})() : document.getElementById('qam-root')!;
+// 自前の要素探索（モーダル/ポップオーバー）は shadow 内を見る必要がある。
+setUiRoot(uiScope, root);
 
 // テーマ・文字サイズを載せる先。overlay ではスコープ済み CSS が #qam-root を起点に
 // 見るので、html に付けても一致しない（暗色にしても効かない）。root 自身に付ける。
@@ -274,7 +297,7 @@ function fltIcon(c: { id: string; mono?: boolean }): string {
   return c.mono ? '#' : 'Aa';
 }
 function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef): void {
-  document.getElementById('qam-flt-pop')?.remove(); // 再描画時に前回のポップオーバーが残らないように
+  uiQuery('#qam-flt-pop')?.remove(); // 再描画時に前回のポップオーバーが残らないように
   const pop = el('div', { class: 'qam-flt-pop', id: 'qam-flt-pop' });
   uiHost().append(pop);
   const chips = el('div', { class: 'qam-flt-chips' });
@@ -334,7 +357,7 @@ function addFilterUI(toolbar: HTMLElement, filterBar: HTMLElement, fr: FilterRef
   // 外側クリックで閉じる
   pop.addEventListener('click', (e) => e.stopPropagation());
   if (!filterOutsideBound) {
-    document.addEventListener('click', () => document.getElementById('qam-flt-pop')?.classList.remove('on'));
+    document.addEventListener('click', () => uiQuery('#qam-flt-pop')?.classList.remove('on'));
     filterOutsideBound = true;
   }
   // 条件クリア: 検索・列フィルタ（履歴は期間・種別も）を一括リセット。

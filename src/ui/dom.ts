@@ -30,8 +30,41 @@ export const clear = (e: Element): void => { while (e.firstChild) e.removeChild(
  *   1. CSS は #qam-root 配下へ閉じ込めてあるので、外に置くと**素のまま**表示される
  *   2. #qam-root は最前面に出しているので、その外側は**下に隠れて見えない**
  * どちらのモードでも #qam-root は存在するので、常にその中へ入れる。
+ *
+ * overlay では #qam-root を Shadow DOM の中に置く。document からは辿れないので、
+ * 起動時に setUiRoot() で実体を渡してもらい、以降はそれを使う。
  */
-export const uiHost = (): HTMLElement => document.getElementById('qam-root') ?? document.body;
+let uiRootEl: HTMLElement | null = null;
+let uiScope: ParentNode | null = null;
+
+export function setUiRoot(scope: ParentNode, root: HTMLElement): void {
+  uiScope = scope; uiRootEl = root;
+}
+
+export const uiHost = (): HTMLElement => uiRootEl ?? document.getElementById('qam-root') ?? document.body;
+
+/** アプリ自身の要素を探す。Shadow DOM 内は document から見えないため、必ずこれを使う。 */
+export const uiQuery = <T extends Element = HTMLElement>(sel: string): T | null =>
+  ((uiScope ?? document) as ParentNode).querySelector<T>(sel);
+
+/**
+ * 座標上の要素。document から引くと shadow の中は見えず、ホスト要素しか返らない
+ * （スクロール対象や列ドラッグ先の判定が全部外れる）。shadow のときはそちらから引く。
+ */
+export function uiElementFromPoint(x: number, y: number): HTMLElement | null {
+  const scope = uiScope;
+  const from: DocumentOrShadowRoot = scope && scope !== document && typeof (scope as ShadowRoot).elementFromPoint === 'function'
+    ? (scope as ShadowRoot) : document;
+  return from.elementFromPoint(x, y) as HTMLElement | null;
+}
+
+/**
+ * document レベルの listener で本当のイベント発生元を取る。
+ * shadow の外へ出たイベントは target がホスト要素に付け替わる（retarget）ため、
+ * e.target で入力欄かどうかを見ると必ず外れる。
+ */
+export const uiEventTarget = (e: Event): HTMLElement | null =>
+  ((e.composedPath?.()[0] as HTMLElement | undefined) ?? (e.target as HTMLElement | null)) ?? null;
 
 // Enter 確定ハンドラ。IME 変換中は必ず除外（UIルール §6）。
 export function onEnter(input: HTMLElement, fn: () => void): void {

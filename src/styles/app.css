@@ -520,13 +520,15 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
   border-left: 3px solid var(--warn); font-size: var(--fs-sm); user-select: text; }
 .qam-track-note { margin: var(--s-4) 0; font-size: var(--fs-sm); color: var(--danger); }
 
-/* overlay 注入時のコンテナ。ホストページ（SharePoint）の CSS を受けないよう遮蔽し、
-   画面全体を覆う。単体ページのときはこのクラスが付かないので影響しない。 */
+/* overlay 注入時のコンテナ。Shadow DOM の中に置くので、ホストページ（SharePoint）の
+   CSS はここへ届かない（!important でも越えられない）。単体ページではこのクラスが
+   付かないので影響しない。 */
 #qam-root.qam-overlay {
-  /* 位置と重なり順は main.ts が inline でも指定する（ホストのヘッダに負けないため）。
-     ここは単体で CSS を読んだときのための保険。 */
-  position: fixed; inset: 0; z-index: 2147483647;
+  position: fixed; inset: 0; z-index: 2147483600;
   background: var(--paper); color: var(--ink);
   font-family: var(--font-sans); font-size: var(--fs-base); line-height: var(--lh-base);
   overflow: auto;
+  /* ★ホスト要素の all:initial で user-select が auto に戻り、ホスト側の
+     user-select:none を引き継いで全画面コピー不可になる。ここで断ち切る。 */
+  user-select: text; -webkit-user-select: text;
 }

@@ -1,5 +1,5 @@
 // 月カレンダー: 変更があった日を薄い赤の丸で表示。クリックで単日、ドラッグ or Shift+クリックで範囲選択。
-import { el, clear } from './dom';
+import { el, clear, uiElementFromPoint } from './dom';
 import { icon } from '../icons';
 
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
@@ -58,7 +58,7 @@ export function renderCalendar(opts: CalendarOpts): HTMLElement {
   // クリック=単日 / ドラッグ=範囲 / Shift+クリック=（既存開始日があれば）その範囲。
   function attachSelect(grid: HTMLElement, cells: HTMLElement[]): void {
     const dayAt = (x: number, y: number): string | null => {
-      const e = document.elementFromPoint(x, y) as HTMLElement | null;
+      const e = uiElementFromPoint(x, y);
       const c = e?.closest('.qam-cal-day[data-day]') as HTMLElement | null;
       return c ? c.dataset.day ?? null : null;
     };
