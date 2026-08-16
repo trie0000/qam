@@ -25,6 +25,7 @@ import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, buil
 import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type AssetRegistry, type RegistrySource } from './precheck';
 import { parseQualysXml } from './ingest/parse';
 import { ticketQuery, resolveTicketMode } from './tickets';
+import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
 import {
   RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
   companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets,
@@ -203,11 +204,32 @@ topbar.append(
   licenseBadge,
   ingestBtn,
   exportAllBtn,
-  iconBtn('refresh', '更新', refresh),
+  iconBtn('refresh', '更新（新しい版があれば適用）', doRefresh),
   iconBtn('help', 'ヘルプ', openHelp),
   iconBtn('settings', '設定', openSettings),
   iconBtn('logout', '終了', doShutdown),
 );
+
+// 右上の更新ボタン。まず配信元に新しい本体が出ていないか見て、出ていればその場で
+// 差し替える（ページ再読込ではアプリが消えるため。理由は bundle.ts の先頭）。
+// 出ていなければ従来どおり画面を再描画する。
+async function doRefresh(): Promise<void> {
+  try {
+    const cfg = await getConfig();
+    const loc = resolveBundleLocation(cfg, RELAY, window.location);
+    const latest = await fetchLatestBuildId(loc.base);
+    if (latest && latest !== BUILD) {
+      toast(`新しい版 (${latest}) を読み込みます…`, 'info');
+      stopBackgroundWork(); // 古い版の死活監視を止めてから入れ替える
+      await reloadBundleInPlace(loc.base);
+      return; // 以降は新版の起動処理が引き継ぐ
+    }
+  } catch (e) {
+    // 版の確認や取得に失敗しても、再描画までは行う（更新ボタンが無反応にならないように）。
+    toast('新しい版を確認できませんでした: ' + (e as Error).message, 'error');
+  }
+  await refresh();
+}
 
 function renderLeft(): void {
   clear(left);
@@ -2350,13 +2372,20 @@ function showRelayDownModal(): void {
 
 // 30秒間隔で relay を死活監視。落ちていたら警告、復帰したら自動でモーダルを閉じる。
 // 取込/インポート中(relayBusy>0)は単一スレッド relay が応答できず誤検知するのでスキップ。
+let relayPollTimer: number | null = null;
 function startRelayPolling(): void {
-  setInterval(async () => {
+  relayPollTimer = window.setInterval(async () => {
     if (relayBusy > 0) return;
     const ok = await checkRelay();
     if (!ok) { showRelayDownModal(); return; }
     if (relayModal) { relayModal.close(); relayModal = null; toast('中継サーバに再接続しました', 'ok'); refresh(); }
   }, 30000);
+}
+
+// バンドル差し替えの直前に、古い版の常駐処理を止める。
+// ★止めないと新版と二重に死活監視して、片方が誤検知のモーダルやトーストを出す。
+function stopBackgroundWork(): void {
+  if (relayPollTimer != null) { clearInterval(relayPollTimer); relayPollTimer = null; }
 }
 
 // 初回起動: 記入者名が未設定なら設定モーダルを出す（操作履歴・メモの作業者に使う）。
