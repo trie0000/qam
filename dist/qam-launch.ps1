@@ -24,7 +24,8 @@ param(
     [int]$RelayPort = 0,              # 未指定なら qam.env(QAM_RELAY_PORT) → 既定 18090
     [int]$DebugPort = 0,              # 未指定なら qam.env(QAM_CDP_PORT)   → 既定 18099
     [int]$AuthTimeoutSec = 300,       # サインインを待つ上限（MFA を手で通す時間）
-    [switch]$KeepOpen                 # 失敗時にウィンドウを残す（調査用）
+    [switch]$KeepOpen,                # 失敗時にウィンドウを残す（調査用）
+    [switch]$Restart                  # 動いている中継サーバを止めてから起動し直す
 )
 $ErrorActionPreference = 'Stop'
 
@@ -96,9 +97,42 @@ function Test-Url {
 }
 
 # ─── 1) relay ────────────────────────────────────────────────────────────────
+# 動いている中継サーバを止める（-Restart 用）。/qam/shutdown → 応答しなければプロセスを終了。
+function Stop-QamRelay {
+    param([int]$Port)
+    try { Invoke-RestMethod "http://127.0.0.1:$Port/qam/shutdown" -Method Post -TimeoutSec 3 | Out-Null } catch { }
+    Start-Sleep -Milliseconds 800
+    try {
+        foreach ($wp in (Get-WmiObject Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue)) {
+            if ($wp.CommandLine -like '*qam-relay.ps1*') { Stop-Process -Id $wp.ProcessId -Force -EA SilentlyContinue }
+        }
+    } catch { }
+    Write-Step '中継サーバを停止しました'
+}
+
 function Start-QamRelay {
     param([int]$Port)
-    if (Test-Url "http://127.0.0.1:$Port/qam/health") { Write-Step "中継サーバは起動済み"; return $true }
+    if (Test-Url "http://127.0.0.1:$Port/qam/health") {
+        # ★既に動いているものをそのまま使う。ただし旧版が隠しウィンドウで起動していると
+        #   「窓が出ない・止め方が分からない」になるので、見えているかを確かめて案内する。
+        $hidden = $false
+        try {
+            foreach ($wp in (Get-WmiObject Win32_Process -Filter "Name='powershell.exe'" -EA SilentlyContinue)) {
+                if ($wp.CommandLine -like '*qam-relay.ps1*') {
+                    $pr = Get-Process -Id $wp.ProcessId -EA SilentlyContinue
+                    if ($pr -and $pr.MainWindowHandle -eq 0) { $hidden = $true }
+                }
+            }
+        } catch { }
+        if ($hidden) {
+            Write-Warn "中継サーバは起動済みですが、ウィンドウが表示されない状態で動いています（旧版で起動されたもの）"
+            Write-Warn "窓を出して使いたい場合は、いったん停止してから起動し直してください:"
+            Write-Warn "  停止: -Restart を付けて実行する（qam-launch.bat -Restart）"
+        } else {
+            Write-Step "中継サーバは起動済み"
+        }
+        return $true
+    }
     $relay = Join-Path $Root 'qam-relay.ps1'
     if (-not (Test-Path -LiteralPath $relay)) { Write-Warn "qam-relay.ps1 が見つかりません: $relay"; return $false }
     Write-Step "中継サーバを起動します"
@@ -310,6 +344,7 @@ $AuthProbeJs = @'
 
 # ─── 実行 ────────────────────────────────────────────────────────────────────
 Write-Log '--- 起動 ---'
+if ($Restart) { Stop-QamRelay -Port $RelayPort }
 if (-not (Test-QamSiteUrl $SiteUrl)) { $SiteUrl = Get-EnvValue 'QAM_SP_SITE_URL' }
 if (-not (Test-QamSiteUrl $SiteUrl)) {
     # ★アプリは SharePoint のページ上でしか動かないので、ローカルの画面を開いても設定できない。
