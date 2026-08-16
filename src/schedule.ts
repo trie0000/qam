@@ -6,6 +6,10 @@
 // として表現する（recurrence は v2/v1 両方で対応を確認済み。1〜99 回）。
 //
 // SCAN は v2: /api/2.0/fo/schedule/scan/?action=create（POST）
+// ★参照系（?action=list）は v5.0 へ移行済み（v2/v3/v4 は EOS 2025-12 / EOL 2026-12）。
+//   作成系（?action=create）は公式ガイド(VM/PC API 10.39.1)が v2.0 でしか
+//   パラメータを記載していないため、実環境で v5.0 の受け口を確認できるまで v2.0 のままにする。
+//   EOL は 2026-12 なので、それまでに確認して上げること。
 //   active={0|1} / asset_groups はタイトルのカンマ区切り
 // MAP  は v1: /msp/scheduled_scans.php?add_task=yes&type=map
 //   active={yes|no} / 対象は scan_target（ドメインのカンマ区切り）

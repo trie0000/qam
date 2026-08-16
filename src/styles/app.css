@@ -71,6 +71,19 @@ body {
 .qam-filters { display: flex; flex-direction: column; gap: var(--s-3); }
 .qam-filters label { font-size: var(--fs-xs); color: var(--ink-3); }
 .qam-chip-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+/* 取込の取得対象など「複数選ぶチェックボックス」。枠付きのピルにして押せる範囲を広げる。
+   .qam-chip は素のフックとして既存UIが使っているので、そちらの見た目は変えない。 */
+.qam-pick { display: inline-flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) var(--s-4); border: 1px solid var(--line); border-radius: var(--r-3);
+  background: var(--paper); font-size: var(--fs-sm); cursor: pointer; user-select: none; }
+.qam-pick:hover { background: var(--paper-2); }
+.qam-pick input { cursor: pointer; margin: 0; }
+.qam-pick--all { font-weight: 600; }
+.qam-pick input:disabled { cursor: default; }
+.qam-pick:has(input:disabled) { opacity: .5; cursor: default; }
+/* 補足説明（選べない理由など）。本文より小さく淡く。 */
+.qam-hint { margin-top: var(--s-2); font-size: var(--fs-xs); color: var(--ink-4); }
+.qam-hint:empty { display: none; }
 
 /* カレンダー（変更履歴・変更日マーク） */
 .qam-cal { margin-top: var(--s-5); }

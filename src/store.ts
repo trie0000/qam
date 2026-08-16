@@ -2,7 +2,7 @@
 // スナップショットは「取込日時(stamp)」ごとに保持（同日複数回の取込を別ポイントとして残す）。
 //   stamp = 'YYYY-MM-DDTHH-mm-ss'（ファイル名/キー/辞書順ソート可）。
 // 実ファイル IO は FileBackend（relay 実装 or テストのインメモリ）に委譲する。
-import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecords, QamSnapshot } from './types';
+import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecords, QamSnapshot, QamTicketSnapshot } from './types';
 import { compareSnapshots, countByChange, shrinkGuard } from './diff';
 
 export interface FileBackend {
@@ -17,6 +17,8 @@ const snapPath = (e: QamEntity, stamp: string) => `snapshots/${e}/${stamp}.json`
 const histPath = (e: QamEntity) => `history/${e}.jsonl`;
 const COMMENTS = 'comments/comments.jsonl';
 const RUNS = 'runs.jsonl';
+const TICKET_DIR = 'tickets';
+const ticketPath = (stamp: string) => `${TICKET_DIR}/${stamp}.json`;
 const INSPECTION_DIR = 'inspection';
 const inspPath = (date: string) => `${INSPECTION_DIR}/${date}.json`;
 const INSPECTION_LEGACY = `${INSPECTION_DIR}/latest.json`; // 日次化する前の単一ファイル
@@ -314,4 +316,21 @@ export async function ingestSnapshot(b: FileBackend, snap: QamSnapshot, opts: In
   res.pruned = (await prune(b, opts.retentionDays, dateOfStamp(stamp))).length;
   res.committed = true;
   return res;
+}
+
+
+// --- tickets ---
+// チケットは差分・改廃履歴を取らない（状態が頻繁に変わるので取込時点の一覧として保持する）。
+// 資産スナップショットと同じ stamp 命名なので、剪定(pruneOld)の対象にもそのまま乗る。
+export async function getTicketStamps(b: FileBackend): Promise<string[]> {
+  const names = await b.list(TICKET_DIR);
+  return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).sort();
+}
+
+export const writeTickets = (b: FileBackend, snap: QamTicketSnapshot, stamp: string): Promise<void> =>
+  b.write(ticketPath(stamp), JSON.stringify(snap));
+
+export async function readTickets(b: FileBackend, stamp: string): Promise<QamTicketSnapshot | null> {
+  const raw = await b.read(ticketPath(stamp));
+  return raw ? (JSON.parse(raw) as QamTicketSnapshot) : null;
 }

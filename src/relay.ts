@@ -45,7 +45,8 @@ export async function fetchQualys(body: Record<string, unknown>): Promise<FetchR
 // （巨大な XML を JSON に包むと PS5.1 側が壊れるため）。
 export interface FetchBatchItem { kind: string; ok: boolean; pages: number; bytes: number; error?: string }
 export interface FetchBatchResult { ok: boolean; items?: FetchBatchItem[]; error?: string }
-export const fetchQualysBatch = (body: { kinds: string[]; base: string; user: string; pass?: string; secret?: string; proxy: string }): Promise<FetchBatchResult> =>
+// since/states は kind='ticket' 用、after は検査(scan)用（launched_after_datetime）。他の種別では無視される。
+export const fetchQualysBatch = (body: { kinds: string[]; base: string; user: string; pass?: string; secret?: string; proxy: string; since?: string; states?: string; after?: string }): Promise<FetchBatchResult> =>
   postJson('/qam/fetch-batch', body);
 
 // 取得済み XML（複数ページは PAGE_SEP 連結）を受け取る。取り出すと relay 側からは消える。

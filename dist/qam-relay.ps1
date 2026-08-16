@@ -165,6 +165,31 @@ function Invoke-QualysFetch { param($Body)
             'ips'    { $url = "$base/api/2.0/fo/asset/ip/?action=list&compliance_enabled=0&certview_enabled=0" }
             # user 一覧は /msp/user_list.php（GET・Basic）。応答 USER_LIST_OUTPUT(XML)。
             'user'   { $url = "$base/msp/user_list.php" }
+            # 修復チケット一覧は /msp/ticket_list.php（v1/MSP。v2 には無い）。
+            # states を書かないと OPEN だけになるので 4 状態すべて指定（クローズ済みも対象）。
+            # show_host_id=1 が無いと DETECTION/HOST_ID が出ない。
+            # since（modified_since_datetime）は呼び出し側が 'YYYY-MM-DDTHH:MM:SSZ' で渡す。
+            # 四半期検査（実施済み scan/map とそれぞれのスケジュール）。
+            # SCAN 系は FO API、MAP 系は v1(MSP) にしか無い（/api/2.0/fo/map/ は存在せず404）。
+            # after（launched_after_datetime）は呼び出し側が 'YYYY-MM-DDTHH:MM:SSZ' で渡す。
+            # show_ags=1 が無いと ASSET_GROUP_TITLE_LIST が返らず、対象AGを特定できない。
+            # v2.0 は EOS(2025-12)/EOL(2026-12)。公式の移行先は v3.0（入力パラメータ・
+            # 応答 SCAN_LIST_OUTPUT の構造は同じ）。
+            'scan' {
+                $url = "$base/api/3.0/fo/scan/?action=list&show_ags=1"
+                if ($Body.after) { $url += "&state=Finished&launched_after_datetime=$([Uri]::EscapeDataString([string]$Body.after))" }
+            }
+            # map_report_list.php が返すのは「保存されたマップレポート」＝save_report 付きで実行された分のみ。
+            'map'       { $url = "$base/msp/map_report_list.php" }
+            # スケジュール一覧の移行先は v5.0。v2.0 だけでなく v3.0/v4.0 も EOS(2025-12) 済みなので、
+            # 「2.0 → 3.0」ではなく 5.0 まで上げる（v5.0 のみ Active）。応答は SCHEDULE_SCAN_LIST_OUTPUT で同じ。
+            'scansched' { $url = "$base/api/5.0/fo/schedule/scan/?action=list" }
+            'mapsched'  { $url = "$base/msp/scheduled_scans.php?type=map" }
+            'ticket' {
+                $states = if ($Body.states) { [string]$Body.states } else { 'OPEN,RESOLVED,CLOSED,IGNORED' }
+                $url = "$base/msp/ticket_list.php?states=$states&show_host_id=1"
+                if ($Body.since) { $url += "&modified_since_datetime=$([Uri]::EscapeDataString([string]$Body.since))" }
+            }
             default  { throw "未知 kind: $($Body.kind)" }
         }
     }
@@ -202,6 +227,15 @@ function Invoke-QualysFetch { param($Body)
         $bytes = if ($content) { $content.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
         $xml = if ($bytes.Length) { [System.Text.Encoding]::UTF8.GetString($bytes) } else { '' }
         $next = Get-QamText1 $xml '<URL><!\[CDATA\[(.*?)\]\]></URL>'
+        # ticket_list.php は次ページURLを返さない。1,000 件で打ち切られると
+        # <TRUNCATION last="N"> が付くので、since_ticket_number=N+1 を足して自分で続きを組む。
+        if (-not $next -and $url -like '*ticket_list.php*') {
+            $lastNo = Get-QamText1 $xml '<TRUNCATION[^>]*\slast="(\d+)"'
+            if ($lastNo) {
+                $stripped = [regex]::Replace([string]$url, '&since_ticket_number=\d+', '')
+                $next = $stripped + '&since_ticket_number=' + ([int64]$lastNo + 1)
+            }
+        }
         $ok = $resp.IsSuccessStatusCode
         $reason = [string]$resp.ReasonPhrase
         $ctype = if ($content -and $content.Headers.ContentType) { [string]$content.Headers.ContentType } else { '' }
@@ -408,8 +442,10 @@ function Invoke-QamResolve { param($Body)
 #   並列にできるのは種別間（group / host / domain / user）。
 # ★応答は小さな JSON（種別ごとの成否・ページ数）だけを返し、XML 本体は一時ファイルへ置いて
 #   /qam/fetch-batch/result で生 body として渡す。PS5.1 の ConvertTo-Json は巨大文字列で壊れる。
-# 種別4つ + IPs in Subscription = 5 を 1 波で流せるようにする（4 だと 1 件が次の波に回る）。
-$QAM_FETCH_MAX_PARALLEL = 5
+# 1 波で流す最大数。資産4 + IPs + チケット + 検査4 = 10 を一度に流せるようにしておく
+# （上限がこれより小さいと、あふれた分だけ次の波に回って待ち時間が伸びる）。
+# Qualys 側の同時実行上限は契約により異なる。429/409 が出る環境では env で下げられるようにする。
+$QAM_FETCH_MAX_PARALLEL = if ($env:QAM_FETCH_MAX_PARALLEL -match '^\d+$') { [int]$env:QAM_FETCH_MAX_PARALLEL } else { 10 }
 $QAM_PAGE_SEP = "`n<!-- page -->`n"   # TS 側が生XMLを分割するときの目印（従来の連結と同じ）
 
 function Get-QamFetchCacheDir {
@@ -444,8 +480,16 @@ function Invoke-QamFetchBatch {
         $out = [ordered]@{ kind = $kind; ok = $false; pages = 0; bytes = 0; error = $null }
         try {
             $pages = New-Object System.Collections.ArrayList
-            $body = @{ kind = $kind; base = $req.base; user = $req.user; pass = $req.pass; secret = $req.secret; proxy = $req.proxy; noSession = $true }
+            # since は ticket だけが使う（modified_since_datetime）。他の kind では無視される。
+            # since=チケット / after=検査 のみが使う。他の kind では無視される。
+            $body = @{ kind = $kind; base = $req.base; user = $req.user; pass = $req.pass; secret = $req.secret; proxy = $req.proxy; since = $req.since; states = $req.states; after = $req.after; noSession = $true }
             $res = Invoke-QualysFetch ([pscustomobject]$body)
+            # 絞り込みパラメータ(launched_after_datetime)を受け付けない環境があるので、
+            # scan だけは条件無しで取り直す（件数は増えるが四半期の判定は TS 側で行う）。
+            if (-not $res.ok -and $kind -eq 'scan' -and $req.after) {
+                $body.after = ''
+                $res = Invoke-QualysFetch ([pscustomobject]$body)
+            }
             if (-not $res.ok) { $out.error = "status $($res.status)"; return $out }
             [void]$pages.Add([string]$res.xml)
             $next = $res.nextUrl
@@ -455,7 +499,13 @@ function Invoke-QamFetchBatch {
                 $guard++
                 if (-not $seen.Add([string]$next)) { break }   # 同じページを繰り返したら停止
                 $res = Invoke-QualysFetch ([pscustomobject]@{ url = $next; user = $req.user; pass = $req.pass; secret = $req.secret; proxy = $req.proxy; noSession = $true })
-                if (-not $res.ok) { $out.error = "ページ $guard で失敗 (status $($res.status))"; break }
+                if (-not $res.ok) {
+                    # 理由（例外文/応答の冒頭）まで残す。status だけだと原因が分からず調査できない。
+                    $why = (([string]$res.xml) -replace '\s+', ' ').Trim()
+                    if ($why.Length -gt 200) { $why = $why.Substring(0, 200) }
+                    $out.error = "ページ $guard で失敗 (status $($res.status)) $why"
+                    break
+                }
                 [void]$pages.Add([string]$res.xml)
                 $next = $res.nextUrl
             }

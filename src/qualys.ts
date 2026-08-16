@@ -3,7 +3,8 @@
 import { parseQualysXml } from './ingest/parse';
 import { fetchQualys, fetchQualysBatch, fetchBatchResult, PAGE_SEP, qualysUserAdd, qualysScheduleAdd, type FetchResult } from './relay';
 import { SCHEDULE_PATHS, scheduleParams, validateSchedule, type ScheduleInput } from './schedule';
-import type { QamEntity, QamInspectionRaw, QamRecords, QamSnapshot } from './types';
+import { parseTicketPages, type TicketQuery } from './tickets';
+import type { QamEntity, QamInspectionRaw, QamRecords, QamSnapshot, QamTicket } from './types';
 
 // pass は平文、secret は DPAPI 暗号文。secret があれば relay 側でだけ復号され、
 // ブラウザは平文を持たない。どちらか一方が入っていればよい。
@@ -125,25 +126,52 @@ export interface IpListResult { count: number | null; xml: string }
 // ページ送りはカーソル方式（次ページURLが応答に入る）なので、種別内は逐次のまま。
 export interface BatchDownload { kind: QamEntity; snapshot: QamSnapshot; raw: string; pages: number }
 // 並列取得の結果に IPs in Subscription も含める（種別と一緒に取る＝待ち時間が重ならない）。
-export interface BatchResult { results: BatchDownload[]; failures: { kind: string; error: string }[]; ips?: IpListResult }
+export interface TicketResult { tickets: QamTicket[]; raw: string; query: TicketQuery }
+export interface BatchResult { results: BatchDownload[]; failures: { kind: string; error: string }[]; ips?: IpListResult; tickets?: TicketResult; inspection?: InspectionDownload }
 export async function downloadEntitiesParallel(
-  kinds: QamEntity[], creds: QualysCreds, onProgress?: (msg: string) => void, withIps = false,
+  kinds: QamEntity[], creds: QualysCreds, onProgress?: (msg: string) => void, withIps = false, ticketOpt?: TicketQuery, inspectionAfter?: string,
 ): Promise<BatchResult> {
   // IPs in Subscription も同じプールで取る。別に await すると、その待ち時間だけ
   // 並列化の効果が削られる（種別4つを並列にしても IPs の分は直列に足される）。
-  const all = withIps ? [...kinds, 'ips'] : [...kinds];
+  const all: string[] = withIps ? [...kinds, 'ips'] : [...kinds];
+  // チケットも同じ波で取る（別に await すると、その待ち時間がそのまま総時間に足される）。
+  if (ticketOpt) all.push('ticket');
+  // 検査(実施済み scan/map ＋ それぞれのスケジュール)も同じ波で取る。
+  const INSP_KINDS = [['scan', '実施済みスキャン'], ['map', '実施済みマップ'], ['scansched', 'スキャンのスケジュール'], ['mapsched', 'マップのスケジュール']] as const;
+  if (inspectionAfter !== undefined) all.push(...INSP_KINDS.map(([k]) => k));
   onProgress?.(`${all.length} 件を並列で取得中…`);
-  const res = await fetchQualysBatch({ kinds: all, base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy });
+  const res = await fetchQualysBatch({ kinds: all, base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, since: ticketOpt?.since ?? '', states: ticketOpt?.states ?? '', after: inspectionAfter ?? '' });
   if (!res.ok) throw new Error(res.error || '並列取得に失敗しました');
   const results: BatchDownload[] = [];
   const failures: { kind: string; error: string }[] = [];
   let ips: IpListResult | undefined;
+  let tickets: TicketResult | undefined;
+  const insp: Record<string, string> = {};
+  const inspWarn: string[] = [];
   for (const item of res.items ?? []) {
     if (item.kind === 'ips') {
       // 失敗しても取込自体は続ける（ライセンス数が出ないだけ）。
       if (!item.ok) { ips = { count: null, xml: '' }; continue; }
       const xml = await fetchBatchResult('ips');
       ips = { count: countSubscriptionIps(xml), xml };
+      continue;
+    }
+    if (item.kind === 'ticket') {
+      // チケットが取れなくても資産の取込は続ける（失敗は呼び出し側が failures で名指しする）。
+      if (!item.ok) { failures.push({ kind: 'ticket', error: item.error || '取得に失敗しました' }); continue; }
+      const raw = await fetchBatchResult('ticket');
+      tickets = { tickets: parseTicketPages(raw.split(PAGE_SEP)), raw, query: ticketOpt! };
+      continue;
+    }
+    const inspLabel = INSP_KINDS.find(([k]) => k === item.kind)?.[1];
+    if (inspLabel) {
+      // 検査は 1 本でも取れれば表示する（契約/版でエンドポイントの有無に差があるため）。
+      // 取れなかったものは warnings に残し、黙って 0 件にしない。
+      if (!item.ok) { inspWarn.push(`${inspLabel}: ${item.error || '取得に失敗しました'}`); continue; }
+      const xml = await fetchBatchResult(item.kind);
+      const err = qualysErrorText(xml); // HTTP 200 でも本文がエラーなら失敗扱い
+      if (err) { inspWarn.push(`${inspLabel}: ${err}`); continue; }
+      insp[item.kind] = xml;
       continue;
     }
     const kind = item.kind as QamEntity;
@@ -162,7 +190,11 @@ export async function downloadEntitiesParallel(
     }
     results.push({ kind, snapshot: { entity: kind, datetime, records }, raw, pages: item.pages });
   }
-  return { results, failures, ips };
+  const inspection: InspectionDownload | undefined = inspectionAfter === undefined ? undefined : {
+    raw: { scans: insp.scan ?? '', maps: insp.map ?? '', scanSchedules: insp.scansched ?? '', mapSchedules: insp.mapsched ?? '', fetchedAt: new Date().toISOString() },
+    warnings: inspWarn,
+  };
+  return { results, failures, ips, tickets, inspection };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -173,6 +205,7 @@ export type InspectionProgress = (label: string) => void;
 
 // Qualys の日時パラメータ形式 'YYYY-MM-DDTHH:MM:SSZ'（ミリ秒は付けない）。
 const qualysDateTime = (d: Date): string => d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+export { qualysDateTime as qualysDateTimeUtc };
 
 // 1本でも取れれば表示する（エンドポイントの有無は契約/版で差があるため、全滅時だけ例外）。
 export interface InspectionDownload { raw: QamInspectionRaw; warnings: string[] }
@@ -188,43 +221,20 @@ export function qualysErrorText(xml: string): string {
   return e ? e[1].replace(/\s+/g, ' ').trim() : '';
 }
 
+// 四半期検査の取得。実体は並列プール（downloadEntitiesParallel）に載せる。
+// ★別経路で1本ずつ取ると、その待ち時間がそのまま総時間に足される。
 export async function downloadInspection(
   creds: QualysCreds, quarterStart: Date, onProgress?: InspectionProgress,
 ): Promise<InspectionDownload> {
-  const base = creds.base.replace(/\/+$/, '');
-  const warnings: string[] = [];
-  const get = async (url: string): Promise<string> => {
-    const res = await fetchQualys({ base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true, url });
-    if (!res.ok || !res.xml) {
-      throw new Error(`status ${res.status}: ${failReason(res) || 'アカウント権限やプロキシ設定を確認してください'}`);
-    }
-    const err = qualysErrorText(res.xml);
-    if (err) throw new Error(err); // 200 でも本文がエラーなら失敗扱い（fallback / 警告へ）
-    return res.xml;
-  };
-  // fallback は「絞り込みパラメータを受け付けない環境」向けの取り直し
-  // （件数は増えるが四半期の判定は TS 側で行うので結果は変わらない）。
-  const tryGet = async (label: string, url: string, fallback?: string): Promise<string> => {
-    onProgress?.(`${label}を取得中`);
-    try { return await get(url); } catch (e) {
-      if (fallback) { try { return await get(fallback); } catch { /* 下の警告へ */ } }
-      warnings.push(`${label}: ${(e as Error).message}`);
-      return '';
-    }
-  };
-  const after = encodeURIComponent(qualysDateTime(quarterStart));
-  // show_ags=1 が無いと ASSET_GROUP_TITLE_LIST が返らない（＝対象 AssetGroup を特定できず全件が未対応になる）。
-  // 公式サンプルも ?action=list&show_ags=1&show_op=1。fallback も show_ags を落とさない。
-  const scanUrl = `${base}/api/2.0/fo/scan/?action=list&show_ags=1`;
-  const scans = await tryGet('実施済みスキャン', `${scanUrl}&state=Finished&launched_after_datetime=${after}`, scanUrl);
-  // マップは v1(MSP) にしか無い。v2 に /api/2.0/fo/map/ は存在せず 404 になる。
-  // map_report_list.php が返すのは「保存されたマップレポート」＝save_report 付きで実行されたマップのみ。
-  const maps = await tryGet('実施済みマップ', `${base}/msp/map_report_list.php`);
-  const scanSchedules = await tryGet('スキャンのスケジュール', `${base}/api/2.0/fo/schedule/scan/?action=list`);
-  // スケジュールされたマップも v1 側（type=map で一覧）。
-  const mapSchedules = await tryGet('マップのスケジュール', `${base}/msp/scheduled_scans.php?type=map`);
-  if (!scans && !maps && !scanSchedules && !mapSchedules) throw new Error(warnings.join(' / ') || '取得に失敗しました');
-  return { raw: { scans, maps, scanSchedules, mapSchedules, fetchedAt: new Date().toISOString() }, warnings };
+  onProgress?.('検査履歴・スケジュールを取得中');
+  const res = await downloadEntitiesParallel([], creds, undefined, false, undefined, qualysDateTime(quarterStart));
+  const insp = res.inspection!;
+  const r = insp.raw;
+  // 1 本も取れなかったときだけ失敗にする（エンドポイントの有無は契約/版で差がある）。
+  if (!r.scans && !r.maps && !r.scanSchedules && !r.mapSchedules) {
+    throw new Error(insp.warnings.join(' / ') || '取得に失敗しました');
+  }
+  return insp;
 }
 
 // ──────────────────────────────────────────────────────────────────────────

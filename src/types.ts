@@ -61,3 +61,23 @@ export interface QamComment {
   author: string;
   text: string;
 }
+
+// 修復チケット（Qualys /msp/ticket_list.php の 1 件）。
+// 資産(QamRecord)と違い差分・改廃履歴は取らない（状態が頻繁に変わるので取込時点の一覧として持つ）。
+export interface QamTicket {
+  number: string;   // チケットID（TICKET/NUMBER）
+  state: string;    // ステータス（CURRENT_STATE: OPEN/RESOLVED/CLOSED/IGNORED）
+  hostId: string;   // ホストID（DETECTION/HOST_ID。show_host_id=1 のときだけ入る）
+  ip: string;       // DETECTION/IP
+  fqdn: string;     // DETECTION/FQDN（無ければ DNSNAME）
+  created: string;  // チケットオープン日時（CREATION_DATETIME・UTC）
+}
+
+// チケット一覧のスナップショット（取込 1 回分）。
+export interface QamTicketSnapshot {
+  fetchedAt: string;   // 取得時刻(ISO)
+  mode: 'delta' | 'open'; // delta=直近1ヶ月の変化分 / open=オープン中を全件
+  since: string;       // modified_since_datetime に渡した値（open のときは空）
+  states: string;      // states パラメータに渡した値
+  tickets: QamTicket[];
+}

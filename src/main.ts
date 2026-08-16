@@ -15,7 +15,7 @@ import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, r
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
-import { downloadEntitiesParallel, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole } from './qualys';
+import { downloadEntitiesParallel, type TicketResult, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole, type QualysCreds, type InspectionDownload, qualysDateTimeUtc } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { buildInspectionForm } from './ui/views/schedule-form';
@@ -24,15 +24,16 @@ import type { ScheduleInput } from './schedule';
 import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, buildAssetGroupEditParams, buildDomainParams, buildDomainEditParams, mergeNetblocks, DEFAULT_REGIONS, type ProvisionInput } from './provision';
 import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type AssetRegistry, type RegistrySource } from './precheck';
 import { parseQualysXml } from './ingest/parse';
+import { ticketQuery, resolveTicketMode } from './tickets';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv } from './ingest/history-csv';
 import {
-  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, type QamOp,
+  getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, getTicketStamps, readTickets, writeTickets, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, type QamOp,
 } from './store';
 // メモ・注釈・操作履歴・管理表・ライセンス推移は「複数人が同時に足す」記録なので repo 経由。
 // 保管先（ファイル / SharePoint リスト）は起動時に決まる。
 import { repo, setRepo } from './api/repo';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
-import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords } from './types';
+import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords, QamTicket } from './types';
 
 // 操作履歴記録: 作業者(個人設定の記入者名)＋時刻で登録/削除/変更を残す。失敗しても本処理は止めない。
 function recordOp(action: string, detail: string, entity?: QamEntity): void {
@@ -43,7 +44,7 @@ function recordOp(action: string, detail: string, entity?: QamEntity): void {
 const GUARD_RATIO = 0.5;
 
 const state = {
-  mode: 'assets' as 'assets' | 'history' | 'ops' | 'licenses' | 'inspection' | 'quick',
+  mode: 'assets' as 'assets' | 'history' | 'tickets' | 'ops' | 'licenses' | 'inspection' | 'quick',
   entity: 'group' as QamEntity,
   asof: '',
   q: '',
@@ -55,6 +56,7 @@ const state = {
   wrap: false,
   licenseHidden: new Set<number>(), // ライセンス推移グラフで非表示にした年度
   inspAsof: '',                     // 四半期検査で表示する取込日（空＝最新）
+  ticketAsof: '',                   // チケット一覧で表示する取込日時（空＝最新）
 };
 
 // Unique Hosts Scanned（Qualys）= 実際にスキャン済み（最終スキャン日時あり）の一意ホスト数。host 一覧から算出。
@@ -204,7 +206,7 @@ function renderLeft(): void {
   clear(left);
   left.append(el('div', { class: 'qam-navhead' }, ['ビュー']));
   const nav = el('div', { class: 'qam-nav' });
-  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['inspection', '四半期検査', 'check'], ['quick', '簡易検査', 'send'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
+  const modes: [typeof state.mode, string, string][] = [['assets', '資産一覧', 'file'], ['history', '変更履歴', 'refresh'], ['tickets', 'チケット一覧', 'alert'], ['inspection', '四半期検査', 'check'], ['quick', '簡易検査', 'send'], ['licenses', 'ライセンス数推移', 'trend'], ['ops', '操作履歴', 'message']];
   for (const [m, label, ic] of modes) {
     const b = el('button', { 'aria-current': String(state.mode === m), html: `${icon(ic, 16)}<span>${label}</span>` });
     b.addEventListener('click', () => { state.mode = m; state.selected.clear(); refresh(); });
@@ -230,7 +232,7 @@ async function refresh(): Promise<void> {
   }
   // subbar
   const subbar = el('div', { class: 'qam-subbar' });
-  const titles = { assets: '資産一覧', history: '変更履歴', ops: '操作履歴', licenses: 'ライセンス数推移', inspection: '四半期検査', quick: '簡易検査' } as const;
+  const titles = { assets: '資産一覧', history: '変更履歴', tickets: 'チケット一覧', ops: '操作履歴', licenses: 'ライセンス数推移', inspection: '四半期検査', quick: '簡易検査' } as const;
   const title = el('span', { class: 'qam-title' }, [titles[state.mode]]);
   const count = el('span', { class: 'qam-count' });
   subbar.append(title, count, el('span', { class: 'qam-spacer' }));
@@ -269,6 +271,7 @@ async function refresh(): Promise<void> {
 
   if (state.mode === 'assets') await renderAssets(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'history') await renderHistory(subbar, count, toolbar, filterBar, tableHost);
+  else if (state.mode === 'tickets') await renderTickets(subbar, count, toolbar, filterBar, tableHost);
   else if (state.mode === 'licenses') await renderLicenses(count, tableHost);
   else if (state.mode === 'inspection') await renderInspection(count, tableHost);
   else if (state.mode === 'quick') await renderQuickInspect(count, tableHost);
@@ -674,6 +677,62 @@ async function renderOps(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLE
   }));
   addFilterUI(toolbar, filterBar, filterRef);
   addExportButtons(toolbar, '操作履歴', exportRef, columnRef);
+  host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
+}
+
+// チケット一覧ビュー: 修復チケット（取込時に取得した直近1ヶ月の動きがあった分）を表示。
+// 接続点ID・FQDN は Qualys のチケット応答に無い/欠けることがあるので、同じ基準時点の host
+// スナップショットから補う（ホストIDで引き、無ければ IP で引く）。
+async function renderTickets(subbar: HTMLElement, count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
+  clear(leftCalHost);
+  const stamps = await getTicketStamps(backend);
+  const sel = el('select', { class: 'in' }) as HTMLSelectElement;
+  sel.append(el('option', { value: '' }, ['最新']));
+  for (const s of [...stamps].reverse()) sel.append(el('option', { value: s, selected: state.ticketAsof === s }, [fmtStamp(s)]));
+  sel.addEventListener('change', () => { state.ticketAsof = sel.value; refresh(); });
+  subbar.append(el('span', { class: 'qam-count' }, ['基準（取込日時）']), sel);
+
+  const stamp = resolveAsof(stamps, state.ticketAsof || undefined);
+  clear(host);
+  if (!stamp) {
+    host.append(emptyState('まだチケットの取込がありません', '右上の「取込」→ 取得対象に「チケット」を含めて実行してください'));
+    count.textContent = '0 件'; return;
+  }
+  const snap = await readTickets(backend, stamp);
+  // ホストID→接続点ID / ホスト情報。IP しか無いチケットのために IP→ホストID も作る。
+  const agSetten = await buildAgSetten('host', state.ticketAsof);
+  const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'), state.ticketAsof || undefined);
+  const hSnap = hStamp ? await readSnapshot(backend, 'host', hStamp) : null;
+  const byHostId: Record<string, QamRecord> = {};
+  const idByIp: Record<string, string> = {};
+  for (const h of Object.values(hSnap?.records ?? {}) as QamRecord[]) {
+    byHostId[h.key] = h;
+    const ip = h.scalar.IP; if (ip && !(ip in idByIp)) idByIp[ip] = h.key;
+  }
+  const hostIdOf = (t: QamTicket): string => t.hostId || idByIp[t.ip] || '';
+  const fqdnOf = (t: QamTicket): string => { const h = byHostId[hostIdOf(t)]; return t.fqdn || h?.scalar.FQDN || h?.scalar.DNS || ''; };
+
+  let rows = (snap?.tickets ?? []).filter((t) => matchQ([t.number, t.state, hostIdOf(t), t.ip, fqdnOf(t), agSetten[hostIdOf(t)]]));
+  count.textContent = `${rows.length} 件 / ${fmtStamp(stamp)} 時点${snap ? `（${ticketScopeLabel(snap.mode, snap.since)}）` : ''}`;
+  const cols: Column[] = [
+    { id: 'number', label: 'チケットID', mono: true, width: 110, render: (t: QamTicket) => esc(t.number), sortVal: (t: QamTicket) => t.number.padStart(12, '0') }, // 文字列ソートなので桁を揃える
+    { id: 'state', label: 'ステータス', width: 110, render: (t: QamTicket) => esc(t.state) },
+    { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (t: QamTicket) => esc(hostIdOf(t)) },
+    { id: 'ip', label: 'IP', mono: true, width: 140, render: (t: QamTicket) => esc(t.ip) },
+    { id: 'fqdn', label: 'FQDN', render: (t: QamTicket) => esc(fqdnOf(t)) },
+    { id: 'setten', label: '接続点ID', mono: true, width: 130, render: (t: QamTicket) => esc(agSetten[hostIdOf(t)] ?? '') },
+    { id: 'created', label: 'チケットオープン日時', mono: true, width: 170, render: (t: QamTicket) => esc(fmtJst(t.created)), sortVal: (t: QamTicket) => t.created },
+  ];
+  const exportRef: { fn?: () => ExportMatrix } = {};
+  const filterRef = {} as FilterRef;
+  const columnRef: { open?: (a: HTMLElement) => void } = {};
+  clear(host);
+  host.append(renderTable({
+    viewId: 'tickets', columns: cols, rows, getKey: (t: QamTicket) => t.number,
+    selected: state.selected, exportRef, filterRef, columnRef,
+  }));
+  addFilterUI(toolbar, filterBar, filterRef);
+  addExportButtons(toolbar, 'チケット一覧', exportRef, columnRef);
   host.querySelector('.qam-table')?.classList.toggle('qam-wrap', state.wrap);
 }
 
@@ -1145,6 +1204,22 @@ async function saveInspectionRaw(raw: QamInspectionRaw): Promise<void> {
   }
 }
 
+// scan/map の実施済み・スケジュールを取得して保存する。取込ビューと四半期検査ビューで共有。
+// 一部のエンドポイントが取れなくても保存はする（取れなかった理由は warnings で返す）。
+async function fetchAndStoreInspection(creds: QualysCreds, fiscalStartMonth: number): Promise<{ warnings: string[]; label: string }> {
+  const q = quarterOf(new Date(), fiscalStartMonth || 4);
+  const insp = await downloadInspection(creds, q.start);
+  await storeInspection(insp, q.label);
+  return { warnings: insp.warnings, label: q.label };
+}
+
+// 取得済みの検査データを保存する（取込ビュー・四半期検査ビューで共有）。
+async function storeInspection(insp: InspectionDownload, label: string): Promise<void> {
+  await writeInspection(backend, dateOfStamp(stampNow()), insp.raw); // 取込日ごとに保持（同日再取得は上書き）
+  await saveInspectionRaw(insp.raw);                                 // 応答XMLを raw/<日付>/ に保存（原因調査用）
+  recordOp('四半期検査 取得', `${label} の実施済み/スケジュールを取得${insp.warnings.length ? `（一部失敗: ${insp.warnings.length} 件）` : ''}`);
+}
+
 // Qualys から 実施済み/スケジュールの scan・map を取得してキャッシュし、再描画する。
 async function runInspectionFetch(): Promise<void> {
   if (inspectionBusy) return;
@@ -1155,13 +1230,8 @@ async function runInspectionFetch(): Promise<void> {
   setRelayBusy(true); // 取得中は死活ポーリングを止める（単一スレッド relay の誤検知防止）
   await refresh();    // ボタンを「取得中…」表示に
   try {
-    const q = quarterOf(new Date(), cfg.fiscalStartMonth || 4);
-    const { raw, warnings } = await downloadInspection(creds, q.start);
-    const today = dateOfStamp(stampNow());
-    await writeInspection(backend, today, raw); // 取込日ごとに保持（同日再取得は上書き）
-    await saveInspectionRaw(raw);               // 応答XMLを raw/<日付>/ に保存（原因調査用）
+    const { warnings } = await fetchAndStoreInspection(creds, cfg.fiscalStartMonth || 4);
     state.inspAsof = '';                        // 取得直後は最新を表示する
-    recordOp('四半期検査 取得', `${q.label} の実施済み/スケジュールを取得${warnings.length ? `（一部失敗: ${warnings.length} 件）` : ''}`);
     // 一部のエンドポイントが取れなくても表示はする。取れなかったものは理由を出す（黙って0件にしない）。
     if (warnings.length) toast(`一部を取得できませんでした — ${warnings.join(' / ')}`, 'error');
     else toast('四半期検査の状況を取得しました', 'ok');
@@ -1310,6 +1380,20 @@ async function commitOne(snap: { entity: QamEntity; datetime: string; records: a
   if (res.committed && snap.entity === 'host') await repo.recordLicense(res.stamp, ipCount ?? 0, uniqueHostsScanned(snap.records as QamRecords)).catch(() => undefined);
 }
 
+// チケットの保存。資産と違い差分・改廃履歴は取らない（状態が頻繁に変わるため、
+// 取込時点の一覧をそのまま残す）。同じ取込日時なら上書き。生XMLは検証用に raw/ にも残す。
+async function commitTickets(t: TicketResult): Promise<void> {
+  const stamp = stampNow();
+  const q = t.query;
+  await writeTickets(backend, { fetchedAt: new Date().toISOString(), mode: q.mode, since: q.since, states: q.states, tickets: t.tickets }, stamp);
+  if (t.raw) await backend.write(`raw/${dateOfStamp(stamp)}/tickets-${stamp}.xml`, t.raw).catch(() => undefined);
+  recordOp('取込', `チケット ${fmtStamp(stamp)}: ${t.tickets.length.toLocaleString()}件（${ticketScopeLabel(q.mode, q.since)}）`);
+}
+
+// 取得範囲の説明文（操作履歴と一覧の見出しで同じ言い回しを使う）。
+const ticketScopeLabel = (mode: 'delta' | 'open', since: string): string =>
+  (mode === 'open' ? '現時点でオープン中を全件' : `${fmtJst(since)} 以降に起票・変更`);
+
 // Qualys アカウント/パスワード未登録時の登録モーダル。保存して {user,pass} を返す。取消は null。
 function promptQualysCreds(curUser: string, curPass: string): Promise<{ user: string; pass: string } | null> {
   return new Promise((resolve) => {
@@ -1440,21 +1524,76 @@ function openIngest(): void {
   function showApi(): void {
     apiBtn.className = 'btn btn--sm btn--primary'; xmlBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm'; valBtn.className = 'btn btn--sm';
     clear(panel);
-    const sel = el('select', { class: 'in' }) as HTMLSelectElement;
-    sel.append(el('option', { value: 'all' }, ['すべて']));
-    ENTITIES.forEach((e) => sel.append(el('option', { value: e.key }, [e.label])));
+    // 取得対象は複数選択（relay 側で並列に取るので、まとめて選ぶほど速い）。
+    // 「すべて」は資産4種のトグル。チケットは資産(QamEntity)ではないので独立したチェックにする。
+    const boxes: HTMLInputElement[] = [];
+    const row = el('div', { class: 'qam-chip-row' });
+    const allCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    allCb.checked = true;
+    const syncAll = (): void => {
+      // 「すべて」は個別の状態から従属的に決まる（全部ON=ON / 一部ON=中間表示）。
+      allCb.checked = boxes.every((b) => b.checked);
+      allCb.indeterminate = !allCb.checked && boxes.some((b) => b.checked);
+    };
+    allCb.addEventListener('change', () => { for (const b of boxes) b.checked = allCb.checked; allCb.indeterminate = false; });
+    row.append(el('label', { class: 'qam-pick qam-pick--all' }, [allCb, 'すべて']));
+    // 「すべて」の対象＝資産4種 ＋ 検査(scan/map の実施済み・スケジュール)。個別にも選べる。
+    // チケットだけは取得範囲(下のラジオ)があるので独立させる。
+    const allTargets = [...ENTITIES.map((e) => ({ key: e.key as string, label: e.label })), { key: 'inspection', label: '検査履歴・スケジュール' }];
+    for (const t of allTargets) {
+      const cb = el('input', { type: 'checkbox', value: t.key }) as HTMLInputElement;
+      cb.checked = true;
+      cb.addEventListener('change', syncAll);
+      boxes.push(cb);
+      row.append(el('label', { class: 'qam-pick' }, [cb, t.label]));
+    }
+
+    // チケットは取得範囲を選ぶ: 直近1ヶ月の変化分 / 現時点でオープン中を全件。
+    // ★過去に一度も取込が無いときは「変化分」を選ばせない。変化分だけを保存すると、
+    //   その期間に動きが無かった既存のオープンチケットが一覧から丸ごと欠ける。
+    const tCb = el('input', { type: 'checkbox' }) as HTMLInputElement;
+    tCb.checked = true;
+    const tDelta = el('input', { type: 'radio', name: 'qam-tmode', value: 'delta' }) as HTMLInputElement;
+    const tOpen = el('input', { type: 'radio', name: 'qam-tmode', value: 'open' }) as HTMLInputElement;
+    tDelta.checked = true;
+    const tNote = el('div', { class: 'qam-hint' });
+    const tRow = el('div', { class: 'qam-chip-row', style: 'margin-top:var(--s-2)' }, [
+      el('label', { class: 'qam-pick' }, [tDelta, '直近1ヶ月の変化分（起票・状態変更）']),
+      el('label', { class: 'qam-pick' }, [tOpen, '現時点でオープン中を全件']),
+    ]);
+    const syncTicket = (): void => { for (const r of [tDelta, tOpen]) r.disabled = !tCb.checked || (r === tDelta && tDelta.dataset.locked === '1'); };
+    tCb.addEventListener('change', syncTicket);
+    // 取込実績が無ければ「変化分」を選べないようにする（判定は保存済みスナップショットの有無）。
+    void getTicketStamps(backend).then((st) => {
+      if (st.length) return;
+      tDelta.dataset.locked = '1'; tDelta.checked = false; tOpen.checked = true;
+      tNote.textContent = 'チケットの取込実績がないため、初回は「オープン中を全件」のみ選べます。';
+      syncTicket();
+    }).catch(() => undefined);
+    const ticketBox = el('div', { style: 'margin-top:var(--s-4)' }, [
+      el('div', { class: 'qam-chip-row' }, [el('label', { class: 'qam-pick qam-pick--all' }, [tCb, 'チケット'])]),
+      tRow, tNote,
+    ]);
     const go = el('button', { class: 'btn btn--primary', html: `${icon('download', 16)}<span>ダウンロードして取込</span>` });
     go.addEventListener('click', async () => {
       await ensureAuthor(); // 取込（更新作業）の直前に記入者名が未設定なら促す
-      go.setAttribute('disabled', 'true'); sel.setAttribute('disabled', 'true');
+      go.setAttribute('disabled', 'true'); allCb.disabled = true; tCb.disabled = true;
+      for (const b of [...boxes, tDelta, tOpen]) b.disabled = true;
       const ingestOwner = localStorage.getItem(LS.author) || '';
       let locked = false;
       try {
         // 認証情報の解決は resolveQualysCreds に一本化する（判定を各所で書くと、
         // 暗号文(secret)で保存済みなのに平文だけ見て毎回聞く、という取りこぼしが起きる）。
+        if (!boxes.some((b) => b.checked) && !tCb.checked) { setProg('取得対象が選ばれていません', false); toast('取得対象を1つ以上選んでください', 'error'); return; }
         const creds = await resolveQualysCreds();
         if (!creds) { setProg('Qualys 接続先/アカウントが未登録のため中止しました', false); return; }
-        const kinds = sel.value === 'all' ? ENTITIES.map((e) => e.key) : [sel.value as QamEntity];
+        // チケット/検査は資産(QamEntity)ではないので kinds には入れず、別に扱う。
+        const picked = boxes.filter((b) => b.checked).map((b) => b.value);
+        const wantInspection = picked.includes('inspection');
+        const kinds = picked.filter((k) => k !== 'inspection') as QamEntity[];
+        // 取込実績の判定はここでも取り直す（画面を開いた直後に押されても取りこぼさないため）。
+        const hasTickets = (await getTicketStamps(backend)).length > 0;
+        const ticketOpt = tCb.checked ? ticketQuery(resolveTicketMode(tDelta.checked ? 'delta' : 'open', hasTickets)) : undefined;
         // ダウンロード前の重複チェック: 対象種別に本日分の取込が既にあれば、ダウンロード前に1回だけ確認する。
         const today = dateOfStamp(stampNow());
         const dupKinds: QamEntity[] = [];
@@ -1479,7 +1618,12 @@ function openIngest(): void {
         // 直列化されてしまう）。IPs in Subscription も同じプールに載せる——別に取ると
         // その待ち時間だけ並列化の効果が削られる。保存は SharePoint への書き込みなので順に行う。
         const needIps = kinds.includes('host');
-        const { results, failures, ips } = await downloadEntitiesParallel(kinds, creds, (m) => setProg(m, true), needIps);
+        // チケットは直近1ヶ月に起票 or 状態変更があった分だけ（Qualys 側で絞る）。
+        // 検査も同じ 1 波に載せる（別に await すると、その待ち時間だけ総時間が伸びる）。
+        const cfg0 = await getConfig();
+        const inspAfter = wantInspection ? quarterOf(new Date(), cfg0.fiscalStartMonth || 4) : null;
+        const { results, failures, ips, tickets, inspection } = await downloadEntitiesParallel(
+          kinds, creds, (m) => setProg(m, true), needIps, ticketOpt, inspAfter ? qualysDateTimeUtc(inspAfter.start) : undefined);
         if (ips) {
           ipCount = ips.count;
           if (ips.xml) { try { await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ips.xml); } catch { /* XML保存失敗は本処理に影響させない */ } }
@@ -1488,8 +1632,24 @@ function openIngest(): void {
           setProg(`${labelOf(dl.kind)}: 差分計算・保存中…（${Object.keys(dl.snapshot.records).length.toLocaleString()} 件）`, true);
           await commitOne(dl.snapshot, dl.raw, dup, ipCount);
         }
+        if (tickets) {
+          setProg(`チケット: 保存中…（${tickets.tickets.length.toLocaleString()} 件）`, true);
+          await commitTickets(tickets);
+        }
+        if (inspection && inspAfter) {
+          const r = inspection.raw;
+          if (!r.scans && !r.maps && !r.scanSchedules && !r.mapSchedules) {
+            recordOp('取込失敗', `検査履歴・スケジュール: ${inspection.warnings.join(' / ') || '取得に失敗しました'}`);
+            toast('検査履歴・スケジュールを取得できませんでした', 'error');
+          } else {
+            setProg('検査履歴・スケジュール: 保存中…', true);
+            await storeInspection(inspection, inspAfter.label);
+            if (inspection.warnings.length) toast(`検査の一部を取得できませんでした — ${inspection.warnings.join(' / ')}`, 'error');
+          }
+        }
         // 1 種別が失敗しても他は取り込む（失敗は名指しで残す）。
         for (const f of failures) {
+          if (f.kind === 'ticket') { recordOp('取込失敗', `チケット: ${f.error}`); toast(`チケットの取得に失敗: ${f.error}`, 'error'); continue; }
           const kind = f.kind as QamEntity;
           recordOp('取込失敗', `${labelOf(kind)}: ${f.error}`, kind);
           toast(`${labelOf(kind)} の取得に失敗: ${f.error}`, 'error');
@@ -1499,10 +1659,12 @@ function openIngest(): void {
       } catch (e) { setProg('失敗: ' + (e as Error).message, false); toast('取込に失敗しました: ' + (e as Error).message, 'error'); }
       finally {
         if (locked) await repo.releaseIngestLock(ingestOwner).catch(() => undefined);
-        setRelayBusy(false); go.removeAttribute('disabled'); sel.removeAttribute('disabled');
+        setRelayBusy(false); go.removeAttribute('disabled'); allCb.disabled = false; tCb.disabled = false;
+        for (const b of boxes) b.disabled = false;
+        syncTicket();
       }
     });
-    panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['取得対象']), sel]), go);
+    panel.append(el('div', { class: 'qam-field' }, [el('label', {}, ['取得対象']), row, ticketBox]), go);
   }
   function showXml(): void {
     xmlBtn.className = 'btn btn--sm btn--primary'; apiBtn.className = 'btn btn--sm'; histBtn.className = 'btn btn--sm'; valBtn.className = 'btn btn--sm';
@@ -1949,7 +2111,10 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
     setRelayBusy(true);
     // 取得は手動取込と同じ経路（relay 内で並列）。IPs も同じプールに載せる。
     let ipCount: number | null = null;
-    const { results, failures, ips } = await downloadEntitiesParallel(pending, creds, undefined, pending.includes('host'));
+    // チケットは日次で取り直す（状態が変わるので、本日分の有無に関わらず最新を取る）。
+    // 取込実績が無いうちは変化分だけでは全体像にならないので、初回は全件で取る。
+    const tq = ticketQuery(resolveTicketMode('delta', (await getTicketStamps(backend)).length > 0));
+    const { results, failures, ips, tickets } = await downloadEntitiesParallel(pending, creds, undefined, pending.includes('host'), tq);
     if (ips) {
       ipCount = ips.count;
       if (ips.xml) await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ips.xml).catch(() => undefined);
@@ -1957,6 +2122,7 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
     for (const dl of results) {
       await commitOne(dl.snapshot, dl.raw, undefined, ipCount, true); // auto=true（非対話）
     }
+    if (tickets) await commitTickets(tickets);
     for (const f of failures) recordOp('自動取込失敗', `${f.kind}: ${f.error}`);
     recordOp('自動取込完了', pending.join(','));
   } catch (e) { recordOp('自動取込エラー', (e as Error).message); }
