@@ -10,7 +10,7 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, relayBackend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, resolveHosts, protectSecret } from './relay';
+import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, resolveHosts, protectSecret } from './relay';
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
@@ -29,7 +29,7 @@ import {
 } from './store';
 // メモ・注釈・操作履歴・管理表・ライセンス推移は「複数人が同時に足す」記録なので repo 経由。
 // 保管先（ファイル / SharePoint リスト）は起動時に決まる。
-import { repo, setRepo, fileRepo } from './api/repo';
+import { repo, setRepo } from './api/repo';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords } from './types';
 
@@ -1076,85 +1076,6 @@ async function runProvision(
 }
 
 // 接続先と認証情報を解決（未設定ならその場で入力を促す）。取得・登録で共有する。
-// ローカル（relay のデータディレクトリ）に残っている既存データを SharePoint へ移す。
-// SharePoint 一本化にあたっての引っ越し用。何度実行してもよいよう、
-// **同名が既にあるものは上書きしない**（後から取り込んだ SharePoint 側を壊さない）。
-//   ファイル（スナップショット・履歴・生XML）→ ライブラリ
-//   記録（メモ・注釈・操作履歴・管理表・ライセンス推移）→ リスト
-async function migrateLocalToSharePoint(onProgress: (msg: string) => void): Promise<string[]> {
-  const done: string[] = [];
-  const local = fileRepo(relayBackend);
-
-  // 1) ファイル系: ディレクトリを辿って写す
-  const copyDir = async (dir: string): Promise<number> => {
-    let n = 0;
-    let names: string[] = [];
-    try { names = await relayBackend.list(dir); } catch { return 0; }
-    for (const name of names) {
-      const path = dir ? `${dir}/${name}` : name;
-      if (!name.includes('.')) { n += await copyDir(path); continue; } // 拡張子が無ければフォルダ扱い
-      if (await backend.read(path) !== null) continue;                  // 既にある物は触らない
-      const body = await relayBackend.read(path);
-      if (body === null) continue;
-      onProgress(`ファイルを移送中: ${path}`);
-      await backend.write(path, body);
-      n++;
-    }
-    return n;
-  };
-  for (const dir of ['snapshots', 'history', 'raw', 'inspection']) {
-    const n = await copyDir(dir);
-    if (n) done.push(`${dir}: ${n} ファイル`);
-  }
-  const runs = await relayBackend.read('runs.jsonl');
-  if (runs && await backend.read('runs.jsonl') === null) { await backend.write('runs.jsonl', runs); done.push('runs.jsonl'); }
-
-  // 2) 記録系: リストへ入れ直す（ts をキーに、既にある行は飛ばす）
-  onProgress('メモ・注釈・操作履歴を移送中…');
-  const existingComments = new Set((await repo.readComments()).map((c) => `${c.entity}|${c.id}|${c.ts}`));
-  let nc = 0;
-  for (const c of await local.readComments()) {
-    if (existingComments.has(`${c.entity}|${c.id}|${c.ts}`)) continue;
-    await repo.addComment(c); nc++;
-  }
-  if (nc) done.push(`メモ: ${nc} 件`);
-
-  let na = 0;
-  for (const e of ENTITIES.map((x) => x.key)) {
-    const all = await local.readAnnotations(e);
-    const updates = Object.entries(all).flatMap(([id, fields]) =>
-      Object.entries(fields).map(([field, value]) => ({ id, field, value })));
-    if (!updates.length) continue;
-    await repo.setAnnotationsBulk(e, updates); na += updates.length;
-  }
-  if (na) done.push(`注釈: ${na} 件`);
-
-  const existingOps = new Set((await repo.readOps()).map((o) => `${o.ts}|${o.action}`));
-  let no = 0;
-  for (const o of await local.readOps()) {
-    if (existingOps.has(`${o.ts}|${o.action}`)) continue;
-    await repo.logOp(o); no++;
-  }
-  if (no) done.push(`操作履歴: ${no} 件`);
-
-  const existingIns = new Set((await repo.readManualInspections()).map((m) => `${m.ts}|${m.kind}`));
-  let ni = 0;
-  for (const m of await local.readManualInspections()) {
-    if (existingIns.has(`${m.ts}|${m.kind}`)) continue;
-    await repo.appendManualInspection(m); ni++;
-  }
-  if (ni) done.push(`簡易検査の管理表: ${ni} 件`);
-
-  const existingLic = new Set((await repo.readLicenses()).map((l) => l.ts));
-  let nl = 0;
-  for (const l of await local.readLicenses()) {
-    if (existingLic.has(l.ts)) continue;
-    await repo.recordLicense(l.ts, l.ips, l.scanned); nl++;
-  }
-  if (nl) done.push(`ライセンス推移: ${nl} 件`);
-
-  return done;
-}
 
 // アプリ本体（バンドル）を SharePoint のライブラリへ置く。
 // ローダはここから読むので、更新はこの配置を実行するだけで全員に反映される。
@@ -1724,24 +1645,6 @@ async function openSettings(): Promise<void> {
     finally { deployBtn.removeAttribute('disabled'); }
   });
 
-  // ローカルに残っている既存データを SharePoint へ引っ越す（一度きりの想定・再実行しても安全）
-  const migrateBtn = el('button', { class: 'btn btn--sm' }, ['ローカルのデータを SharePoint へ移送']);
-  const migrateMsg = el('div', { class: 'qam-insp-sec-note' });
-  migrateBtn.addEventListener('click', async () => {
-    if (!(await confirmModal('ローカルのデータを移送', '中継サーバのデータディレクトリに残っている既存データ（スナップショット・変更履歴・メモ・注釈・操作履歴・管理表）を SharePoint へ写します。同じものが既にあれば上書きしません。よろしいですか？', '移送する'))) return;
-    migrateBtn.setAttribute('disabled', 'true');
-    try {
-      const done = await migrateLocalToSharePoint((m) => { migrateMsg.textContent = m; });
-      migrateMsg.textContent = done.length ? `移送しました: ${done.join(' / ')}` : '移送するものはありませんでした';
-      recordOp('データ移送', done.join(' / ') || '対象なし');
-      toast('移送が完了しました', 'ok');
-      refresh();
-    } catch (e) {
-      migrateMsg.textContent = `移送に失敗: ${(e as Error).message}`;
-      toast('移送に失敗しました', 'error');
-    } finally { migrateBtn.removeAttribute('disabled'); }
-  });
-  const migrateBox = el('div', {}, [migrateBtn, migrateMsg]);
 
   const dataResetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['選択したデータをリセット']);
   dataResetBtn.addEventListener('click', async () => {
@@ -1780,7 +1683,6 @@ async function openSettings(): Promise<void> {
     { id: 'common', label: '共通設定', pane: () => [field('SharePoint サイト URL', spSite, '例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE。既存サイトに相乗りできます。'), field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'), field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
     { id: 'dev', label: '開発者', pane: () => [
       field('アプリを SharePoint に配置', deployBtn, 'アプリ本体を SharePoint のライブラリ（QamData/app/）へ置きます。起動アイコンはここから読むので、更新はこの配置を実行するだけで全員に反映されます。'),
-      field('ローカルのデータを移送', migrateBox, '以前ローカル保管で使っていたデータを SharePoint へ写します。同じものが既にあれば上書きしません（何度実行しても安全）。'),
       field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
       field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
       field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [`${BUILD}${BUILDTIME ? '  (' + BUILDTIME + ')' : ''}`])),
@@ -1817,7 +1719,7 @@ async function openSettings(): Promise<void> {
 function openHelp(): void {
   const body = el('div', { class: 'qam-help', html: `
     <h3>QAM とは</h3>
-    <p>Qualys の AssetGroup / Host / Domain / User の改廃（追加・変更・削除）履歴を記録し、任意時点の資産一覧・変更履歴・ライセンス推移を確認するツールです。各自のPCでローカル中継(relay)が動き、ブラウザで操作します。</p>
+    <p>Qualys の AssetGroup / Host / Domain / User の改廃（追加・変更・削除）履歴を記録し、任意時点の資産一覧・変更履歴・ライセンス推移を確認するツールです。管理データは SharePoint に保管し、Qualys へアクセスするときだけ各自のPCのローカル中継(relay)を使います。</p>
 
     <h3>起動</h3>
     <ul>
@@ -1930,7 +1832,7 @@ function openHelp(): void {
 
     <h3>注意</h3>
     <ul>
-      <li>ファイルサーバ配置で複数人が使う場合、<b>同時の更新は不可</b>（取込・編集は1人ずつ）。閲覧の同時利用は可能です。</li>
+      <li>取込は同時に1人だけ実行できます（SharePoint 側で排他）。閲覧の同時利用は制限ありません。</li>
       <li>保存期間を過ぎると資産スナップショットは剪定されますが、<b>変更履歴・メモ・操作履歴・ライセンス推移は恒久保持</b>です。</li>
     </ul>
     <div class="qam-help-foot">build ${BUILD}${BUILDTIME ? `（${BUILDTIME}）` : ''}</div>
@@ -1939,10 +1841,12 @@ function openHelp(): void {
 }
 
 async function doShutdown(): Promise<void> {
-  const ok = await confirmModal('終了', 'QAM を終了します（ローカル中継を停止）。よろしいですか？');
+  const ok = await confirmModal('終了', 'QAM を終了します（中継サーバを停止し、この画面を閉じます）。よろしいですか？');
   if (!ok) return;
   try { await shutdownRelay(); } catch { /* listener 停止で接続断は想定内 */ }
-  document.body.innerHTML = '<div style="padding:40px;font-family:sans-serif;color:#7a766c">QAM を終了しました。このタブは閉じて構いません。</div>';
+  // ★ホストページ（SharePoint）の上に載っているので、body を書き換えるとページごと壊す。
+  //   自分のシールドを外して消えるだけにする。
+  document.getElementById('qam-host')?.remove();
 }
 
 // 中継サーバが起動していなければ警告モーダルを出す（起動後に「再接続」で続行）。
@@ -1955,7 +1859,7 @@ function showRelayDownModal(): void {
   const body = el('div', {}, [
     el('div', { style: 'display:flex;gap:var(--s-3);align-items:flex-start' }, [
       el('span', { style: 'color:var(--danger);flex:none', html: icon('alert', 20) }),
-      el('div', {}, ['QAM のローカル中継サーバ（127.0.0.1）に接続できません。データの読み書きには中継サーバが必要です。']),
+      el('div', {}, ['QAM のローカル中継サーバ（127.0.0.1）に接続できません。Qualys の取得・登録・パスワード保護・名前解決ができません（保存済みデータは参照できます）。']),
     ]),
     el('div', { style: 'margin-top:var(--s-4)' }, [callout('qam-launch.bat（または qam-launch.ps1）を実行して中継サーバを起動してから、「再接続」を押してください。')]),
   ]);

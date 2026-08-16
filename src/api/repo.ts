@@ -54,28 +54,18 @@ export interface RecordRepo {
   releaseIngestLock(owner: string): Promise<void>;
 }
 
-/** 従来どおりファイル(JSONL)に持つ実装。store.ts へそのまま委譲する（挙動は変えない）。 */
-export const fileRepo = (b: FileBackend): RecordRepo => ({
-  readComments: (e, id) => readComments(b, e, id),
-  addComment: (c) => addComment(b, c).then(() => undefined),
-  editComment: (e, id, ts, text) => editComment(b, e, id, ts, text),
-  readAnnotations: (e) => readAnnotations(b, e),
-  setAnnotation: (e, id, field, value) => setAnnotation(b, e, id, field, value),
-  setAnnotationsBulk: (e, updates) => setAnnotationsBulk(b, e, updates),
-  readOps: () => readOps(b),
-  logOp: (op) => logOp(b, op),
-  readManualInspections: () => readManualInspections(b),
-  appendManualInspection: (m) => appendManualInspection(b, m),
-  readLicenses: () => readLicenses(b),
-  recordLicense: (ts, ips, scanned) => recordLicense(b, ts, ips, scanned),
-  // ファイル保管は 1 人用（共有フォルダでも原子的な排他手段が無い）ので素通しにする。
-  // 排他が要るのは複数人が同じ SPO を見る構成で、そちらはリスト側で実装する。
-  acquireIngestLock: async () => null,
-  releaseIngestLock: async () => undefined,
-});
-
-// 実体は起動時に決まる（既定はファイル）。呼び出し側は `repo` を使い続けられるよう委譲にする。
-let impl: RecordRepo = fileRepo(backend);
+// 実体は起動時に決まる（SharePoint リスト）。呼び出し側は `repo` を使い続けられるよう委譲にする。
+// ★既定は「未初期化なら例外」。黙って動く実装を既定にすると、保管先に繋がらないまま
+//   別の場所へ書いてしまう。ただし releaseIngestLock だけは後片付けなので握り潰す。
+const notReady = (): never => { throw new Error('保管先が未初期化です（SharePoint への接続に失敗しています）'); };
+let impl: RecordRepo = {
+  readComments: notReady, addComment: notReady, editComment: notReady,
+  readAnnotations: notReady, setAnnotation: notReady, setAnnotationsBulk: notReady,
+  readOps: notReady, logOp: notReady,
+  readManualInspections: notReady, appendManualInspection: notReady,
+  readLicenses: notReady, recordLicense: notReady,
+  acquireIngestLock: notReady, releaseIngestLock: async () => undefined,
+};
 export const setRepo = (r: RecordRepo): void => { impl = r; };
 export const repo: RecordRepo = {
   readComments: (e, id) => impl.readComments(e, id),

@@ -11,38 +11,12 @@ async function postJson(path: string, body: unknown): Promise<any> {
   return r.json();
 }
 
-// store.ts が使う FileBackend を relay /qam/file で実装。
-// 大きなファイル本体は JSON で包まず「生 body」で授受する（PS5.1 の ConvertTo/From-Json は
-// 大きな文字列で落ちるため）。path/append はクエリで渡す。
-export const relayBackend: FileBackend = {
-  async read(path) {
-    const r = await fetch(`${RELAY}/qam/file?path=${encodeURIComponent(path)}`);
-    if (r.status === 404) return null; // 未存在
-    if (!r.ok) throw new Error(`読込に失敗 (${path}): HTTP ${r.status}`);
-    return await r.text();
-  },
-  async write(path, content, append) {
-    const r = await fetch(`${RELAY}/qam/file?path=${encodeURIComponent(path)}&append=${append ? '1' : '0'}`, {
-      method: 'POST', headers: { 'content-type': 'text/plain; charset=utf-8' }, body: content,
-    });
-    if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error(`保存に失敗 (${path}): HTTP ${r.status}${t ? ' ' + t.slice(0, 120) : ''}`); }
-  },
-  async list(dir) {
-    const r = await fetch(`${RELAY}/qam/file/list?dir=${encodeURIComponent(dir)}`);
-    return (await r.json().catch(() => ({}))).names ?? [];
-  },
-  async remove(path) {
-    const r = await fetch(`${RELAY}/qam/file/remove`, {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ path }),
-    });
-    if (!r.ok) { const d = await r.json().catch(() => ({} as any)); throw new Error(`削除に失敗 (${path}): ${d.error ?? 'HTTP ' + r.status}`); }
-  },
-};
-
-// 実際に使う保管先は起動時に決まる（local = relay のファイル / sp = SharePoint ライブラリ）。
+// 保管先は SharePoint ライブラリ。起動時に initStorage が setBackend で差し込む。
 // 呼び出し側は `backend` を import したままでよいよう、差し替え可能な委譲にしておく。
-let impl: FileBackend = relayBackend;
+// ★既定は「未初期化なら例外」。ここを黙って動く実装にすると、保管先への接続に失敗した
+//   ときに気づかないまま別の場所へ書き、「自分だけ違うものを見ている」事故になる。
+const notReady = (): never => { throw new Error('保管先が未初期化です（SharePoint への接続に失敗しています）'); };
+let impl: FileBackend = { read: notReady, write: notReady, list: notReady, remove: notReady };
 export const setBackend = (b: FileBackend): void => { impl = b; };
 export const backend: FileBackend = {
   read: (p) => impl.read(p),
