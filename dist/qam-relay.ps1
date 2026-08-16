@@ -91,8 +91,6 @@ $LogFull = ([string]$LogDir).TrimEnd('\', '/')
 $script:LogFile = Join-Path $LogFull 'relay.log'
 $script:AuditFile = Join-Path $LogFull 'api-audit.log'  # 更新系APIの監査ログ（実行者・API・パラメータ）
 $script:QamStop = $false
-# Qualys セッション（login で取得し fetch で使い回し、logout で破棄）。
-$script:QSession = $null; $script:QProxy = $null; $script:QBase = $null
 
 # ─── HTTP ヘルパ ─────────────────────────────────────────────────────────────
 # 許可オリジン。既定は SharePoint サイト（QAM_SP_SITE_URL）のオリジンに限定する。
@@ -157,15 +155,11 @@ function Get-QamText1 { param([string]$Xml, [string]$Pattern)
     return $null
 }
 
-# Qualys API を GET。セッション確立中は Cookie、未確立なら Basic 認証（後方互換）。
+# Qualys API を GET。認証は Basic 固定（セッション Cookie は環境により 401 で拒否されるため使わない）。
+# ★状態を持たないので、並列実行（fetch-batch の runspace）でもそのまま使える。
 function Invoke-QualysFetch { param($Body)
-    # user 一覧は /msp/user_list.php（GET・Basic 認証・USER_LIST_OUTPUT を返す）。
-    $isUserList = (-not $Body.url) -and ($Body.kind -eq 'user')
-    # noSession 指定時は Basic 認証で叩く（401/403 再試行用）。user(user_list.php) も Basic 固定。
-    $useSession = $script:QSession -and -not $Body.noSession -and -not $isUserList
-    # プロキシは本文指定を優先（session 経路でも確実にプロキシを通す。proxy=なしで直結する不具合対策）。
-    $proxy = if ($Body.proxy) { $Body.proxy } elseif ($script:QProxy) { $script:QProxy } else { $null }
-    $base = if ($Body.base) { ([string]$Body.base).TrimEnd('/') } elseif ($script:QBase) { $script:QBase } else { '' }
+    $proxy = if ($Body.proxy) { $Body.proxy } else { $null }
+    $base = if ($Body.base) { ([string]$Body.base).TrimEnd('/') } else { '' }
     $url = $Body.url
     if (-not $url) {
         switch ($Body.kind) {
@@ -184,8 +178,6 @@ function Invoke-QualysFetch { param($Body)
         }
     }
     $handler = New-Object System.Net.Http.HttpClientHandler
-    # UseCookies=true(既定)だとハンドラが Cookie を自前管理し、手で付けた Cookie ヘッダが送られない
-    # （login 200 でCookieを取れても fetch で QualysSession が送信されず 401 になる原因）。false にする。
     $handler.UseCookies = $false
     if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
     $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
@@ -197,15 +189,13 @@ function Invoke-QualysFetch { param($Body)
         # User-Agent を必ず付与（無いと WAF が空応答/403 を返すことがある＝curl との差分の正体）。
         $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
         $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')  # FO v2 API で必須
-        if ($useSession) {
-            $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
-        } elseif ($Body.user) {
+        if ($Body.user) {
             $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$(Get-QamPassword $Body)"))
             $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
         }
         $method = 'GET'
-        Write-Host "[qam] fetch $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
-        Add-QamLog "FETCH start $method $url (session=$useSession, proxy=$(if ($proxy) { $proxy } else { 'none' }))"
+        Write-Host "[qam] fetch $method $url (proxy=$(if ($proxy) { $proxy } else { 'なし' }))" -ForegroundColor DarkCyan
+        Add-QamLog "FETCH start $method $url (proxy=$(if ($proxy) { $proxy } else { 'none' }))"
         try { $resp = $client.GetAsync($url).Result }
         catch {
             # 例外（タイムアウト/プロキシ/SSL 等）は HTTP 0 で握り潰さず、理由をログ＋エラー返却する。
@@ -237,67 +227,7 @@ function Invoke-QualysFetch { param($Body)
     } finally { $client.Dispose(); $handler.Dispose() }
 }
 
-# session login: Cookie(QualysSession) を取得して保持。
-function Invoke-QualysLogin { param($Body)
-    $base = ([string]$Body.base).TrimEnd('/')
-    $handler = New-Object System.Net.Http.HttpClientHandler
-    $handler.CookieContainer = New-Object System.Net.CookieContainer
-    if ($Body.proxy) { $handler.Proxy = New-Object System.Net.WebProxy($Body.proxy); $handler.UseProxy = $true }
-    $client = New-Object System.Net.Http.HttpClient($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
-    try {
-        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
-        $form = "action=login&username=$([Uri]::EscapeDataString([string]$Body.user))&password=$([Uri]::EscapeDataString([string](Get-QamPassword $Body)))"
-        $content = New-Object System.Net.Http.StringContent($form, [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
-        Write-Host "[qam] login POST $base/api/2.0/fo/session/ (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'なし' }))" -ForegroundColor Cyan
-        Add-QamLog "LOGIN start $base (user=$($Body.user), proxy=$(if ($Body.proxy) { $Body.proxy } else { 'none' }))"
-        # セッション API のエンドポイントは /api/2.0/fo/session/（action は body の action=login）。
-        # 末尾に login/ を付けると 404 になる（毎回ログイン失敗の原因）。
-        $resp = $client.PostAsync("$base/api/2.0/fo/session/", $content).Result
-        $body = $resp.Content.ReadAsStringAsync().Result
-        # Cookie は Set-Cookie ヘッダから直接拾う（CookieContainer に入らない環境対策）。
-        $cookieVal = $null
-        $setc = $null
-        if ($resp.Headers.TryGetValues('Set-Cookie', [ref]$setc)) {
-            foreach ($sc in $setc) { $mm = [regex]::Match($sc, 'QualysSession=([^;]+)'); if ($mm.Success) { $cookieVal = $mm.Groups[1].Value } }
-        }
-        if (-not $cookieVal) {
-            foreach ($c in $handler.CookieContainer.GetCookies((New-Object System.Uri($base)))) { if ($c.Name -eq 'QualysSession') { $cookieVal = $c.Value } }
-        }
-        $logBody = ($body -replace '\s+', ' ').Trim(); if ($logBody.Length -gt 500) { $logBody = $logBody.Substring(0, 500) + ' …(truncated)' }
-        Write-Host "[qam] login -> HTTP $([int]$resp.StatusCode) $([string]$resp.ReasonPhrase), cookie=$([bool]$cookieVal)" -ForegroundColor Cyan
-        Add-QamLog "LOGIN done HTTP $([int]$resp.StatusCode) $([string]$resp.ReasonPhrase), cookie=$([bool]$cookieVal)"
-        Add-QamLog "LOGIN body: $logBody"
-        if ($resp.IsSuccessStatusCode -and $cookieVal) {
-            $script:QSession = $cookieVal; $script:QProxy = $Body.proxy; $script:QBase = $base
-            return [ordered]@{ ok = $true; status = [int]$resp.StatusCode }
-        }
-        $snippet = ($body -replace '\s+', ' ').Trim()
-        if ($snippet.Length -gt 200) { $snippet = $snippet.Substring(0, 200) }
-        $err = Get-QamText1 $body '<TEXT>(.*?)</TEXT>'
-        if (-not $err) { $err = "HTTP $([int]$resp.StatusCode): $snippet" }
-        return [ordered]@{ ok = $false; status = [int]$resp.StatusCode; cookieSeen = [bool]$cookieVal; error = $err }
-    } catch {
-        return [ordered]@{ ok = $false; error = "接続エラー: $($_.Exception.Message)" }
-    } finally { $client.Dispose(); $handler.Dispose() }
-}
 
-# session logout: 保持中のセッションを破棄（取得後は必ず呼ぶ）。
-function Invoke-QualysLogout {
-    if (-not $script:QSession) { return [ordered]@{ ok = $true; note = 'no session' } }
-    $handler = New-Object System.Net.Http.HttpClientHandler
-    if ($script:QProxy) { $handler.Proxy = New-Object System.Net.WebProxy($script:QProxy); $handler.UseProxy = $true }
-    $client = New-Object System.Net.Http.HttpClient($handler)
-    $client.Timeout = [TimeSpan]::FromSeconds(60)  # ハングで relay 全体が止まらないように
-    try {
-        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
-        $client.DefaultRequestHeaders.Add('Cookie', "QualysSession=$($script:QSession)")
-        $content = New-Object System.Net.Http.StringContent('action=logout', [Text.Encoding]::UTF8, 'application/x-www-form-urlencoded')
-        $resp = $client.PostAsync("$($script:QBase)/api/2.0/fo/session/", $content).Result
-        return [ordered]@{ ok = $resp.IsSuccessStatusCode; status = [int]$resp.StatusCode }
-    } catch { return [ordered]@{ ok = $false; error = $_.Exception.Message } }
-    finally { $client.Dispose(); $handler.Dispose(); $script:QSession = $null; $script:QProxy = $null; $script:QBase = $null }
-}
 
 # ユーザ登録: /msp/user.php?action=add を Basic 認証＋プロキシで GET。
 # fields は TS 側で組んだ user_role/business_unit/first_name/last_name/email/title/phone/
@@ -596,16 +526,6 @@ function Invoke-Route { param($Ctx)
             if (-not (Test-Path -LiteralPath $f)) { Send-Json $Ctx @{ error = 'bundle not built'; hint = 'npm run build' } 404; return }
             $ct = if ($f -match '\.js$') { 'text/javascript; charset=utf-8' } else { 'text/plain; charset=utf-8' }
             Send-Bytes $Ctx ([IO.File]::ReadAllBytes($f)) $ct; return
-        }
-        '^/qam/qualys/login$' {
-            try { Send-Json $Ctx (Invoke-QualysLogin (Get-Body $req | ConvertFrom-Json)) }
-            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
-            return
-        }
-        '^/qam/qualys/logout$' {
-            try { Send-Json $Ctx (Invoke-QualysLogout) }
-            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
-            return
         }
         '^/qam/qualys/schedule-add$' {
             try { Send-Json $Ctx (Invoke-QualysScheduleAdd (Get-Body $req | ConvertFrom-Json)) }

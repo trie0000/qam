@@ -84,10 +84,6 @@ export async function resolveHosts(names: string[]): Promise<ResolveRow[]> {
   return rows.map((r) => ({ ...r, addresses: Array.isArray(r.addresses) ? r.addresses : (r.addresses ? [r.addresses] : []) }));
 }
 
-export interface SessionResult { ok: boolean; status?: number; error?: string }
-export const qualysLogin = (creds: { base: string; user: string; pass: string; proxy: string }): Promise<SessionResult> => postJson('/qam/qualys/login', creds);
-export const qualysLogout = (): Promise<SessionResult> => postJson('/qam/qualys/logout', {});
-
 // fiscalStartMonth: 年度開始月(1-12・既定4)。四半期の区切りに使う。
 // inspectionAgPattern: 四半期検査の対象 AssetGroup を選ぶ正規表現（既定は接続点ID形式）。
 // scanOptionProfile / mapOptionProfile: 検査登録時に既定で適用するオプションプロファイル（種別ごと）。
