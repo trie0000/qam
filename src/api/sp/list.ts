@@ -22,8 +22,17 @@ const TYPE_NAME: Record<FieldType, string> = { Text: 'Text', Note: 'Note', Numbe
 
 export interface SpItem extends Record<string, unknown> { Id: number; __etag: string }
 
+export interface EnsureListOptions {
+  /** 組み込みの Title 列に一意制約を張る（Title を一意キーに使うリスト）。 */
+  uniqueTitle?: boolean;
+  /** フォームを差し替える JSON（コンテンツタイプの ClientFormCustomFormatter）。 */
+  formFormatter?: string;
+  /** 使わなくなった列。残すと空欄のまま並んで紛らわしいので消す（組み込み列は消さない）。 */
+  dropFields?: string[];
+}
+
 export interface SpListClient {
-  ensureList(title: string, fields: FieldSpec[]): Promise<void>;
+  ensureList(title: string, fields: FieldSpec[], opts?: EnsureListOptions): Promise<void>;
   all(title: string, select?: string[]): Promise<SpItem[]>;
   add(title: string, row: Record<string, unknown>): Promise<void>;
   /** 更新できたら true、他の人が先に書いていたら false（412）。 */
@@ -90,8 +99,52 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
     }
   }
 
-  return {
-    async ensureList(title, fields) {
+  // 使わなくなった列を消す。名前を明示したものだけが対象で、組み込み列には触らない。
+  // ★残しておくと、値の入らない列が一覧やフォームに並び続けて「どちらが正か」が分からなくなる。
+  async function dropFields(title: string, names: string[]): Promise<void> {
+    for (const name of names) {
+      const r = await http.get(`${listApi(title)}/fields/getbyinternalnameortitle('${q(name)}')?$select=CanBeDeleted`);
+      if (!r.ok) continue; // 既に無い
+      if ((await http.json(r)).CanBeDeleted === false) continue; // 組み込み列は消さない
+      const del = await http.post(`${listApi(title)}/fields/getbyinternalnameortitle('${q(name)}')`, {
+        headers: { 'X-HTTP-Method': 'DELETE', 'If-Match': '*' },
+      });
+      if (!del.ok) console.warn(`[qam/sp] ${title}.${name} を削除できませんでした（続行）:`, del.status);
+    }
+  }
+
+  // Title は SP 組み込み列なので ensureFields のガード（組み込み列は弾く）を通せない。
+  // 作成はせず、一意制約だけを立てる。
+  async function ensureUniqueTitle(title: string): Promise<void> {
+      const r = await http.get(`${listApi(title)}/fields/getbyinternalnameortitle('Title')?$select=EnforceUniqueValues`);
+      if (!r.ok) return;
+      if ((await http.json(r)).EnforceUniqueValues === true) return;
+      const upd = await http.post(`${listApi(title)}/fields/getbyinternalnameortitle('Title')`, {
+        headers: { 'Content-Type': V, 'X-HTTP-Method': 'MERGE', 'If-Match': '*' },
+        body: JSON.stringify({ __metadata: { type: 'SP.Field' }, Indexed: true, EnforceUniqueValues: true }),
+      });
+      // 既存データに重複があると失敗する。運用は止めない（重複は同期側の整合で吸収する）。
+      if (!upd.ok) console.warn(`[qam/sp] ${title}.Title の一意制約を有効化できませんでした（続行）:`, upd.status);
+    }
+
+  // フォームを読み取り専用カードにする。書き込み先はコンテンツタイプの
+  // ClientFormCustomFormatter（キーは headerJSONFormatter）。
+  async function applyFormFormatter(title: string, formatter: string): Promise<void> {
+      const r = await http.get(`${listApi(title)}/ContentTypes?$select=StringId,ClientFormCustomFormatter`);
+      if (!r.ok) return;
+      const rows = ((await http.json(r)).results ?? []) as { StringId?: unknown; ClientFormCustomFormatter?: unknown }[];
+      // 既定コンテンツタイプ＝先頭。フォルダー(0x0120…)は対象外。
+      const ct = rows.find((c) => !String(c.StringId ?? '').startsWith('0x0120'));
+      if (!ct) return;
+      if (String(ct.ClientFormCustomFormatter ?? '') === formatter) return; // 変化なし
+      const upd = await http.post(`${listApi(title)}/ContentTypes('${q(String(ct.StringId))}')`, {
+        headers: { 'Content-Type': V, 'X-HTTP-Method': 'MERGE', 'If-Match': '*' },
+        body: JSON.stringify({ __metadata: { type: 'SP.ContentType' }, ClientFormCustomFormatter: formatter }),
+      });
+      if (!upd.ok) console.warn(`[qam/sp] ${title} のフォーム書式を設定できませんでした（続行）:`, upd.status);
+    }
+
+  async function ensureListImpl(title: string, fields: FieldSpec[], opts?: EnsureListOptions): Promise<void> {
       const head = await http.get(`${listApi(title)}?$select=Id`);
       if (head.status === 404) {
         const r = await http.post('web/lists', {
@@ -109,7 +162,13 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
         throw new Error(`リストの確認に失敗 (${title}): HTTP ${head.status}${await errText(head)}`);
       }
       await ensureFields(title, fields);
-    },
+      if (opts?.dropFields?.length) await dropFields(title, opts.dropFields);
+      if (opts?.uniqueTitle) await ensureUniqueTitle(title);
+      if (opts?.formFormatter) await applyFormFormatter(title, opts.formFormatter);
+    }
+
+  return {
+    ensureList: ensureListImpl,
 
     async all(title, select) {
       const out: SpItem[] = [];

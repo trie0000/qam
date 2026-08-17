@@ -16,6 +16,7 @@ function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: 
     add: async (t, row) => {
       const list = (rows[t] ??= []);
       // 一意制約の再現: DedupKey が重なったら弾く（SP の EnforceUniqueValues 相当）。
+      // 一意制約の再現: DedupKey（資産等）と Title（チケット）の重複を弾く。
       if (row.DedupKey && list.some((r) => r.DedupKey === row.DedupKey)) throw new Error('duplicate');
       list.push({ ...row, Id: nextId++, __etag: '"1"' });
     },
@@ -325,8 +326,9 @@ describe('独自RAS のリスト同期', () => {
     await repo.syncRasTickets([t('11'), t('12')]);
     const r = await repo.syncRasTickets([t('11', 'CLOSED')]);
     expect(r).toEqual({ added: 0, updated: 1, removed: 0 });
-    expect((lists.rows[LIST_RAS_TICKETS] ?? []).map((x) => x.TicketNumber).sort()).toEqual(['11', '12']);
-    expect(lists.rows[LIST_RAS_TICKETS].find((x) => x.TicketNumber === '11')!.State).toBe('CLOSED');
+    // チケット番号は Title に入る（TicketNumber 列は持たない）。
+    expect((lists.rows[LIST_RAS_TICKETS] ?? []).map((x) => x.Title).sort()).toEqual(['11', '12']);
+    expect(lists.rows[LIST_RAS_TICKETS].find((x) => x.Title === '11')!.State).toBe('CLOSED');
   });
 
   it('共有 JSON は設定リストの1行に入り、読み書きできる', async () => {

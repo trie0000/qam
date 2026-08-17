@@ -84,7 +84,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
   return {
     async ensureLists() {
-      for (const l of ALL_LISTS) await lists.ensureList(l.title, l.fields);
+      for (const l of ALL_LISTS) await lists.ensureList(l.title, l.fields, { uniqueTitle: l.uniqueTitle, formFormatter: l.formFormatter?.(), dropFields: l.dropFields });
     },
 
     async readComments(e, id) {
@@ -249,13 +249,14 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     },
 
     async readRasTickets() {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['TicketNumber', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt']);
       return rows.map(rowToRasTicket);
     },
 
     async syncRasTickets(tickets) {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['TicketNumber', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt', 'DedupKey']);
-      const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt']);
+      // チケット番号は Title（このリストの一意キー）。
+      const byKey = new Map(rows.map((r) => [String(r.Title ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
       for (const t of tickets) {
         const cur = byKey.get(t.number);

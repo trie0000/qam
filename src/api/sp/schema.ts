@@ -6,13 +6,15 @@
 import type { FieldSpec } from './list';
 import type { QamComment, QamEntity } from '../../types';
 import type { RasAsset, RasTicket } from '../../ras';
+import { rasAssetFormFormatter, rasTicketFormFormatter } from './form-format';
 import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 
 // 2: Author 列を RecordedBy へ改名（Author は SharePoint 組み込みの User 型列と衝突し、
 //    列は作られたことになるのに書き込みだけが 400 で失敗する）
 // 3: 独自RAS の資産マスター/チケットのリストを追加
 // 4: RAS資産に AliveStatus 列を追加（host not alive の表示）
-export const SCHEMA_VERSION = 4;
+// 5: RASチケットは Title をチケット番号（一意キー）にし、TicketNumber/DedupKey 列を廃止
+export const SCHEMA_VERSION = 5;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -97,8 +99,8 @@ export const rasAssetFields: FieldSpec[] = [
 
 // 独自RAS 資産で見つかった脆弱性チケット。BusinessCompany は資産から写す
 // （このリスト単体でアクセス権を組めるようにするため。結合しないと権限が付けられない）。
+// ★チケット番号は Title に入れる（一意キー）。同じ値の列を別に持つと二重管理になる。
 export const rasTicketFields: FieldSpec[] = [
-  { name: 'TicketNumber', type: 'Text', indexed: true },
   { name: 'State', type: 'Text' },
   { name: 'HostId', type: 'Text', indexed: true },
   { name: 'Ip', type: 'Text' },
@@ -106,18 +108,20 @@ export const rasTicketFields: FieldSpec[] = [
   { name: 'SettenId', type: 'Text' },
   { name: 'BusinessCompany', type: 'Text', indexed: true },
   { name: 'OpenedAt', type: 'Text' }, // Created は SP 組み込み列(DateTime)と衝突するので使えない
-  { name: 'DedupKey', type: 'Text', indexed: true, enforceUnique: true },
 ];
 
-export const ALL_LISTS: { title: string; fields: FieldSpec[] }[] = [
+// uniqueTitle: 組み込みの Title 列に一意制約を張る（Title を一意キーに使うリスト）。
+// formFormatter: フォームを読み取り専用の2段組カードにする JSON。
+export const ALL_LISTS: { title: string; fields: FieldSpec[]; uniqueTitle?: boolean; formFormatter?: () => string; dropFields?: string[] }[] = [
   { title: LIST_COMMENTS, fields: commentFields },
   { title: LIST_ANNOTATIONS, fields: annotationFields },
   { title: LIST_OPS, fields: opFields },
   { title: LIST_INSPECTIONS, fields: inspectionFields },
   { title: LIST_LICENSES, fields: licenseFields },
   { title: LIST_SETTINGS, fields: settingsFields },
-  { title: LIST_RAS_ASSETS, fields: rasAssetFields },
-  { title: LIST_RAS_TICKETS, fields: rasTicketFields },
+  { title: LIST_RAS_ASSETS, fields: rasAssetFields, formFormatter: rasAssetFormFormatter },
+  // TicketNumber は Title と同じ値、DedupKey は Title で代替。旧環境から消す。
+  { title: LIST_RAS_TICKETS, fields: rasTicketFields, uniqueTitle: true, formFormatter: rasTicketFormFormatter, dropFields: ['TicketNumber', 'DedupKey'] },
 ];
 
 /** 取込の排他クレーム行のキー。 */
@@ -184,16 +188,17 @@ export const rowToLicense = (r: Record<string, unknown>): QamLicenseSample =>
 // DedupKey は行キー（host list 由来はホストID、AssetGroup だけの資産は 'ip:<IP>'）。
 // ホストIDだけにすると、host list に居ない資産（host not alive）が一意に持てない。
 export const rasAssetToRow = (a: RasAsset): Record<string, unknown> =>
-  ({ Title: a.ip || a.hostId, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn, AliveStatus: a.status,
+  ({ Title: a.ip || a.fqdn || a.hostId, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn, AliveStatus: a.status,
      BusinessCompany: a.businessCompany, ManagementCompany: a.managementCompany, DedupKey: a.key });
 export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
   ({ key: str(r.DedupKey) || str(r.HostId), hostId: str(r.HostId), settenId: str(r.SettenId),
      ip: str(r.Ip), fqdn: str(r.Fqdn), status: str(r.AliveStatus),
      businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany) });
 
+// チケット番号は Title。一意制約も Title に張る（uniqueTitle）。
 export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
-  ({ Title: t.number, TicketNumber: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
-     SettenId: t.settenId, BusinessCompany: t.businessCompany, OpenedAt: t.created, DedupKey: t.number });
+  ({ Title: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
+     SettenId: t.settenId, BusinessCompany: t.businessCompany, OpenedAt: t.created });
 export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
-  ({ number: str(r.TicketNumber), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
+  ({ number: str(r.Title), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
      settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), created: str(r.OpenedAt) });
