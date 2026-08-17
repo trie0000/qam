@@ -7,6 +7,10 @@ import { compareSnapshots, countByChange, shrinkGuard } from './diff';
 
 export interface FileBackend {
   read(path: string): Promise<string | null>;
+  /** バイナリで読む（Excel 等）。文字列で読むと壊れるファイル用。 */
+  readBinary?(path: string): Promise<ArrayBuffer | null>;
+  /** バイナリで書く（PDF 等）。内容は base64 で渡す。 */
+  writeBinary?(path: string, base64: string): Promise<void>;
   write(path: string, content: string, append?: boolean): Promise<void>;
   list(dir: string): Promise<string[]>;
   remove(path: string): Promise<void>;

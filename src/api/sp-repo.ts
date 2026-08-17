@@ -249,12 +249,12 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     },
 
     async readRasTickets() {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt']);
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn']);
       return rows.map(rowToRasTicket);
     },
 
     async syncRasTickets(tickets) {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt']);
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn']);
       // チケット番号は Title（このリストの一意キー）。
       const byKey = new Map(rows.map((r) => [String(r.Title ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
@@ -263,9 +263,17 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
         if (!cur) { await lists.add(LIST_RAS_TICKETS, rasTicketToRow(t)); added++; continue; }
         byKey.delete(t.number);
         const same = rowToRasTicket(cur);
-        if (same.state === t.state && same.businessCompany === t.businessCompany
-          && same.ip === t.ip && same.fqdn === t.fqdn && same.settenId === t.settenId) continue;
-        if (await lists.update(LIST_RAS_TICKETS, cur.Id, rasTicketToRow(t), cur.__etag)) updated++;
+        // ★変化ラベルとレポートリンクは日次更新でしか付けない。同期で毎回上書きすると、
+        //   取込のたびにラベルとリンクが消える。渡されていなければ既存値を引き継ぐ。
+        const merged = {
+          ...t,
+          change: t.change ?? same.change, changedAt: t.changedAt ?? same.changedAt,
+          reportJa: t.reportJa ?? same.reportJa, reportEn: t.reportEn ?? same.reportEn,
+        };
+        if (same.state === merged.state && same.businessCompany === merged.businessCompany
+          && same.ip === merged.ip && same.fqdn === merged.fqdn && same.settenId === merged.settenId
+          && same.change === merged.change && same.reportJa === merged.reportJa && same.reportEn === merged.reportEn) continue;
+        if (await lists.update(LIST_RAS_TICKETS, cur.Id, rasTicketToRow(merged), cur.__etag)) updated++;
       }
       // ★取得は「直近1ヶ月の変化分」のことがあるので、載っていないチケットは消さない。
       //   消すと、動きが無かっただけのオープン中チケットが毎回消えてしまう。
@@ -279,6 +287,25 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
         lists.viewUrl(LIST_RAS_TICKETS).catch(() => ''),
       ]);
       return { assets, tickets };
+    },
+
+    async setRasTicketMarks(marks) {
+      if (!marks.length) return 0;
+      // 全件を1回だけ読み、チケット番号(Title)で引き当てて必要な分だけ書く。
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title']);
+      const byNo = new Map(rows.map((x) => [String(x.Title ?? ''), x]));
+      let n = 0;
+      for (const m of marks) {
+        const cur = byNo.get(m.number);
+        if (!cur) continue; // 同期のタイミングで消えた
+        const patch: Record<string, unknown> = {};
+        if (m.change !== undefined) { patch.ChangeKind = m.change; patch.ChangedAt = m.changedAt ?? ''; }
+        if (m.reportJa !== undefined) patch.ReportJa = m.reportJa;
+        if (m.reportEn !== undefined) patch.ReportEn = m.reportEn;
+        if (!Object.keys(patch).length) continue;
+        if (await lists.update(LIST_RAS_TICKETS, cur.Id, patch, cur.__etag)) n++;
+      }
+      return n;
     },
 
     listSiteGroups(): Promise<SiteGroup[]> { return permsApi().listSiteGroups(); },

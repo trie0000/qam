@@ -104,6 +104,27 @@ export function createSpBackend(o: SpBackendOptions): FileBackend {
       return m ? m.text : null;
     },
 
+    // PDF など、文字列にすると壊れるファイルを置く。base64 で受け取り、バイト列で送る。
+    async writeBinary(path, base64) {
+      await ensureFolder(dirOf(path));
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const r = await post(`${folderApi(dirOf(path))}/Files/add(url='${q(nameOf(path))}',overwrite=true)`, {
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: bytes,
+      });
+      if (!r.ok) throw new Error(`保存に失敗 (${path}): HTTP ${r.status}${await errText(r)}`);
+    },
+
+    // Excel など、文字列にすると壊れるファイル用。無ければ null。
+    async readBinary(path) {
+      const r = await http.get(`${fileApi(path)}/$value`, '*/*');
+      if (r.status === 404) return null;
+      if (!r.ok) throw new Error(`読み取りに失敗 (${path}): HTTP ${r.status}${await errText(r)}`);
+      return await r.arrayBuffer();
+    },
+
     async write(path, content, append) {
       await ensureFolder(dirOf(path));
       // 追記でない＝スナップショット等の不変ファイル、または全体書き換え。

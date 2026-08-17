@@ -14,7 +14,8 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 3: 独自RAS の資産マスター/チケットのリストを追加
 // 4: RAS資産に AliveStatus 列を追加（host not alive の表示）
 // 5: RASチケットは Title をチケット番号（一意キー）にし、TicketNumber/DedupKey 列を廃止
-export const SCHEMA_VERSION = 5;
+// 6: RASチケットに変化ラベル(ChangeKind/ChangedAt)とレポートリンク(ReportJa/ReportEn)を追加
+export const SCHEMA_VERSION = 6;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -108,6 +109,10 @@ export const rasTicketFields: FieldSpec[] = [
   { name: 'SettenId', type: 'Text' },
   { name: 'BusinessCompany', type: 'Text', indexed: true },
   { name: 'OpenedAt', type: 'Text' }, // Created は SP 組み込み列(DateTime)と衝突するので使えない
+  { name: 'ChangeKind', type: 'Text' }, // '' | new | closed | reopened（日次更新で付ける）
+  { name: 'ChangedAt', type: 'Text' },
+  { name: 'ReportJa', type: 'Text' },   // SCANレポート(日本語)の SharePoint URL
+  { name: 'ReportEn', type: 'Text' },
 ];
 
 // uniqueTitle: 組み込みの Title 列に一意制約を張る（Title を一意キーに使うリスト）。
@@ -198,7 +203,9 @@ export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
 // チケット番号は Title。一意制約も Title に張る（uniqueTitle）。
 export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
   ({ Title: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
-     SettenId: t.settenId, BusinessCompany: t.businessCompany, OpenedAt: t.created });
+     SettenId: t.settenId, BusinessCompany: t.businessCompany, OpenedAt: t.created,
+     ChangeKind: t.change ?? '', ChangedAt: t.changedAt ?? '', ReportJa: t.reportJa ?? '', ReportEn: t.reportEn ?? '' });
 export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
   ({ number: str(r.Title), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
-     settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), created: str(r.OpenedAt) });
+     settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), created: str(r.OpenedAt),
+     change: str(r.ChangeKind), changedAt: str(r.ChangedAt), reportJa: str(r.ReportJa), reportEn: str(r.ReportEn) });

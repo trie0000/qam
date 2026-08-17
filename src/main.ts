@@ -11,11 +11,12 @@ import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column }
 import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, editableCell, selectCell, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
-import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, resolveHosts, protectSecret } from './relay';
+import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, resolveHosts, protectSecret, type RelayConfig } from './relay';
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
-import { downloadEntitiesParallel, type TicketResult, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole, type QualysCreds, type InspectionDownload, qualysDateTimeUtc } from './qualys';
+import { downloadEntitiesParallel, type TicketResult, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole, type QualysCreds, type InspectionDownload, qualysDateTimeUtc,
+  fetchSearchLists, updateSearchList, launchScanReport, reportState, fetchReportPdf } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { buildInspectionForm } from './ui/views/schedule-form';
@@ -26,7 +27,11 @@ import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type
 import { parseQualysXml } from './ingest/parse';
 import { ticketQuery, resolveTicketMode } from './tickets';
 import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
-import { parseSearchListIds } from './searchlist';
+import {
+  parseSearchListIds, parseCveList, parseDynamicLists, diffCves, cveUpdateFields, searchListSummary,
+} from './searchlist';
+import { classifyTickets, reportTargets, reportPath, reportTitle, TICKET_CHANGE_LABEL, type DailyRunSummary, type ReportTarget } from './daily';
+import { readXlsxSheet, columnUntilBlankRow } from './xlsx-read';
 import {
   RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
   companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
@@ -818,6 +823,10 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     const csvBtn = el('button', { class: 'btn btn--sm', title: '既存の管理CSVから事業会社・管理会社を埋めます' }, ['管理CSV取込']);
     csvBtn.addEventListener('click', () => { void openRasCsvImport(); });
     toolbar.append(csvBtn);
+  } else {
+    const dailyBtn = el('button', { class: 'btn btn--sm btn--primary', title: 'Qualys の取り直しと検索リストの更新をまとめて行います' }, ['日次更新']);
+    dailyBtn.addEventListener('click', () => { openDailyUpdate(); });
+    toolbar.append(dailyBtn);
   }
   // 保管先の SharePoint リストを直接開けるようにする（権限の確認や手作業での修正用）。
   // URL は SharePoint に聞く（組み立てるとリスト名を変えたときに 404 になる）。
@@ -899,7 +908,7 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     addExportButtons(toolbar, '独自RAS資産一覧', exportRef, columnRef);
   } else {
     const tickets = await repo.readRasTickets();
-    const rows = tickets.filter((t) => matchQ([t.number, t.state, t.hostId, t.ip, t.fqdn, t.settenId, t.businessCompany]));
+    const rows = tickets.filter((t) => matchQ([t.number, t.state, t.hostId, t.ip, t.fqdn, t.settenId, t.businessCompany, t.change]));
     count.textContent = `${rows.length} 件`;
     if (!tickets.length) {
       host.append(emptyState('独自RASのチケットがありません',
@@ -907,8 +916,27 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       return;
     }
     const cols: Column[] = [
-      { id: 'number', label: 'チケットID', mono: true, width: 110, render: (t: RasTicket) => esc(t.number), sortVal: (t: RasTicket) => t.number.padStart(12, '0') },
+      {
+        // 直近の日次更新で 新規 / クローズ / 再検知 になったものはラベルを添える。
+        id: 'number', label: 'チケットID', mono: true, width: 170,
+        render: (t: RasTicket) => {
+          const k = t.change as keyof typeof TICKET_CHANGE_LABEL;
+          const tag = TICKET_CHANGE_LABEL[k]
+            ? `<span class="qam-tag qam-tag--${k === 'closed' ? 'added' : k === 'reopened' ? 'deleted' : 'modified'}" title="${esc(t.changedAt ? fmtJst(t.changedAt) : '')}">${TICKET_CHANGE_LABEL[k]}</span>`
+            : '';
+          return `${esc(t.number)}${tag ? ' ' + tag : ''}`;
+        },
+        sortVal: (t: RasTicket) => t.number.padStart(12, '0'),
+      },
       { id: 'state', label: 'ステータス', width: 110, render: (t: RasTicket) => esc(t.state) },
+      {
+        id: 'report', label: 'レポート', width: 130,
+        render: (t: RasTicket) => [
+          t.reportJa ? `<a href="${esc(t.reportJa)}" target="_blank" rel="noopener noreferrer">日本語</a>` : '',
+          t.reportEn ? `<a href="${esc(t.reportEn)}" target="_blank" rel="noopener noreferrer">英語</a>` : '',
+        ].filter(Boolean).join(' / '),
+        sortVal: (t: RasTicket) => (t.reportJa || t.reportEn ? '1' : '0'),
+      },
       { id: 'settenId', label: '接続点ID', mono: true, width: 120, render: (t: RasTicket) => esc(t.settenId) },
       { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (t: RasTicket) => esc(t.hostId) },
       { id: 'ip', label: 'IP', mono: true, width: 140, render: (t: RasTicket) => esc(t.ip) },
@@ -1025,6 +1053,249 @@ async function openRasCsvImport(): Promise<void> {
       } catch (e) { toast('取込に失敗: ' + (e as Error).message, 'error'); return false; }
     },
   });
+}
+
+// ── 日次更新 ────────────────────────────────────────────────────────────────
+// 「Qualys情報を更新する」…取込と同じ全種別＋チケットを取り直し、独自RASへ反映。
+//   その差分から 新規 / クローズ / 再検知 を判定してラベルを付け、新しく開いた
+//   ホストの SCAN レポート（日本語・英語）を作って SharePoint に置く。
+// 「Search Listを更新する」…SharePoint 上の Excel の CVE 一覧に合わせて、
+//   Qualys の動的検索リストを更新する。
+function openDailyUpdate(): void {
+  const cbQualys = el('input', { type: 'checkbox' }) as HTMLInputElement; cbQualys.checked = true;
+  const cbSearch = el('input', { type: 'checkbox' }) as HTMLInputElement; cbSearch.checked = true;
+  const prog = el('div', { class: 'qam-progress', style: 'display:none' });
+  const setProg = (msg: string, busy: boolean): void => {
+    clear(prog); prog.style.display = 'flex';
+    prog.append(busy ? el('span', { class: 'qam-spin' }) : el('span', { html: icon('check', 16) }), el('span', { class: 'qam-prog-msg' }, [msg]));
+  };
+  const body = el('div', {}, [
+    el('div', { class: 'qam-field' }, [
+      el('label', {}, ['実行する内容']),
+      el('div', { class: 'qam-chip-row' }, [
+        el('label', { class: 'qam-pick' }, [cbQualys, 'Qualys情報を更新する']),
+        el('label', { class: 'qam-pick' }, [cbSearch, 'Search Listを更新する']),
+      ]),
+    ]),
+    callout('Qualys情報の更新は、取込と同じ内容（資産・チケット・検査）を取り直して独自RASに反映します。Search List の更新は、SharePoint 上の Excel の CVE 一覧に合わせて Qualys の動的検索リストを更新します。'),
+    prog,
+  ]);
+  openModal({
+    title: '日次更新', body, primaryLabel: 'OK', wide: true, dismissBackdrop: false,
+    onPrimary: async () => {
+      if (!cbQualys.checked && !cbSearch.checked) { toast('実行する内容を選んでください', 'error'); return false; }
+      const r = await runDailyUpdate(cbQualys.checked, cbSearch.checked, setProg);
+      if (r) { showDailyResult(r); return true; }
+      return false;
+    },
+  });
+}
+
+// 日次更新の本体。失敗しても途中まで残す（全部やり直しにしない）。
+async function runDailyUpdate(
+  doQualys: boolean, doSearch: boolean, setProg: (msg: string, busy: boolean) => void,
+): Promise<DailyRunSummary | null> {
+  const cfg = await getConfig();
+  const creds = await resolveQualysCreds();
+  if (!creds) { setProg('Qualys 接続先/アカウントが未登録のため中止しました', false); return null; }
+  const summary: DailyRunSummary = {
+    ingested: [], ticketsNew: 0, ticketsClosed: 0, ticketsReopened: 0,
+    searchLists: [], reports: [], notes: [],
+  };
+  await ensureAuthor();
+  const owner = localStorage.getItem(LS.author) || '';
+  let locked = false;
+  setRelayBusy(true);
+  try {
+    if (doQualys) {
+      if (await repo.acquireIngestLock(owner, INGEST_LOCK_MIN)) { setProg('他の利用者が取込中です', false); return null; }
+      locked = true;
+      setProg('Qualys から取得中…', true);
+      const kinds = ENTITIES.map((e) => e.key);
+      const hasTickets = (await getTicketStamps(backend)).length > 0;
+      const tq = ticketQuery(resolveTicketMode('delta', hasTickets));
+      const q = quarterOf(new Date(), cfg.fiscalStartMonth || 4);
+      const { results, failures, ips, tickets, inspection } = await downloadEntitiesParallel(
+        kinds, creds, (m) => setProg(m, true), true, tq, qualysDateTimeUtc(q.start));
+      let ipCount: number | null = null;
+      const today = dateOfStamp(stampNow());
+      if (ips) { ipCount = ips.count; if (ips.xml) await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ips.xml).catch(() => undefined); }
+      for (const dl of results) { setProg(`${dl.kind}: 保存中…`, true); await commitOne(dl.snapshot, dl.raw, { decided: true, proceed: true }, ipCount); summary.ingested.push(dl.kind); }
+      if (tickets) await commitTickets(tickets);
+      if (inspection?.raw && (inspection.raw.scans || inspection.raw.maps)) await storeInspection(inspection, q.label);
+      for (const f of failures) summary.notes.push(`${f.kind} の取得に失敗: ${f.error}`);
+
+      // 独自RAS の更新と、前回との差分によるラベル付け。
+      setProg('独自RASを更新中…', true);
+      const prevTickets = await repo.readRasTickets();
+      await syncRasFromLatest(tickets?.tickets);
+      const nextTickets = await repo.readRasTickets();
+      const changes = classifyTickets(prevTickets, nextTickets);
+      const at = new Date().toISOString();
+      const marks = changes.map((c) => ({ number: c.ticket.number, change: c.change, changedAt: c.change ? at : '' }));
+      await repo.setRasTicketMarks(marks);
+      for (const c of changes) {
+        if (c.change === 'new') summary.ticketsNew++;
+        else if (c.change === 'closed') summary.ticketsClosed++;
+        else if (c.change === 'reopened') summary.ticketsReopened++;
+      }
+      // 新しく開いた脆弱性のホストは、SCANレポートを作って SharePoint に置く。
+      await buildScanReports(creds, cfg, reportTargets(changes), summary, setProg);
+    }
+
+    if (doSearch) {
+      setProg('検索リストを更新中…', true);
+      await runSearchListUpdate(creds, cfg, summary, setProg);
+    }
+    setProg('完了しました', false);
+    recordOp('日次更新', dailyOpDetail(summary));
+    refresh();
+    return summary;
+  } catch (e) {
+    setProg('失敗: ' + (e as Error).message, false);
+    toast('日次更新に失敗しました: ' + (e as Error).message, 'error');
+    return null;
+  } finally {
+    if (locked) await repo.releaseIngestLock(owner).catch(() => undefined);
+    setRelayBusy(false);
+  }
+}
+
+const dailyOpDetail = (s: DailyRunSummary): string =>
+  `新規 ${s.ticketsNew} / クローズ ${s.ticketsClosed} / 再検知 ${s.ticketsReopened}`
+  + `${s.searchLists.length ? ` / 検索リスト ${s.searchLists.filter((x) => x.updated).length}件更新` : ''}`
+  + `${s.reports.length ? ` / レポート ${s.reports.filter((x) => x.path).length}件` : ''}`;
+
+// Excel の CVE 一覧に合わせて動的検索リストを更新する。
+async function runSearchListUpdate(
+  creds: QualysCreds, cfg: RelayConfig, summary: DailyRunSummary, setProg: (m: string, b: boolean) => void,
+): Promise<void> {
+  const ids = parseSearchListIds(cfg.searchListIds || '');
+  if (!ids.length) { summary.notes.push('検索リストIDが未設定です（設定 → 共通設定 → 日次更新 で登録してください）'); return; }
+  const path = (cfg.cveXlsxPath || '').trim();
+  if (!path) { summary.notes.push('CVE対応策一覧の Excel パスが未設定です（設定 → 共通設定 → 日次更新 で登録してください）'); return; }
+
+  setProg('CVE対応策一覧を読み込み中…', true);
+  if (!backend.readBinary) { summary.notes.push('この保管先では Excel を読めません'); return; }
+  const buf = await backend.readBinary(path);
+  if (!buf) { summary.notes.push(`Excel が見つかりません: ${path}`); return; }
+  const sheet = await readXlsxSheet(buf, 'CVE対応策一覧');
+  const want = parseCveList(columnUntilBlankRow(sheet.rows, 'A', 3).join(','));
+  if (!want.length) { summary.notes.push('Excel の A3 以下に CVE 番号がありませんでした'); return; }
+
+  setProg(`検索リストを確認中…（CVE ${want.length} 件）`, true);
+  const lists = parseDynamicLists(await fetchSearchLists(creds, ids));
+  const author = localStorage.getItem(LS.author) || '';
+  for (const id of ids) {
+    const cur = lists.find((l) => l.id === id);
+    if (!cur) { summary.searchLists.push({ id, title: '', added: [], removed: [], updated: false, error: '検索リストが見つかりません（IDと権限を確認してください）' }); continue; }
+    const d = diffCves(want, cur.cves);
+    if (!d.changed) { summary.searchLists.push({ id, title: cur.title, added: [], removed: [], updated: false }); continue; }
+    try {
+      setProg(`検索リスト ${cur.title || id} を更新中…`, true);
+      await updateSearchList(creds, author, cveUpdateFields(id, want));
+      summary.searchLists.push({ id, title: cur.title, added: d.added, removed: d.removed, updated: true });
+    } catch (e) {
+      summary.searchLists.push({ id, title: cur.title, added: d.added, removed: d.removed, updated: false, error: (e as Error).message });
+    }
+  }
+}
+
+// 新しく開いた脆弱性のホストについて、SCANレポート（日本語・英語）を作って SharePoint へ置く。
+// ★言語は Qualys のアカウント設定に紐づくので、英語は英語用アカウントで作り直す。
+async function buildScanReports(
+  jaCreds: QualysCreds, cfg: RelayConfig, targets: ReportTarget[], summary: DailyRunSummary,
+  setProg: (m: string, b: boolean) => void,
+): Promise<void> {
+  if (!targets.length) return;
+  const author = localStorage.getItem(LS.author) || '';
+  const enUser = localStorage.getItem(LS.qualysUserEn) || '';
+  const enSecret = localStorage.getItem(LS.qualysSecretEn) || '';
+  const langs: { lang: 'ja' | 'en'; creds: QualysCreds; template: string }[] = [];
+  if ((cfg.reportTemplateJa || '').trim()) langs.push({ lang: 'ja', creds: jaCreds, template: cfg.reportTemplateJa.trim() });
+  else summary.notes.push('レポートテンプレートID（日本語）が未設定のため、日本語レポートは作りませんでした');
+  if (enUser && enSecret && (cfg.reportTemplateEn || '').trim()) {
+    langs.push({ lang: 'en', creds: { ...jaCreds, user: enUser, pass: '', secret: enSecret }, template: cfg.reportTemplateEn.trim() });
+  } else {
+    summary.notes.push('英語アカウントまたはテンプレートID（英語）が未設定のため、英語レポートは作りませんでした');
+  }
+  if (!langs.length) return;
+
+  const marks: { number: string; reportJa?: string; reportEn?: string }[] = [];
+  for (const t of targets) {
+    const link: { reportJa?: string; reportEn?: string } = {};
+    for (const l of langs) {
+      const stamp = stampNow();
+      try {
+        setProg(`${t.ip} のレポート(${l.lang === 'ja' ? '日本語' : '英語'})を作成中…`, true);
+        const id = await launchScanReport(l.creds, author, {
+          templateId: l.template, title: reportTitle(t.ip, t.fqdn, stamp), ip: t.ip,
+        });
+        // 生成は非同期。完成するまで待つ（待たずに fetch すると XML のエラーが返る）。
+        const state = await waitReport(l.creds, id, (msg) => setProg(`${t.ip} のレポート: ${msg}`, true));
+        if (state !== 'Finished') throw new Error(`レポートが完成しませんでした（状態: ${state || '不明'}）`);
+        const b64 = await fetchReportPdf(l.creds, id);
+        const path = reportPath(stamp, t.ip, l.lang);
+        if (!backend.writeBinary) throw new Error('この保管先には PDF を保存できません');
+        await backend.writeBinary(path, b64);
+        const url = spFileUrl(cfg, path);
+        if (l.lang === 'ja') link.reportJa = url; else link.reportEn = url;
+        summary.reports.push({ ip: t.ip, lang: l.lang, path: url });
+      } catch (e) {
+        summary.reports.push({ ip: t.ip, lang: l.lang, error: (e as Error).message });
+      }
+    }
+    if (link.reportJa || link.reportEn) for (const no of t.tickets) marks.push({ number: no, ...link });
+  }
+  if (marks.length) await repo.setRasTicketMarks(marks);
+}
+
+// レポートの完成待ち。Qualys 側の生成は数分かかることがある。
+async function waitReport(creds: QualysCreds, id: string, onWait: (msg: string) => void): Promise<string> {
+  const started = Date.now();
+  for (let i = 0; ; i++) {
+    const state = await reportState(creds, id);
+    if (state && state !== 'Running' && state !== 'Submitted') return state;
+    // 生成が終わらないまま待ち続けない（他の対象へ進めなくなる）。
+    if (Date.now() - started > 15 * 60_000) return state || 'Running';
+    onWait(`生成待ち ${Math.round((Date.now() - started) / 1000)} 秒`);
+    await new Promise((res) => setTimeout(res, Math.min(15_000, 3_000 + i * 2_000)));
+  }
+}
+
+/** 保管先ライブラリのファイルを開く URL。 */
+const spFileUrl = (cfg: RelayConfig, path: string): string =>
+  `${(cfg.spSiteUrl || '').replace(/\/+$/, '')}/${encodeURIComponent(cfg.spLibrary || 'QamData')}/${path.split('/').map(encodeURIComponent).join('/')}`;
+
+// 実行結果のモーダル。何をして何をしなかったかを、件数と理由で出す。
+function showDailyResult(s: DailyRunSummary): void {
+  const sec = (title: string, children: (HTMLElement | string)[]): HTMLElement =>
+    el('div', { class: 'qam-card', style: 'margin-bottom:var(--s-4)' }, [el('div', { class: 'qam-card-title' }, [title]), ...children]);
+  const body = el('div', {});
+
+  body.append(sec('Qualys情報', [
+    el('div', {}, [`取り込んだ種別: ${s.ingested.length ? s.ingested.join(' / ') : '（実行しませんでした）'}`]),
+    el('div', { style: 'margin-top:var(--s-2)' }, [
+      `新規オープン ${s.ticketsNew} 件 / クローズ ${s.ticketsClosed} 件 / 再検知 ${s.ticketsReopened} 件`,
+    ]),
+  ]));
+
+  if (s.searchLists.length) {
+    body.append(sec('Search List', s.searchLists.map((r) => el('div', {
+      class: r.error ? 'qam-hint' : '', style: r.error ? 'color:var(--danger)' : '',
+    }, [searchListSummary(r)]))));
+  }
+  if (s.reports.length) {
+    body.append(sec('SCANレポート', s.reports.map((r) => {
+      const label = `${r.ip}（${r.lang === 'ja' ? '日本語' : '英語'}）`;
+      if (r.error) return el('div', { style: 'color:var(--danger)' }, [`${label}: 失敗 — ${r.error}`]);
+      return el('div', {}, [`${label}: `, el('a', { href: r.path!, target: '_blank', rel: 'noopener noreferrer' }, ['レポートを開く'])]);
+    })));
+  }
+  // ★実行しなかったものは必ず出す。黙って飛ばすと「動いたのに何も起きない」になる。
+  if (s.notes.length) body.append(sec('実行しなかったもの', s.notes.map((n) => el('div', { class: 'qam-hint' }, [n]))));
+
+  openModal({ title: '日次更新の結果', body, wide: true });
 }
 
 // マスター管理ビュー: 事業会社の登録と、独自RASの2リストに対するアクセス権の割当。

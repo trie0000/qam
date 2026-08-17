@@ -1,7 +1,7 @@
 // Qualys API ダウンロード: relay 経由でプロキシ取得し、Host の nextUrl ページングを辿って
 // 全件をマージ → 正規化スナップショットにする。XML アップロードと同じ正規化(parse)に合流。
 import { parseQualysXml } from './ingest/parse';
-import { fetchQualys, fetchQualysBatch, fetchBatchResult, PAGE_SEP, qualysUserAdd, qualysScheduleAdd, type FetchResult } from './relay';
+import { fetchQualys, fetchQualysBatch, fetchBatchResult, PAGE_SEP, qualysUserAdd, qualysScheduleAdd, qualysReportFetch, type FetchResult } from './relay';
 import { SCHEDULE_PATHS, scheduleParams, validateSchedule, type ScheduleInput } from './schedule';
 import { parseTicketPages, type TicketQuery } from './tickets';
 import type { QamEntity, QamInspectionRaw, QamRecords, QamSnapshot, QamTicket } from './types';
@@ -396,4 +396,85 @@ export async function addQualysUser(creds: QualysCreds, input: UserAddInput): Pr
   const res = await qualysUserAdd({ base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, fields });
   if (!res.ok) throw new Error(res.error || 'ユーザ登録に失敗しました');
   return { login: res.login ?? '' };
+}
+
+
+// ──────────────────────────────────────────────────────────────────────────
+// 動的検索リスト（日次更新）。取得は v3.0 の action=list、更新は action=update。
+// ★update にするのは ID を保つため。delete+create にすると設定に登録した ID が無効になる。
+// ──────────────────────────────────────────────────────────────────────────
+export async function fetchSearchLists(creds: QualysCreds, ids: string[]): Promise<string> {
+  const base = creds.base.replace(/\/+$/, '');
+  const res = await fetchQualys({
+    kind: 'searchlist', base, ids: ids.join(','),
+    user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true,
+  });
+  if (!res.ok || !res.xml) throw new Error(`検索リストを取得できません (status ${res.status}): ${failReason(res) || '権限を確認してください'}`);
+  const err = qualysErrorText(res.xml);
+  if (err) throw new Error(err); // 200 でも本文がエラーなら失敗扱い
+  return res.xml;
+}
+
+const SEARCH_LIST_PATH = '/api/3.0/fo/qid/search_list/dynamic/';
+
+export async function updateSearchList(creds: QualysCreds, author: string, fields: Record<string, string>): Promise<void> {
+  const res = await qualysScheduleAdd({
+    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, secret: creds.secret,
+    proxy: creds.proxy, path: SEARCH_LIST_PATH, author, fields,
+  });
+  if (!res.ok) throw new Error(res.error || `更新に失敗しました (status ${res.status})`);
+  const err = qualysErrorText(res.xml ?? '');
+  if (err) throw new Error(err);
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// SCANレポート（ホスト単位）。launch → 完了待ち → fetch の3段。
+// ★言語はアカウント設定に紐づくので、日本語/英語は creds を替えて呼ぶ。
+// ──────────────────────────────────────────────────────────────────────────
+const REPORT_PATH = '/api/3.0/fo/report/';
+
+/** レポート作成を依頼して ID を返す。 */
+export async function launchScanReport(
+  creds: QualysCreds, author: string, o: { templateId: string; title: string; ip: string },
+): Promise<string> {
+  const res = await qualysScheduleAdd({
+    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, secret: creds.secret,
+    proxy: creds.proxy, path: REPORT_PATH, author,
+    fields: {
+      action: 'launch', template_id: o.templateId, report_title: o.title,
+      output_format: 'pdf', report_type: 'Scan', ips: o.ip,
+    },
+  });
+  if (!res.ok) throw new Error(res.error || `レポート作成の依頼に失敗しました (status ${res.status})`);
+  const xml = res.xml ?? '';
+  const err = qualysErrorText(xml);
+  if (err) throw new Error(err);
+  // SIMPLE_RETURN の ITEM_LIST に KEY=ID / VALUE=<id> で返る。
+  const id = /<KEY>\s*ID\s*<\/KEY>\s*<VALUE>\s*(\d+)\s*<\/VALUE>/i.exec(xml)?.[1] ?? '';
+  if (!id) throw new Error('レポートIDを取得できませんでした');
+  return id;
+}
+
+/** レポートの状態。Finished になるまで待つ。 */
+export async function reportState(creds: QualysCreds, id: string): Promise<string> {
+  const base = creds.base.replace(/\/+$/, '');
+  const res = await fetchQualys({
+    base, url: `${base}${REPORT_PATH}?action=list&id=${encodeURIComponent(id)}`,
+    user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true,
+  });
+  if (!res.ok) throw new Error(`レポートの状態を取得できません (status ${res.status})`);
+  return /<STATE>\s*([^<]+?)\s*<\/STATE>/i.exec(res.xml)?.[1] ?? '';
+}
+
+/** 完成した PDF を取り出す（base64）。 */
+export async function fetchReportPdf(creds: QualysCreds, id: string): Promise<string> {
+  const r = await qualysReportFetch({
+    base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, secret: creds.secret,
+    proxy: creds.proxy, id,
+  });
+  if (!r.ok || !r.base64) {
+    const err = r.xml ? qualysErrorText(r.xml) : '';
+    throw new Error(err || r.error || `レポートを取得できません (status ${r.status ?? '?'})`);
+  }
+  return r.base64;
 }

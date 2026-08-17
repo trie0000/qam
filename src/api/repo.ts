@@ -70,6 +70,8 @@ export interface RecordRepo {
 
   readRasTickets(): Promise<RasTicket[]>;
   syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
+  /** 日次更新の結果（変化ラベル・レポートリンク）を書き戻す。 */
+  setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string }[]): Promise<number>;
 
   /** 独自RASの2リストを SharePoint で開くURL。取れなければ空文字。 */
   rasListUrls(): Promise<{ assets: string; tickets: string }>;
@@ -88,7 +90,7 @@ let impl: RecordRepo = {
   readAnnotations: notReady, setAnnotation: notReady, setAnnotationsBulk: notReady,
   readSharedJson: notReady, writeSharedJson: notReady,
   readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady,
-  readRasTickets: notReady, syncRasTickets: notReady,
+  readRasTickets: notReady, syncRasTickets: notReady, setRasTicketMarks: notReady,
   rasListUrls: notReady, listSiteGroups: notReady, applyRasPerms: notReady,
   readOps: notReady, logOp: notReady,
   readManualInspections: notReady, appendManualInspection: notReady,
@@ -109,6 +111,7 @@ export const repo: RecordRepo = {
   setRasCompaniesBulk: (u) => impl.setRasCompaniesBulk(u),
   readRasTickets: () => impl.readRasTickets(),
   syncRasTickets: (t) => impl.syncRasTickets(t),
+  setRasTicketMarks: (m) => impl.setRasTicketMarks(m),
   rasListUrls: () => impl.rasListUrls(),
   listSiteGroups: () => impl.listSiteGroups(),
   applyRasPerms: (p, cb) => impl.applyRasPerms(p, cb),

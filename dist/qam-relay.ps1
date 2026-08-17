@@ -276,7 +276,8 @@ function Invoke-QualysScheduleAdd { param($Body)
         '/msp/scheduled_scans.php',     # MAP スケジュール作成(v1)
         '/api/2.0/fo/asset/group/',     # AssetGroup 作成(v2)
         '/msp/asset_domain.php',        # ドメイン登録(v1)
-        '/api/3.0/fo/qid/search_list/dynamic/'  # 動的検索リストの更新(v3)
+        '/api/3.0/fo/qid/search_list/dynamic/', # 動的検索リストの更新(v3)
+        '/api/3.0/fo/report/'                   # SCANレポートの作成(v3)
     )
     if ($allowed -notcontains $path) { return [ordered]@{ ok = $false; error = "許可されていない送信先です: $path" } }
     $parts = New-Object System.Collections.ArrayList
@@ -563,6 +564,42 @@ function Invoke-QamFetchBatch {
     return [ordered]@{ ok = $true; items = $items }
 }
 
+# レポート本体(PDF)の取得。★テキストとして返すと壊れるので base64 で返す。
+# 取得だけで、保存は TS 側（SharePoint へ置く）が行う。
+function Invoke-QualysReportFetch { param($Body)
+    $base = ([string]$Body.base).TrimEnd('/')
+    if (-not $base) { return [ordered]@{ ok = $false; error = '接続先(POD)が未設定です' } }
+    $id = [string]$Body.id
+    if ($id -notmatch '^\d+$') { return [ordered]@{ ok = $false; error = "不正なレポートID: $id" } }
+    $url = "$base/api/3.0/fo/report/?action=fetch&id=$id"
+    $proxy = if ($Body.proxy) { $Body.proxy } else { $null }
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.UseCookies = $false
+    if ($proxy) { $handler.Proxy = New-Object System.Net.WebProxy($proxy); $handler.UseProxy = $true }
+    $handler.AutomaticDecompression = [System.Net.DecompressionMethods]::GZip -bor [System.Net.DecompressionMethods]::Deflate
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds(600)
+    try {
+        $client.DefaultRequestHeaders.Add('User-Agent', 'curl/8.4.0')
+        $client.DefaultRequestHeaders.Add('X-Requested-With', 'QAM')
+        if ($Body.user) {
+            $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($Body.user):$(Get-QamPassword $Body)"))
+            $client.DefaultRequestHeaders.Add('Authorization', "Basic $b64")
+        }
+        Add-QamLog "REPORT fetch $url"
+        $resp = $client.GetAsync($url).Result
+        $rc = $resp.Content
+        $bytes = if ($rc) { $rc.ReadAsByteArrayAsync().Result } else { [byte[]]@() }
+        $ctype = if ($rc -and $rc.Headers.ContentType) { [string]$rc.Headers.ContentType } else { '' }
+        # XML が返る＝まだ出来ていない/エラー。中身をそのまま返して TS 側で理由を出す。
+        if (-not $resp.IsSuccessStatusCode -or $ctype -match 'xml') {
+            $xml = if ($bytes.Length) { [Text.Encoding]::UTF8.GetString($bytes) } else { '' }
+            return [ordered]@{ ok = $false; status = [int]$resp.StatusCode; xml = $xml }
+        }
+        return [ordered]@{ ok = $true; status = [int]$resp.StatusCode; contentType = $ctype; base64 = [Convert]::ToBase64String($bytes) }
+    } finally { $client.Dispose(); $handler.Dispose() }
+}
+
 # ─── ルーティング ────────────────────────────────────────────────────────────
 $IndexHtml = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QAM — Qualys Asset Management</title></head><body><div id="qam-root"></div><script src="/qam/bundle/qam.bundle.js"></script></body></html>'
 
@@ -600,6 +637,12 @@ function Invoke-Route { param($Ctx)
         '^/qam/resolve$' {
             try { Send-Json $Ctx (Invoke-QamResolve (Get-Body $req | ConvertFrom-Json)) }
             catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message; results = @() } 502 }
+            return
+        }
+        '^/qam/qualys/report-fetch$' {
+            if ($req.HttpMethod -ne 'POST') { Send-Json $Ctx @{ error = 'POST のみ' } 405; return }
+            try { Send-Json $Ctx (Invoke-QualysReportFetch (Get-Body $req | ConvertFrom-Json)) }
+            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 500 }
             return
         }
         '^/qam/qualys/user-add$' {

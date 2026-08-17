@@ -90,6 +90,11 @@ export interface RasTicket {
   settenId: string;
   businessCompany: string; // 権限判定のために資産から写しておく（リスト単体で権限を組めるように）
   created: string;
+  // 日次更新で付ける情報。取得しただけの同期では触らない。
+  change?: string;    // '' | new | closed | reopened
+  changedAt?: string; // 変化を検知した日時
+  reportJa?: string;  // SCANレポート(日本語)の SharePoint URL
+  reportEn?: string;
 }
 
 // 独自RAS資産を組み立てる。元は3つ:

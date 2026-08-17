@@ -57,6 +57,11 @@ export async function fetchBatchResult(kind: string): Promise<string> {
   return await r.text();
 }
 
+// レポート本体(PDF)。テキストで返すと壊れるので base64 で受け取る。
+export interface ReportFetchResult { ok: boolean; status?: number; contentType?: string; base64?: string; xml?: string; error?: string }
+export const qualysReportFetch = (body: { base: string; user: string; pass?: string; secret?: string; proxy: string; id: string }): Promise<ReportFetchResult> =>
+  postJson('/qam/qualys/report-fetch', body);
+
 export interface UserAddResult { ok: boolean; login?: string; error?: string; status?: number }
 export const qualysUserAdd = (body: { base: string; user: string; pass: string; secret?: string; proxy: string; author?: string; fields: Record<string, string> }): Promise<UserAddResult> =>
   postJson('/qam/qualys/user-add', body);
