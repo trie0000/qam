@@ -337,6 +337,8 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
   width: min(680px, calc(100vw - 80px)); max-height: calc(100vh - 80px); display: flex; flex-direction: column; overflow: hidden; }
 /* 入力フォーム用の広いモーダル（2〜3段組が窮屈にならない幅） */
 .qam-modal--wide { width: min(880px, calc(100vw - 80px)); }
+.qam-modal--xl { width: min(1080px, calc(100vw - 64px)); }
+.qam-modal--flush > .qam-modal-body { padding: 0; overflow: hidden; }
 .qam-modal-head { display: flex; align-items: center; padding: var(--s-6) var(--s-7); border-bottom: 1px solid var(--line); }
 .qam-modal-head .qam-modal-title { font-size: var(--fs-lg); font-weight: 600; margin-right: auto; }
 .qam-modal-body { padding: var(--s-7); overflow: auto; }
@@ -345,13 +347,26 @@ table.qam-table { border-collapse: separate; border-spacing: 0; width: auto; tab
 .qam-modal-foot { display: flex; justify-content: flex-end; gap: var(--s-3); padding: var(--s-5) var(--s-7); border-top: 1px solid var(--line); }
 /* 設定モーダル: 左ペインに分類、右ペインに項目 */
 /* 共通: 項目を切り替えてもモーダルのサイズは変えない。項目数に対し十分大きくしスクロール不要に。 */
-.qam-settings { display: grid; grid-template-columns: 160px 1fr; gap: var(--s-7); width: 620px; max-width: 100%; height: 440px; }
-.qam-settings-nav { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--line); padding-right: var(--s-4); }
-/* 左ライン（accent）でアクティブ分類を視覚区別。app の qam-nav と同じ規約。 */
-.qam-settings-nav button { text-align: left; border: 0; border-left: 3px solid transparent; background: transparent; color: var(--ink); font: inherit; padding: var(--s-3) var(--s-4); border-radius: var(--r-2); cursor: pointer; }
-.qam-settings-nav button:hover { background: var(--paper-2); }
-.qam-settings-nav button[aria-current="true"] { background: var(--accent-soft); border-left-color: var(--accent); color: var(--accent-strong); font-weight: 600; }
-.qam-settings-pane { display: flex; flex-direction: column; gap: var(--s-5); min-width: 0; height: 100%; overflow-y: auto; }
+/* 設定: 左ナビ（大分類 > 小分類 > 項目）＋ 右詳細。項目ごとに1画面。 */
+.qam-set { display: flex; height: min(560px, calc(100vh - 220px)); }
+.qam-set-nav { width: 240px; flex: 0 0 240px; border-right: 1px solid var(--line);
+  background: var(--paper-2); overflow-y: auto; padding: var(--s-2) 0; }
+.qam-set-major { margin: var(--s-2) var(--s-3) var(--s-4); border-left: 4px solid var(--accent); }
+.qam-set-major-title { padding: var(--s-2) var(--s-3) 2px; font-size: var(--fs-sm); font-weight: 700; letter-spacing: 0.03em; }
+.qam-set-major-sub { padding: 0 var(--s-3) var(--s-3); font-size: var(--fs-xs); color: var(--ink-4); line-height: 1.5; }
+.qam-set-group { padding: var(--s-2) var(--s-3) 2px; font-size: var(--fs-xs); color: var(--ink-4);
+  letter-spacing: 0.05em; font-weight: 600; }
+.qam-set-item { display: block; width: 100%; text-align: left; border: 0; border-left: 3px solid transparent;
+  background: transparent; color: var(--ink-3); font: inherit; font-size: var(--fs-sm);
+  padding: 6px 12px 6px 16px; cursor: pointer; }
+.qam-set-item:hover { background: var(--paper-2-strong); }
+.qam-set-item[aria-current="true"] { color: var(--ink); background: var(--accent-soft);
+  border-left-color: var(--accent); font-weight: 600; }
+.qam-set-item--danger { color: var(--danger); }
+.qam-set-pane { flex: 1; min-width: 0; overflow: auto; padding: var(--s-6) var(--s-7); background: var(--paper); }
+.qam-set-head { margin-bottom: var(--s-5); }
+.qam-set-head h3 { margin: 0 0 var(--s-2); font-size: var(--fs-lg); font-weight: 600; }
+.qam-set-head p { margin: 0; color: var(--ink-3); font-size: var(--fs-sm); line-height: 1.6; }
 /* 注意書き: コールアウト形式（小さめ・左アクセント線・薄背景）。無駄に大きいフォントにしない。 */
 .qam-callout { display: flex; gap: var(--s-2); align-items: flex-start; font-size: var(--fs-xs); line-height: 1.5; color: var(--ink-3);
   background: var(--paper-2); border-left: 3px solid var(--accent); border-radius: var(--r-1); padding: var(--s-2) var(--s-3); }

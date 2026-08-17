@@ -14,6 +14,12 @@ export interface ModalOpts {
   dismissBackdrop?: boolean;
   // 2〜3段組を持つ入力フォーム用に横幅を広げる（確認・警告の短いモーダルは既定のまま）。
   wide?: boolean;
+  // 左ナビ＋右詳細の設定画面用にさらに広げる。あわせて本文の余白を無くす
+  // （ナビの背景を端まで敷くため）。
+  xl?: boolean;
+  // 保存ボタンの参照を呼び出し側へ返す。ペインごとに保存の有無が変わる画面で
+  // 有効/無効を切り替えるのに使う（「押せるのに何も起きない」を避ける）。
+  primaryRef?: { el?: HTMLButtonElement };
 }
 
 // 開いているモーダルのスタック。Esc は最前面の 1 枚だけを閉じる
@@ -22,7 +28,8 @@ const stack: symbol[] = [];
 
 export function openModal(opts: ModalOpts): { close: () => void } {
   const backdrop = el('div', { class: 'qam-backdrop' });
-  const box = el('div', { class: `qam-modal${opts.wide ? ' qam-modal--wide' : ''}`, role: 'dialog', 'aria-modal': 'true' });
+  const size = opts.xl ? ' qam-modal--xl qam-modal--flush' : (opts.wide ? ' qam-modal--wide' : '');
+  const box = el('div', { class: `qam-modal${size}`, role: 'dialog', 'aria-modal': 'true' });
 
   const closeBtn = el('button', { class: 'btn btn--icon', 'aria-label': '閉じる', html: icon('x', 16) });
   const head = el('div', { class: 'qam-modal-head' }, [
@@ -35,6 +42,7 @@ export function openModal(opts: ModalOpts): { close: () => void } {
   let primaryBtn: HTMLButtonElement | null = null;
   if (opts.onPrimary) {
     primaryBtn = el('button', { class: 'btn btn--primary' }, [opts.primaryLabel ?? '保存']);
+    if (opts.primaryRef) opts.primaryRef.el = primaryBtn;
     const cancel = el('button', { class: 'btn btn--ghost' }, ['キャンセル']);
     cancel.addEventListener('click', () => close());
     primaryBtn.addEventListener('click', async () => {

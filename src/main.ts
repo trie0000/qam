@@ -211,6 +211,19 @@ topbar.append(
   iconBtn('logout', '終了', doShutdown),
 );
 
+// 本体を差し替えた直後の起動なら「更新しました」を出す。
+// ★更新ボタンを押した時点のトーストは、差し替えで画面ごと作り直されるため残らない。
+//   完了を知らせるには、新しい版の起動後に出す必要がある。
+function notifyBundleUpdated(): void {
+  let prev = '';
+  try { prev = localStorage.getItem(LS.bundlePrev) || ''; } catch { return; }
+  if (!prev) return;
+  try { localStorage.removeItem(LS.bundlePrev); } catch { /* 消せなくても表示は1回で済ませたい */ }
+  // 同じ版のままなら更新できていない（配置し忘れなど）。黙って成功に見せない。
+  if (prev === BUILD) { toast(`更新しましたが版は変わっていません（${BUILD}）。SharePoint への配置を確認してください`, 'error'); return; }
+  toast(`最新版に更新しました（${prev} → ${BUILD}）`, 'ok');
+}
+
 // 右上の更新ボタン。まず配信元に新しい本体が出ていないか見て、出ていればその場で
 // 差し替える（ページ再読込ではアプリが消えるため。理由は bundle.ts の先頭）。
 // 出ていなければ従来どおり画面を再描画する。
@@ -220,11 +233,15 @@ async function doRefresh(): Promise<void> {
     const loc = resolveBundleLocation(cfg, RELAY, window.location);
     const latest = await fetchLatestBuildId(loc.base);
     if (latest && latest !== BUILD) {
-      toast(`新しい版 (${latest}) を読み込みます…`, 'info');
+      // ★ここで出すトーストは差し替えと同時に消える（画面ごと作り直すため）。
+      //   更新できたことは新しい版の起動後に知らせる。そのために今の版を控えておく。
+      try { localStorage.setItem(LS.bundlePrev, BUILD); } catch { /* 保存できなくても更新は続ける */ }
       stopBackgroundWork(); // 古い版の死活監視を止めてから入れ替える
       await reloadBundleInPlace(loc.base);
       return; // 以降は新版の起動処理が引き継ぐ
     }
+    // 押したのに何も起きないと壊れて見えるので、最新であることも知らせる。
+    if (latest) toast(`最新版です（${BUILD}）`, 'info');
   } catch (e) {
     // 版の確認や取得に失敗しても、再描画までは行う（更新ボタンが無反応にならないように）。
     toast('新しい版を確認できませんでした: ' + (e as Error).message, 'error');
@@ -2183,13 +2200,25 @@ function openIngest(): void {
 
 // ---- settings ----
 // 共通デザインルールに沿って分類（個人設定 / 共通設定 / 開発者）。左ペインで分類を選び右ペインに項目を表示。
+// 設定ハブ: 大分類（個人/共通/その他）→ 小分類 → 項目 の左ナビ＋右詳細。
+// ★保存は「いま開いている項目だけ」。全項目を一括で送ると、開いていないペインの
+//   古い値まで書き戻してしまう（別の人が直した共通設定を巻き戻す事故になる）。
+interface SettingPanel { body: HTMLElement; save?: () => Promise<boolean> }
+interface SettingItem { key: string; label: string; danger?: boolean; render: () => SettingPanel }
+interface SettingSubGroup { title: string; items: SettingItem[] }
+interface SettingMajor { key: string; title: string; subtitle: string; accent: string; groups: SettingSubGroup[] }
+
+const setHead = (title: string, desc: string): HTMLElement =>
+  el('div', { class: 'qam-set-head' }, [el('h3', {}, [title]), el('p', {}, [desc])]);
+
 async function openSettings(): Promise<void> {
   const cfg = await getConfig();
-  const field = (label: string, input: HTMLElement, hint?: string) =>
+  const field = (label: string, input: HTMLElement, hint?: string): HTMLElement =>
     el('div', { class: 'qam-field' }, [el('label', {}, [label]), input, ...(hint ? [callout(hint)] : [])]);
-  // 入力は一度だけ生成（ペイン切替で値は保持）。
+  const ro = (v: string): HTMLElement => el('div', { class: 'qam-count', style: 'user-select:text' }, [v]);
+
+  // 入力は一度だけ生成（ペインを切り替えても入力中の値が消えないように）。
   const base = el('input', { class: 'in', value: cfg.qualysBase || '', placeholder: 'https://YOUR-POD.qualysapi.example.com' }) as HTMLInputElement;
-  // アカウントは個人設定（ブラウザ保持）。旧 env(cfg.qualysUser) があれば移行用に初期表示。
   const user = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUser) || cfg.qualysUser || '' }) as HTMLInputElement;
   const proxy = el('input', { class: 'in', value: cfg.proxy || '', placeholder: 'http://proxy:8080' }) as HTMLInputElement;
   const ret = el('input', { class: 'in', type: 'number', min: '1', value: String(cfg.retentionDays || 90) }) as HTMLInputElement;
@@ -2218,15 +2247,15 @@ async function openSettings(): Promise<void> {
   const fontsize = el('select', { class: 'in' }) as HTMLSelectElement;
   ([['lg', '大'], ['md', '中'], ['sm', '小']] as [string, string][])
     .forEach(([v, t]) => fontsize.append(el('option', { value: v, selected: (localStorage.getItem(LS.fontsize) || 'md') === v }, [t])));
-  // 文字サイズはその場で反映（＋保存）。保存ボタンを待たない。
+  // 文字サイズは保存を待たずその場で反映（効きを見ながら選べるように）。
   fontsize.addEventListener('change', () => { localStorage.setItem(LS.fontsize, fontsize.value); themeHost.dataset.fontsize = fontsize.value; });
 
-  // 開発者: データのリセット（資産データ/履歴/メモを選んで全削除）。
-  const ckSnap = el('input', { type: 'checkbox' }) as HTMLInputElement;
-  const ckHist = el('input', { type: 'checkbox' }) as HTMLInputElement;
-  const ckCmt = el('input', { type: 'checkbox' }) as HTMLInputElement;
-  const ckRow = (cb: HTMLInputElement, label: string) => el('label', { class: 'qam-chip', style: 'display:inline-flex;gap:6px;align-items:center;font-size:var(--fs-sm);margin-right:var(--s-4)' }, [cb, label]);
-  // アプリ本体を SharePoint へ配置（ローダはここから読む）
+  const saveConfig = async (patch: Parameters<typeof setConfig>[0]): Promise<boolean> => {
+    try { await setConfig(patch); toast('設定を保存しました', 'ok'); return true; }
+    catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
+  };
+
+  // --- その他: ボタン類 ---
   const deployBtn = el('button', { class: 'btn btn--sm' }, ['アプリを SharePoint に配置']);
   deployBtn.addEventListener('click', async () => {
     deployBtn.setAttribute('disabled', 'true');
@@ -2235,7 +2264,10 @@ async function openSettings(): Promise<void> {
     finally { deployBtn.removeAttribute('disabled'); }
   });
 
-
+  const ckSnap = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const ckHist = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const ckCmt = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const ckRow = (cb: HTMLInputElement, label: string): HTMLElement => el('label', { class: 'qam-pick' }, [cb, label]);
   const dataResetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['選択したデータをリセット']);
   dataResetBtn.addEventListener('click', async () => {
     const opts = { snapshots: ckSnap.checked, history: ckHist.checked, comments: ckCmt.checked };
@@ -2249,12 +2281,6 @@ async function openSettings(): Promise<void> {
       toast(`${names} を削除しました`, 'ok'); refresh();
     } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
   });
-  const dataResetBox = el('div', {}, [
-    el('div', { style: 'margin-bottom:var(--s-3)' }, [ckRow(ckSnap, '資産データ(スナップショット)'), ckRow(ckHist, '変更履歴'), ckRow(ckCmt, 'メモ(コメント)')]),
-    dataResetBtn,
-  ]);
-
-  // 開発者: 登録情報のリセット（接続設定・認証・記入者名を初期化。資産データ/履歴は消さない）。
   const resetBtn = el('button', { class: 'btn btn--sm btn--danger' }, ['登録情報をリセット']);
   resetBtn.addEventListener('click', async () => {
     if (!(await confirmModal('登録情報のリセット', '接続先POD・Qualysアカウント・パスワード・プロキシ・記入者名を初期化します。取り込んだ資産データ・変更履歴・メモは消えません。よろしいですか？', 'リセット'))) return;
@@ -2267,55 +2293,213 @@ async function openSettings(): Promise<void> {
     } catch (e) { toast('リセットに失敗: ' + (e as Error).message, 'error'); }
   });
 
-
-  const cats: { id: string; label: string; pane: () => HTMLElement[] }[] = [
-    { id: 'personal', label: '個人設定', pane: () => [field('記入者名（メモ・操作履歴の作成者）', author), field('テーマ', theme), field('文字サイズ', fontsize), field('Qualys アカウント', user), field('Qualys パスワード（このブラウザに保存）', pass, 'Qualys API 認証用。共有 env ではなくこのブラウザにのみ保存します。')] },
-    { id: 'common', label: '共通設定', pane: () => [field('SharePoint サイト URL', spSite, '例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE。既存サイトに相乗りできます。'), field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'), field('Qualys 接続先 POD', base), field('プロキシ URL', proxy), field('保存期間（日）', ret), field('ライセンス上限', licLimit, '契約のライセンス上限。推移グラフに破線（基準線）として表示し、残数算出に使います。IPs in Subscription（登録IP数）とは別。0 で非表示。'), field('ユーザ登録: business_unit', userBu, 'Qualys ユーザ登録時の business_unit（既定 Unassigned）。'), field('ユーザ登録: 国（country）', userCountry, 'Qualys ユーザ登録の必須項目。Qualys が受け付ける国名を入力（例: Japan）。'), field('四半期検査: 年度開始月', fiscalMonth, '四半期の区切り。4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'), field('四半期検査: 対象の接続点ID パターン', inspPattern, `四半期検査の対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`), field('検査登録: SCAN のオプションプロファイル', scanOpt, 'SCAN のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: MAP のオプションプロファイル', mapOpt, 'MAP のスケジュール登録時に既定で入るオプションプロファイル名。登録画面で変更できます。'), field('検査登録: スキャナー', scannerAp, 'スケジュール登録時に既定で入るスキャナー名。既定 External。'), field('検査登録: タイムゾーン', schedTz, 'スケジュール登録時に既定で入るタイムゾーンコード（大文字）。既定 JP。'), field('検査登録: 地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。')] },
-    { id: 'dev', label: '開発者', pane: () => [
-      field('アプリを SharePoint に配置', deployBtn, 'アプリ本体を SharePoint のライブラリ（QamData/app/）へ置きます。起動アイコンはここから読むので、更新はこの配置を実行するだけで全員に反映されます。'),
-      field('データのリセット', dataResetBox, '選択した種類を全件削除（取り込んだデータそのものを消去。元に戻せません）'),
-      field('登録情報のリセット', resetBtn, '接続設定・認証情報・記入者名を初期化（資産データ/履歴/メモは対象外）'),
-      field('ビルド', el('div', { class: 'qam-count', style: 'user-select:text' }, [`${BUILD}${BUILDTIME ? '  (' + BUILDTIME + ')' : ''}`])),
-      // ★ここから下は qam.env でのみ設定する（画面では変更できない）。
-      //   画面と env の二重管理をやめ、設定は env に一本化する方針。
-      field('バンドル読込元（qam.env: QAM_BUNDLE_SOURCE）', el('div', { class: 'qam-count', style: 'user-select:text' }, [
-        `${cfg.bundleSource || 'sp'}${(cfg.bundleSource || 'sp') === 'local' ? `  ← ${cfg.bundleLocalBase || ''}` : '  ← SharePoint の ' + (cfg.spLibrary || 'QamData') + '/app'}`,
-      ]), 'sp=SharePoint に配置した本体を読む（本番） / local=中継サーバの配信フォルダから読む（開発）。変更は qam.env で行う。'),
-      field('中継サーバのポート（qam.env: QAM_RELAY_PORT）', el('div', { class: 'qam-count', style: 'user-select:text' }, [String(cfg.port || '')]),
-        'ポートを変えるときは qam.env を直し、中継サーバを再起動する。'),
-      field('ログの置き場（qam.env: QAM_LOG_DIR）', el('div', { class: 'qam-count', style: 'user-select:text' }, [cfg.logDir || '']),
-        'relay.log / api-audit.log の出力先。未設定なら %LOCALAPPDATA%\\qam。'),
-    ] },
-  ];
-  const nav = el('div', { class: 'qam-settings-nav' });
-  const paneEl = el('div', { class: 'qam-settings-pane' });
-  const select = (id: string): void => {
-    clear(paneEl); cats.find((c) => c.id === id)!.pane().forEach((n) => paneEl.append(n));
-    nav.querySelectorAll('button').forEach((b) => b.setAttribute('aria-current', String((b as HTMLElement).dataset.cat === id)));
-  };
-  cats.forEach((c) => { const b = el('button', { dataset: { cat: c.id } }, [c.label]); b.addEventListener('click', () => select(c.id)); nav.append(b); });
-  const body = el('div', { class: 'qam-settings' }, [nav, paneEl]);
-  select('personal');
-
-  openModal({
-    title: '設定', body, primaryLabel: '保存',
-    onPrimary: async () => {
-      try {
-        await setConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim(), retentionDays: parseInt(ret.value, 10) || 90, licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0), userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim(), fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)), inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN, scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(), scannerAppliance: scannerAp.value.trim() || 'External', scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP', regions: formatRegions(parseRegions(regionsIn.value)), spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' });
-        if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
-        // ★パスワード欄は保存済みでも空で開く（暗号文は復号口が無く画面へ戻せないため）。
-        //   空を「消す」と解釈すると、別項目だけ直して保存したときに保存済みの認証情報が
-        //   消え、取込のたびに再入力を求められる。空＝変更なしとして触らない。
-        //   消したいときは 開発者 →「登録情報のリセット」を使う。
-        if (passwordInputAction(pass.value) === 'save') { if (!(await storeQualysPassword(pass.value))) return false; }
-        if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
-        if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
-        themeHost.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-        localStorage.setItem(LS.fontsize, fontsize.value); themeHost.dataset.fontsize = fontsize.value;
-        toast('設定を保存しました', 'ok'); return true;
-      } catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
+  const majors: SettingMajor[] = [
+    {
+      key: 'personal', title: '個人設定', subtitle: 'このブラウザに保存。自分にだけ反映。', accent: 'var(--accent-strong)',
+      groups: [
+        { title: '表示', items: [{ key: 'theme', label: 'テーマ・文字サイズ', render: () => ({
+          body: el('div', {}, [setHead('テーマ・文字サイズ', '見た目の設定です。この端末にだけ保存します。'), field('テーマ', theme), field('文字サイズ', fontsize)]),
+          save: async () => {
+            if (theme.value) localStorage.setItem(LS.theme, theme.value); else localStorage.removeItem(LS.theme);
+            themeHost.dataset.theme = theme.value || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            localStorage.setItem(LS.fontsize, fontsize.value); themeHost.dataset.fontsize = fontsize.value;
+            toast('設定を保存しました', 'ok'); return true;
+          },
+        }) }] },
+        { title: '記録', items: [{ key: 'author', label: '記入者名', render: () => ({
+          body: el('div', {}, [setHead('記入者名', 'メモ・操作履歴に残る作成者の名前です。更新作業の前に未設定なら入力を求めます。'), field('記入者名', author)]),
+          save: async () => {
+            if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
+            toast('設定を保存しました', 'ok'); return true;
+          },
+        }) }] },
+        { title: '接続', items: [{ key: 'qualysAccount', label: 'Qualys アカウント', render: () => ({
+          body: el('div', {}, [
+            setHead('Qualys アカウント', 'Qualys API の認証情報です。共有の env ではなくこのブラウザにだけ保存します（パスワードは中継サーバで暗号化して保持し、平文では持ちません）。'),
+            field('Qualys アカウント', user),
+            field('Qualys パスワード', pass, '空のまま保存すると変更しません（保存済みの認証情報はそのまま）。消したいときは「その他 → 登録情報のリセット」を使ってください。'),
+          ]),
+          save: async () => {
+            if (user.value.trim()) localStorage.setItem(LS.qualysUser, user.value.trim()); else localStorage.removeItem(LS.qualysUser);
+            // ★空＝変更なし。空を「消す」と解釈すると、別項目だけ直して保存したときに
+            //   保存済みの認証情報が消え、取込のたびに再入力を求められる。
+            if (passwordInputAction(pass.value) === 'save') { if (!(await storeQualysPassword(pass.value))) return false; }
+            toast('設定を保存しました', 'ok'); return true;
+          },
+        }) }] },
+      ],
     },
+    {
+      key: 'shared', title: '共通設定', subtitle: '中継サーバの qam.env に保存。この端末の全員に反映。', accent: 'var(--ok)',
+      groups: [
+        { title: '保管先', items: [{ key: 'storage', label: 'SharePoint', render: () => ({
+          body: el('div', {}, [
+            setHead('SharePoint（管理データの保管先）', '取り込んだ資産データ・変更履歴・メモの置き場です。既存サイトに相乗りできます。'),
+            field('SharePoint サイト URL', spSite, '例: https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE'),
+            field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'),
+          ]),
+          save: () => saveConfig({ spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' }),
+        }) }] },
+        { title: '取込', items: [
+          { key: 'qualys', label: 'Qualys 接続先', render: () => ({
+            body: el('div', {}, [
+              setHead('Qualys 接続先', 'API の接続先とプロキシです。アカウントは個人設定にあります。'),
+              field('Qualys 接続先 POD', base), field('プロキシ URL', proxy),
+            ]),
+            save: () => saveConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim() }),
+          }) },
+          { key: 'retention', label: '保存期間', render: () => ({
+            body: el('div', {}, [setHead('保存期間', '取り込んだ生XMLとスナップショットを何日残すかです。'), field('保存期間（日）', ret)]),
+            save: () => saveConfig({ retentionDays: parseInt(ret.value, 10) || 90 }),
+          }) },
+        ] },
+        { title: 'ライセンス', items: [{ key: 'license', label: 'ライセンス上限', render: () => ({
+          body: el('div', {}, [
+            setHead('ライセンス上限', '契約のライセンス上限です。推移グラフに破線（基準線）として表示し、残数の算出に使います。IPs in Subscription（登録IP数）とは別のものです。'),
+            field('ライセンス上限', licLimit, '0 にすると破線を表示しません。'),
+          ]),
+          save: () => saveConfig({ licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0) }),
+        }) }] },
+        { title: 'ユーザ登録', items: [{ key: 'userAdd', label: '既定値', render: () => ({
+          body: el('div', {}, [
+            setHead('ユーザ登録の既定値', 'このツールから Qualys ユーザを登録するときの既定値です。'),
+            field('business_unit', userBu, '既定 Unassigned。'),
+            field('国（country）', userCountry, 'Qualys の必須項目。Qualys が受け付ける国名を入力してください（例: Japan）。'),
+          ]),
+          save: () => saveConfig({ userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim() }),
+        }) }] },
+        { title: '四半期検査', items: [
+          { key: 'inspection', label: '対象と期間', render: () => ({
+            body: el('div', {}, [
+              setHead('四半期検査の対象と期間', '四半期の区切りと、検査対象にする接続点の範囲です。'),
+              field('年度開始月', fiscalMonth, '4 なら Q1=4-6 / Q2=7-9 / Q3=10-12 / Q4=1-3（年度）。1 で暦年四半期。既定 4。'),
+              field('対象の接続点ID パターン', inspPattern, `対象にする接続点ID の正規表現（大文字小文字は無視）。接続点ID は AssetGroup タイトルの先頭〜最初の半角スペース（資産一覧の「接続点ID」列と同じ）。既定 ${DEFAULT_AG_PATTERN} は「英字2文字＋数字3〜4桁＋末尾D(任意)」。`),
+            ]),
+            save: () => saveConfig({
+              fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)),
+              inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN,
+            }),
+          }) },
+          { key: 'schedule', label: '検査登録の既定値', render: () => ({
+            body: el('div', {}, [
+              setHead('検査登録の既定値', 'スケジュール登録画面に最初から入る値です。登録画面で変更できます。'),
+              field('SCAN のオプションプロファイル', scanOpt),
+              field('MAP のオプションプロファイル', mapOpt),
+              field('スキャナー', scannerAp, '既定 External。'),
+              field('タイムゾーン', schedTz, 'タイムゾーンコード（大文字）。既定 JP。'),
+              field('地域区分', regionsIn, '「ラベル=コード」のカンマ区切り。コードはドメイン名の末尾に付きます（例 ext-2026-001.jp）。空にすると既定の6区分に戻ります。'),
+            ]),
+            save: () => saveConfig({
+              scanOptionProfile: scanOpt.value.trim(), mapOptionProfile: mapOpt.value.trim(),
+              scannerAppliance: scannerAp.value.trim() || 'External',
+              scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP',
+              regions: formatRegions(parseRegions(regionsIn.value)),
+            }),
+          }) },
+        ] },
+      ],
+    },
+    {
+      key: 'other', title: 'その他', subtitle: '配置・運用情報・開発者向け。', accent: 'var(--ink-3)',
+      groups: [
+        { title: '配置', items: [{ key: 'deploy', label: 'アプリの配置', render: () => ({
+          body: el('div', {}, [
+            setHead('アプリを SharePoint に配置', 'アプリ本体を SharePoint のライブラリ（<ライブラリ>/app/）へ置きます。起動アイコンはここから読むので、更新はこの配置を実行するだけで全員に反映されます（各自は右上の更新ボタンで取り込みます）。'),
+            deployBtn,
+          ]),
+        }) }] },
+        { title: '情報', items: [{ key: 'build', label: 'ビルド情報', render: () => ({
+          body: el('div', {}, [
+            setHead('ビルド情報', 'いま動いているアプリ本体の版です。'),
+            field('ビルド', ro(`${BUILD}${BUILDTIME ? '  (' + BUILDTIME + ')' : ''}`)),
+          ]),
+        }) }] },
+        { title: '開発', items: [{ key: 'env', label: '環境設定（qam.env）', render: () => ({
+          body: el('div', {}, [
+            // ★ここは表示のみ。画面と env の二重管理をやめ、設定は env に一本化している。
+            setHead('環境設定（qam.env）', 'ここは表示だけです。変更は中継サーバの qam.env を直し、中継サーバを起動し直してください。画面からも変えられるようにすると二重管理になり、どちらが効いているのか分からなくなります。'),
+            field('バンドル読込元（QAM_BUNDLE_SOURCE）', ro(
+              `${cfg.bundleSource || 'sp'}${(cfg.bundleSource || 'sp') === 'local' ? `  ← ${cfg.bundleLocalBase || ''}` : '  ← SharePoint の ' + (cfg.spLibrary || 'QamData') + '/app'}`,
+            ), 'sp=SharePoint に配置した本体を読む（本番） / local=中継サーバの配信フォルダから読む（開発）。'),
+            field('中継サーバのポート（QAM_RELAY_PORT）', ro(String(cfg.port || ''))),
+            field('ログの置き場（QAM_LOG_DIR）', ro(cfg.logDir || ''), 'relay.log / api-audit.log の出力先。未設定なら %LOCALAPPDATA%\\qam。'),
+          ]),
+        }) }] },
+        { title: '危険', items: [
+          { key: 'resetData', label: 'データのリセット', danger: true, render: () => ({
+            body: el('div', {}, [
+              setHead('データのリセット', '選択した種類を全件削除します。取り込んだデータそのものを消すので、元に戻せません。'),
+              el('div', { class: 'qam-chip-row', style: 'margin-bottom:var(--s-4)' }, [
+                ckRow(ckSnap, '資産データ(スナップショット)'), ckRow(ckHist, '変更履歴'), ckRow(ckCmt, 'メモ(コメント)'),
+              ]),
+              dataResetBtn,
+            ]),
+          }) },
+          { key: 'resetConfig', label: '登録情報のリセット', danger: true, render: () => ({
+            body: el('div', {}, [
+              setHead('登録情報のリセット', '接続設定・認証情報・記入者名を初期化します。取り込んだ資産データ・変更履歴・メモは消えません。'),
+              resetBtn,
+            ]),
+          }) },
+        ] },
+      ],
+    },
+  ];
+
+  const nav = el('div', { class: 'qam-set-nav' });
+  const pane = el('div', { class: 'qam-set-pane' });
+  const primaryRef: { el?: HTMLButtonElement } = {};
+  let activeKey = majors[0].groups[0].items[0].key;
+  let currentSave: (() => Promise<boolean>) | null = null;
+  const cache = new Map<string, SettingPanel>();
+  const findItem = (key: string): SettingItem | undefined => {
+    for (const m of majors) for (const g of m.groups) { const it = g.items.find((x) => x.key === key); if (it) return it; }
+    return undefined;
+  };
+
+  function renderPane(): void {
+    const item = findItem(activeKey);
+    if (!item) return;
+    let panel = cache.get(activeKey);
+    if (!panel) { panel = item.render(); cache.set(activeKey, panel); }
+    currentSave = panel.save ?? null;
+    // 保存するものが無いペインではボタンを押せなくする（押せるのに何も起きない、を避ける）。
+    if (primaryRef.el) {
+      primaryRef.el.disabled = !currentSave;
+      primaryRef.el.title = currentSave ? '' : 'この画面に保存する項目はありません';
+    }
+    clear(pane); pane.append(panel.body); pane.scrollTop = 0;
+  }
+
+  function renderNav(): void {
+    clear(nav);
+    for (const m of majors) {
+      const sec = el('div', { class: 'qam-set-major', style: `border-left-color:${m.accent}` });
+      sec.append(el('div', { class: 'qam-set-major-title', style: `color:${m.accent}` }, [m.title]));
+      sec.append(el('div', { class: 'qam-set-major-sub' }, [m.subtitle]));
+      for (const g of m.groups) {
+        sec.append(el('div', { class: 'qam-set-group' }, [g.title]));
+        for (const it of g.items) {
+          const b = el('button', {
+            class: `qam-set-item${it.danger ? ' qam-set-item--danger' : ''}`,
+            'aria-current': String(it.key === activeKey),
+          }, [it.label]);
+          b.addEventListener('click', () => { activeKey = it.key; renderNav(); renderPane(); });
+          sec.append(b);
+        }
+      }
+      nav.append(sec);
+    }
+  }
+
+  renderNav();
+  openModal({
+    title: '設定', body: el('div', { class: 'qam-set' }, [nav, pane]), xl: true, primaryLabel: '保存',
+    primaryRef, dismissBackdrop: false,
+    // 保存しても閉じない（設定は続けて他の項目も直すことが多い）。
+    onPrimary: async () => { if (currentSave) await currentSave(); return false; },
   });
+  renderPane();
 }
 
 // ヘルプ（使い方マニュアル）モーダル。
@@ -2658,6 +2842,7 @@ async function start(): Promise<void> {
     return;
   }
   refresh();
+  notifyBundleUpdated();
   const ai = new URLSearchParams(location.search).get('autoingest');
   if (ai !== null) {
     // 無人モード: バックアップ→取込 の順に実行し、終わったらウィンドウを閉じる（ヘッドレス用）。
