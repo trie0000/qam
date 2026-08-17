@@ -1,7 +1,7 @@
 // QAM エントリ: レイアウト・状態・ビュー・取込/設定/コメント。
 import css from './styles/app.css';
 import { scopeCss } from './ui/scope-css';
-import { BUILD, BUILDTIME, ENTITIES, LS, RELAY, fmtStamp, datetimeToStamp, stampNow, today } from './config';
+import { BUILD, BUILDTIME, ENTITIES, LS, RELAY, RELAY_CONTRACT_REQUIRED, fmtStamp, datetimeToStamp, stampNow, today } from './config';
 import { needsCredentialPrompt, passwordInputAction } from './creds';
 import { el, esc, clear, onEnter, uiHost, uiQuery, setUiRoot } from './ui/dom';
 import { icon } from './icons';
@@ -228,6 +228,20 @@ topbar.append(
   iconBtn('settings', '設定', openSettings),
   iconBtn('logout', '終了', doShutdown),
 );
+
+/**
+ * 中継サーバが古いまま動いていないか確かめる。
+ * ★アプリ本体は更新ボタンで新しくなるが、中継サーバは qam-launch.bat から起動し直すまで
+ *   古いまま。古い中継サーバは新しい設定キーを知らないので、保存しても黙って捨てられ、
+ *   「保存されない」という形で表に出る（実際に踏んだ）。気付けるように知らせる。
+ */
+async function warnIfRelayOutdated(): Promise<void> {
+  try {
+    const cfg = await getConfig();
+    if ((cfg.relayContract ?? 0) >= RELAY_CONTRACT_REQUIRED) return;
+    toast('中継サーバが古いままです。設定の一部が保存できません。qam-launch.bat から起動し直してください', 'error');
+  } catch { /* 中継サーバに繋がらないときは別途知らせている */ }
+}
 
 // 本体を差し替えた直後の起動なら「更新しました」を出す。
 // ★更新ボタンを押した時点のトーストは、差し替えで画面ごと作り直されるため残らない。
@@ -2859,8 +2873,21 @@ async function openSettings(): Promise<void> {
   fontsize.addEventListener('change', () => { localStorage.setItem(LS.fontsize, fontsize.value); themeHost.dataset.fontsize = fontsize.value; });
 
   const saveConfig = async (patch: Parameters<typeof setConfig>[0]): Promise<boolean> => {
-    try { await setConfig(patch); toast('設定を保存しました', 'ok'); return true; }
-    catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
+    try {
+      const after = await setConfig(patch);
+      // ★保存できたと言いながら値が入っていないことがある。古い中継サーバは知らない
+      //   設定キーを黙って捨てるため（それが「保存されない」の正体だった）。
+      //   送った値が返ってこないときは、成功と言わずに理由を出す。
+      const dropped = Object.entries(patch)
+        .filter(([k, v]) => typeof v === 'string' && v !== '' && String((after as unknown as Record<string, unknown>)[k] ?? '') !== v)
+        .map(([k]) => k);
+      if (dropped.length) {
+        toast(`中継サーバがこの設定を受け付けませんでした（${dropped.join(', ')}）。中継サーバが古い可能性があります。qam-launch.bat から起動し直してください`, 'error');
+        return false;
+      }
+      toast('設定を保存しました', 'ok');
+      return true;
+    } catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
   };
 
   // --- その他: ボタン類 ---
@@ -3536,6 +3563,7 @@ async function start(): Promise<void> {
   }
   refresh();
   notifyBundleUpdated();
+  void warnIfRelayOutdated();
   const ai = new URLSearchParams(location.search).get('autoingest');
   if (ai !== null) {
     // 無人モード: バックアップ→取込 の順に実行し、終わったらウィンドウを閉じる（ヘッドレス用）。

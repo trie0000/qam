@@ -81,6 +81,11 @@ $script:LogFile = Join-Path $LogFull 'relay.log'
 $script:AuditFile = Join-Path $LogFull 'api-audit.log'  # 更新系APIの監査ログ（実行者・API・パラメータ）
 $script:QamStop = $false
 
+# 中継サーバとアプリ本体の取り決めの版。★受け付ける設定キーや API を増やしたら上げる。
+# アプリ本体は右上の更新ボタンで新しくなるが、この中継サーバは起動し直すまで古いまま。
+# 番号が食い違うと、アプリが送った設定を古い中継サーバが黙って捨てる（実際に踏んだ）。
+$QAM_RELAY_CONTRACT = 2
+
 # ─── HTTP ヘルパ ─────────────────────────────────────────────────────────────
 # 許可オリジン。既定は SharePoint サイト（QAM_SP_SITE_URL）のオリジンに限定する。
 # '*' のままだと、どのサイトからでもローカルの relay を叩けてしまう。
@@ -734,6 +739,7 @@ function Invoke-Route { param($Ctx)
                 ' proxy=' + $(if ($proxyV) { $proxyV } else { '(空)' })) -ForegroundColor Cyan
             Send-Json $Ctx @{
                 qualysBase = $baseV; qualysUser = $userV; proxy = $proxyV; port = $Port
+                relayContract = $QAM_RELAY_CONTRACT
                 retentionDays = if ($env:QAM_RAW_RETENTION_DAYS) { [int]$env:QAM_RAW_RETENTION_DAYS } else { 90 }
                 licenseLimit = if ($env:QAM_LICENSE_LIMIT) { [int]$env:QAM_LICENSE_LIMIT } else { 0 }
                 userBusinessUnit = if ($env:QAM_USER_BUSINESS_UNIT) { $env:QAM_USER_BUSINESS_UNIT } else { 'Unassigned' }

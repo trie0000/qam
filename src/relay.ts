@@ -110,7 +110,9 @@ export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: st
   ticketTemplateJa: string; // チケット(Remediation)レポートのテンプレートID（日本語）
   ticketTemplateEn: string; // 同（英語）
   // ↓ qam.env でのみ設定する（画面は表示のみ。POST では受け付けない）
-  bundleSource: string; bundleLocalBase: string; logDir: string }
+  bundleSource: string; bundleLocalBase: string; logDir: string;
+  /** 中継サーバの取り決めの版（古い中継サーバでは undefined）。 */
+  relayContract?: number }
 // 設定は relay が持つが、SharePoint ページ上で動くとき relay は Qualys 取得にしか要らない。
 // relay が落ちていても保管先の判断はできるよう、直近値を控えておいて代用する。
 const CFG_CACHE = 'qam:config-cache';
