@@ -452,16 +452,24 @@ export async function updateSearchList(creds: QualysCreds, author: string, field
 // ──────────────────────────────────────────────────────────────────────────
 const REPORT_PATH = '/api/3.0/fo/report/';
 
-/** レポート作成を依頼して ID を返す。 */
+export type ReportKind = 'scan' | 'ticket';
+
+/**
+ * レポート作成を依頼して ID を返す。
+ * ★チケット(Remediation)レポートは assignee_type の既定が User＝「実行者宛のチケットだけ」。
+ *   指定しないと、他人に割り当てられたチケットが落ちて中身が空になる。All を明示する。
+ */
 export async function launchScanReport(
-  creds: QualysCreds, author: string, o: { templateId: string; title: string; ip: string },
+  creds: QualysCreds, author: string, o: { templateId: string; title: string; ip: string; kind?: ReportKind },
 ): Promise<string> {
+  const ticket = o.kind === 'ticket';
   const res = await qualysScheduleAdd({
     base: creds.base.replace(/\/+$/, ''), user: creds.user, pass: creds.pass, secret: creds.secret,
     proxy: creds.proxy, path: REPORT_PATH, author,
     fields: {
       action: 'launch', template_id: o.templateId, report_title: o.title,
-      output_format: 'pdf', report_type: 'Scan', ips: o.ip,
+      output_format: 'pdf', report_type: ticket ? 'Remediation' : 'Scan', ips: o.ip,
+      ...(ticket ? { assignee_type: 'All' } : {}),
     },
   });
   if (!res.ok) throw new Error(res.error || `レポート作成の依頼に失敗しました (status ${res.status})`);

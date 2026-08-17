@@ -18,7 +18,8 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 7: 初回/最終検知日・登録日/最終検査日・管理会社を追加。Title の表示名と一覧の列順を設定
 // 8: メモ(Note)と TrackingMethod を追加（メモは SPO の一覧には出さない）
 // 9: チケット一覧にレポートのリンク列を表示
-export const SCHEMA_VERSION = 9;
+// 10: Ticket(Remediation)レポートのリンク列を追加
+export const SCHEMA_VERSION = 10;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -122,6 +123,8 @@ export const rasTicketFields: FieldSpec[] = [
   { name: 'ChangedAt', type: 'Text' },
   { name: 'ReportJa', type: 'Text' },   // SCANレポート(日本語)の SharePoint URL
   { name: 'ReportEn', type: 'Text' },
+  { name: 'TicketReportJa', type: 'Text' }, // Ticket(Remediation)レポート
+  { name: 'TicketReportEn', type: 'Text' },
   { name: 'Note', type: 'Note' },       // メモ（複数行）。SPO の一覧には出さない
 ];
 
@@ -151,10 +154,12 @@ export const ALL_LISTS: {
     title: LIST_RAS_TICKETS, fields: rasTicketFields, uniqueTitle: true, formFormatter: rasTicketFormFormatter,
     dropFields: ['TicketNumber', 'DedupKey', 'OpenedAt'],
     titleLabel: 'Ticket No',
-    viewFields: ['Title', 'State', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound', 'ReportJa', 'ReportEn'],
+    viewFields: ['Title', 'State', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound', 'ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn'],
     fieldFormatters: {
       ReportJa: reportLinkColumnFormat('ReportJa', 'JP'),
       ReportEn: reportLinkColumnFormat('ReportEn', 'EN'),
+      TicketReportJa: reportLinkColumnFormat('TicketReportJa', 'JP'),
+      TicketReportEn: reportLinkColumnFormat('TicketReportEn', 'EN'),
     },
   },
 ];
@@ -239,10 +244,10 @@ export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
      SettenId: t.settenId, BusinessCompany: t.businessCompany, ManagementCompany: t.managementCompany,
      FirstFound: t.firstFound, LastFound: t.lastFound,
      ChangeKind: t.change ?? '', ChangedAt: t.changedAt ?? '', ReportJa: t.reportJa ?? '', ReportEn: t.reportEn ?? '',
-     Note: t.note ?? '' });
+     TicketReportJa: t.ticketReportJa ?? '', TicketReportEn: t.ticketReportEn ?? '', Note: t.note ?? '' });
 export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
   ({ number: str(r.Title), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
      settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany),
      created: str(r.FirstFound), firstFound: str(r.FirstFound), lastFound: str(r.LastFound),
      change: str(r.ChangeKind), changedAt: str(r.ChangedAt), reportJa: str(r.ReportJa), reportEn: str(r.ReportEn),
-     note: str(r.Note) });
+     ticketReportJa: str(r.TicketReportJa), ticketReportEn: str(r.TicketReportEn), note: str(r.Note) });

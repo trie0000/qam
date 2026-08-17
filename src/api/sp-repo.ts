@@ -294,12 +294,12 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     },
 
     async readRasTickets() {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'Note']);
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn', 'Note']);
       return rows.map(rowToRasTicket);
     },
 
     async syncRasTickets(tickets) {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'Note']);
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn', 'Note']);
       // チケット番号は Title（このリストの一意キー）。
       const byKey = new Map(rows.map((r) => [String(r.Title ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
@@ -314,6 +314,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
           ...t,
           change: t.change ?? same.change, changedAt: t.changedAt ?? same.changedAt,
           reportJa: t.reportJa ?? same.reportJa, reportEn: t.reportEn ?? same.reportEn,
+          ticketReportJa: t.ticketReportJa ?? same.ticketReportJa, ticketReportEn: t.ticketReportEn ?? same.ticketReportEn,
           note: t.note ?? same.note, // メモは同期で消さない
         };
         if (same.state === merged.state && same.businessCompany === merged.businessCompany
@@ -350,6 +351,8 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
         if (m.note !== undefined) patch.Note = m.note;
         if (m.reportJa !== undefined) patch.ReportJa = m.reportJa;
         if (m.reportEn !== undefined) patch.ReportEn = m.reportEn;
+        if (m.ticketReportJa !== undefined) patch.TicketReportJa = m.ticketReportJa;
+        if (m.ticketReportEn !== undefined) patch.TicketReportEn = m.ticketReportEn;
         if (!Object.keys(patch).length) continue;
         if (await lists.update(LIST_RAS_TICKETS, cur.Id, patch, cur.__etag)) n++;
       }

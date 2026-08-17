@@ -721,6 +721,8 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'cveXlsxPath') { Set-QamEnvValue $EnvFile 'QAM_CVE_XLSX_PATH' $b.cveXlsxPath }
                 if ($b.PSObject.Properties.Name -contains 'reportTemplateJa') { Set-QamEnvValue $EnvFile 'QAM_REPORT_TEMPLATE_JA' $b.reportTemplateJa }
                 if ($b.PSObject.Properties.Name -contains 'reportTemplateEn') { Set-QamEnvValue $EnvFile 'QAM_REPORT_TEMPLATE_EN' $b.reportTemplateEn }
+                if ($b.PSObject.Properties.Name -contains 'ticketTemplateJa') { Set-QamEnvValue $EnvFile 'QAM_TICKET_TEMPLATE_JA' $b.ticketTemplateJa }
+                if ($b.PSObject.Properties.Name -contains 'ticketTemplateEn') { Set-QamEnvValue $EnvFile 'QAM_TICKET_TEMPLATE_EN' $b.ticketTemplateEn }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -748,6 +750,8 @@ function Invoke-Route { param($Ctx)
                 cveXlsxPath = $env:QAM_CVE_XLSX_PATH
                 reportTemplateJa = $env:QAM_REPORT_TEMPLATE_JA
                 reportTemplateEn = $env:QAM_REPORT_TEMPLATE_EN
+                ticketTemplateJa = $env:QAM_TICKET_TEMPLATE_JA
+                ticketTemplateEn = $env:QAM_TICKET_TEMPLATE_EN
                 # ★以下は qam.env でのみ設定する（画面には出すが編集させない）。
                 #   二重管理を避けるため、POST では受け付けない。
                 bundleSource = if ($env:QAM_BUNDLE_SOURCE) { ([string]$env:QAM_BUNDLE_SOURCE).ToLower() } else { 'sp' }

@@ -945,6 +945,16 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       },
       { id: 'state', label: 'ステータス', width: 110, render: (t: RasTicket) => esc(t.state) },
       {
+        id: 'ticketReport', label: 'Ticketレポート', width: 130,
+        render: (t: RasTicket) => (['JP', 'EN'] as const).map((tag) => {
+          const url = tag === 'JP' ? t.ticketReportJa : t.ticketReportEn;
+          return url
+            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${tag}</a>`
+            : `<span class="qam-hint">${tag}</span>`;
+        }).join(' / '),
+        sortVal: (t: RasTicket) => (t.ticketReportJa || t.ticketReportEn ? '1' : '0'),
+      },
+      {
         id: 'report', label: 'SCANレポート', width: 130,
         // JP / EN を常に併記する。無い方は薄く出して「まだ作られていない」と分かるようにする。
         render: (t: RasTicket) => (['JP', 'EN'] as const).map((tag) => {
@@ -1310,83 +1320,102 @@ async function buildScanReports(
   const author = localStorage.getItem(LS.author) || '';
   const enUser = localStorage.getItem(LS.qualysUserEn) || '';
   const enSecret = localStorage.getItem(LS.qualysSecretEn) || '';
-  const langs: { lang: 'ja' | 'en'; creds: QualysCreds; template: string }[] = [];
-  if ((cfg.reportTemplateJa || '').trim()) langs.push({ lang: 'ja', creds: jaCreds, template: cfg.reportTemplateJa.trim() });
-  else summary.notes.push('レポートテンプレートID（日本語）が未設定のため、日本語レポートは作りませんでした');
-  if (enUser && enSecret && (cfg.reportTemplateEn || '').trim()) {
-    langs.push({ lang: 'en', creds: { ...jaCreds, user: enUser, pass: '', secret: enSecret }, template: cfg.reportTemplateEn.trim() });
-  } else {
-    summary.notes.push('英語アカウントまたはテンプレートID（英語）が未設定のため、英語レポートは作りませんでした');
+  const enCreds: QualysCreds = { ...jaCreds, user: enUser, pass: '', secret: enSecret };
+  const hasEn = !!(enUser && enSecret);
+  if (!hasEn) summary.notes.push('英語アカウントが未設定のため、英語レポートは作りませんでした');
+
+  // 言語 × 種別。テンプレートIDが未設定のものは作らず、その旨を残す。
+  const KINDS = [
+    { kind: 'scan' as const, label: 'SCAN', ja: cfg.reportTemplateJa, en: cfg.reportTemplateEn },
+    { kind: 'ticket' as const, label: 'Ticket', ja: cfg.ticketTemplateJa, en: cfg.ticketTemplateEn },
+  ];
+  const specs: { kind: 'scan' | 'ticket'; lang: 'ja' | 'en'; creds: QualysCreds; template: string }[] = [];
+  for (const k of KINDS) {
+    for (const [lang, tpl, creds, ok] of [
+      ['ja', (k.ja || '').trim(), jaCreds, true],
+      ['en', (k.en || '').trim(), enCreds, hasEn],
+    ] as const) {
+      if (!ok) continue;
+      if (tpl) specs.push({ kind: k.kind, lang, creds, template: tpl });
+      else summary.notes.push(`${k.label}レポートのテンプレートID（${lang === 'ja' ? '日本語' : '英語'}）が未設定のため作りませんでした`);
+    }
   }
-  if (!langs.length) return;
+  if (!specs.length) return;
 
   interface Job {
-    target: ReportTarget; lang: 'ja' | 'en'; creds: QualysCreds; stamp: string;
+    target: ReportTarget; kind: 'scan' | 'ticket'; lang: 'ja' | 'en'; creds: QualysCreds; stamp: string;
     id?: string; done?: boolean;
   }
 
   // 1) まず全部の作成を依頼する（Qualys を叩きすぎないよう本数は絞る）。
-  setProg(`レポートの作成を依頼中…（${targets.length} ホスト × ${langs.length} 言語）`, true);
-  const jobs: Job[] = targets.flatMap((t) => langs.map((l) => ({ target: t, lang: l.lang, creds: l.creds, stamp: stampNow() })));
+  setProg(`レポートの作成を依頼中…（${targets.length} ホスト × ${specs.length} 種）`, true);
+  const jobs: Job[] = targets.flatMap((t) => specs.map((sp) => ({
+    target: t, kind: sp.kind, lang: sp.lang, creds: sp.creds, stamp: stampNow(),
+  })));
   await mapLimit(jobs, 4, async (j) => {
-    const l = langs.find((x) => x.lang === j.lang)!;
+    const sp = specs.find((x) => x.kind === j.kind && x.lang === j.lang)!;
     try {
       j.id = await launchScanReport(j.creds, author, {
-        templateId: l.template, title: reportTitle(j.target.ip, j.target.fqdn, j.stamp), ip: j.target.ip,
+        templateId: sp.template, title: reportTitle(j.target.ip, j.target.fqdn, j.stamp), ip: j.target.ip, kind: j.kind,
       });
     } catch (e) {
       j.done = true;
-      summary.reports.push({ ip: j.target.ip, lang: j.lang, error: (e as Error).message });
+      summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: (e as Error).message });
     }
   });
 
   // 2) 完成待ち。★依頼直後は必ず生成中なので 30 秒待ってから、以後 30 秒間隔。
   //    状態は 1 本ずつ聞かずアカウントごとに 1 回でまとめて取る
   //    （レポートは作成したアカウントのものしか見えないので、言語ごとに 1 回）。
-  const links = new Map<ReportTarget, { reportJa?: string; reportEn?: string }>();
+  const links = new Map<ReportTarget, Record<string, string>>();
   const deadline = Date.now() + 30 * 60_000;
+  const LANGS = hasEn ? (['ja', 'en'] as const) : (['ja'] as const);
   for (;;) {
     const pending = jobs.filter((j) => j.id && !j.done);
     if (!pending.length) break;
     if (Date.now() > deadline) {
-      for (const j of pending) summary.reports.push({ ip: j.target.ip, lang: j.lang, error: 'レポートが時間内に完成しませんでした' });
+      for (const j of pending) summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' });
       break;
     }
     setProg(`レポートの完成待ち…（残り ${pending.length} 本）`, true);
     await new Promise((res) => setTimeout(res, 30_000));
 
-    for (const l of langs) {
-      const mine = pending.filter((j) => j.lang === l.lang);
+    for (const lang of LANGS) {
+      const mine = pending.filter((j) => j.lang === lang);
       if (!mine.length) continue;
       let states: Map<string, string>;
-      try { states = await reportStates(l.creds); }
+      try { states = await reportStates(mine[0].creds); }
       catch { continue; } // 一時的な失敗。次の周回で聞き直す
       for (const j of mine) {
         const st = states.get(j.id!) ?? '';
         if (!st || st === 'Running' || st === 'Submitted') continue;
         j.done = true;
-        if (st !== 'Finished') { summary.reports.push({ ip: j.target.ip, lang: j.lang, error: `レポートが完成しませんでした（状態: ${st}）` }); continue; }
+        if (st !== 'Finished') { summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: `レポートが完成しませんでした（状態: ${st}）` }); continue; }
         try {
           const b64 = await fetchReportPdf(j.creds, j.id!);
-          const path = reportPath(j.stamp, j.target.ip, j.lang);
+          const path = reportPath(j.stamp, j.target.ip, j.lang, j.kind);
           if (!backend.writeBinary) throw new Error('この保管先には PDF を保存できません');
           await backend.writeBinary(path, b64);
           const url = spFileUrl(cfg, path);
           const cur = links.get(j.target) ?? {};
-          if (j.lang === 'ja') cur.reportJa = url; else cur.reportEn = url;
+          cur[reportField(j.kind, j.lang)] = url;
           links.set(j.target, cur);
-          summary.reports.push({ ip: j.target.ip, lang: j.lang, path: url });
+          summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, path: url });
         } catch (e) {
-          summary.reports.push({ ip: j.target.ip, lang: j.lang, error: (e as Error).message });
+          summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: (e as Error).message });
         }
       }
     }
   }
 
-  const marks: { number: string; reportJa?: string; reportEn?: string }[] = [];
+  const marks: Record<string, unknown>[] = [];
   for (const [t, link] of links) for (const no of t.tickets) marks.push({ number: no, ...link });
-  if (marks.length) await repo.setRasTicketMarks(marks);
+  if (marks.length) await repo.setRasTicketMarks(marks as Parameters<typeof repo.setRasTicketMarks>[0]);
 }
+
+/** 種別＋言語 → チケット行の項目名。 */
+const reportField = (kind: 'scan' | 'ticket', lang: 'ja' | 'en'): string =>
+  (kind === 'scan' ? (lang === 'ja' ? 'reportJa' : 'reportEn') : (lang === 'ja' ? 'ticketReportJa' : 'ticketReportEn'));
 
 /** 同時実行数を絞って並行に走らせる。 */
 async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -1429,8 +1458,8 @@ function showDailyResult(s: DailyRunSummary): void {
     ]));
   }
   if (s.reports.length) {
-    body.append(sec('SCANレポート', s.reports.map((r) => {
-      const label = `${r.ip}（${r.lang === 'ja' ? '日本語' : '英語'}）`;
+    body.append(sec('レポート', s.reports.map((r) => {
+      const label = `${r.ip}（${r.kind === 'ticket' ? 'Ticket' : 'SCAN'} / ${r.lang === 'ja' ? '日本語' : '英語'}）`;
       if (r.error) return el('div', { style: 'color:var(--danger)' }, [`${label}: 失敗 — ${r.error}`]);
       return el('div', {}, [`${label}: `, el('a', { href: r.path!, target: '_blank', rel: 'noopener noreferrer' }, ['レポートを開く'])]);
     })));
@@ -2659,6 +2688,8 @@ async function openSettings(): Promise<void> {
   const cvePath = el('input', { class: 'in', value: cfg.cveXlsxPath || '', placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE/Shared Documents/CVE対応策一覧.xlsx' }) as HTMLInputElement;
   const tplJa = el('input', { class: 'in', value: cfg.reportTemplateJa || '', placeholder: '例: 1234567' }) as HTMLInputElement;
   const tplEn = el('input', { class: 'in', value: cfg.reportTemplateEn || '', placeholder: '例: 1234568' }) as HTMLInputElement;
+  const tplTicketJa = el('input', { class: 'in', value: cfg.ticketTemplateJa || '', placeholder: '例: 2234567' }) as HTMLInputElement;
+  const tplTicketEn = el('input', { class: 'in', value: cfg.ticketTemplateEn || '', placeholder: '例: 2234568' }) as HTMLInputElement;
   const userEn = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUserEn) || '' }) as HTMLInputElement;
   const hasSecretEn = !!localStorage.getItem(LS.qualysSecretEn);
   const passEn = el('input', {
@@ -2810,13 +2841,18 @@ async function openSettings(): Promise<void> {
             ]),
             save: () => saveConfig({ searchListIds: parseSearchListIds(slIds.value).join(','), cveXlsxPath: cvePath.value.trim() }),
           }) },
-          { key: 'reportTemplate', label: 'SCANレポートのテンプレート', render: () => ({
+          { key: 'reportTemplate', label: 'レポートのテンプレート', render: () => ({
             body: el('div', {}, [
-              setHead('SCANレポートのテンプレート', '新規に脆弱性が見つかった RAS 資産について、ホスト単位で SCAN レポートを作ります。テンプレートIDは Qualys の「レポートテンプレート」画面の ID です。'),
-              field('テンプレートID（日本語）', tplJa, '既存アカウント（日本語）で作るレポートのテンプレート。'),
-              field('テンプレートID（英語）', tplEn, '英語アカウントで作るレポートのテンプレート。英語アカウントが未登録なら使いません。'),
+              setHead('レポートのテンプレート', 'RAS 資産についてホスト単位でレポートを作ります。テンプレートIDは Qualys の「レポートテンプレート」画面の ID です。未設定の種別は作りません（その旨は実行結果に出します）。'),
+              field('SCAN レポート（日本語）', tplJa, 'Findings が Host Based のスキャンレポートテンプレートを指定してください。Scan Based だと IP 指定では作れません。'),
+              field('SCAN レポート（英語）', tplEn, '英語アカウントで作ります。英語アカウントが未登録なら使いません。'),
+              field('Ticket レポート（日本語）', tplTicketJa, '修復チケット（Remediation）のレポートテンプレート。'),
+              field('Ticket レポート（英語）', tplTicketEn),
             ]),
-            save: () => saveConfig({ reportTemplateJa: tplJa.value.trim(), reportTemplateEn: tplEn.value.trim() }),
+            save: () => saveConfig({
+              reportTemplateJa: tplJa.value.trim(), reportTemplateEn: tplEn.value.trim(),
+              ticketTemplateJa: tplTicketJa.value.trim(), ticketTemplateEn: tplTicketEn.value.trim(),
+            }),
           }) },
         ] },
         { title: 'ライセンス', items: [{ key: 'license', label: 'ライセンス上限', render: () => ({

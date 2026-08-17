@@ -89,20 +89,23 @@ function link(label: string, field: string): Node {
 const reportCard = (): Node => ({
   elmType: 'div',
   style: {
-    display: "=if([$ReportJa] == '' && [$ReportEn] == '', 'none', 'flex')",
+    display: "=if([$ReportJa] == '' && [$ReportEn] == '' && [$TicketReportJa] == '' && [$TicketReportEn] == '', 'none', 'flex')",
     'flex-direction': 'column', 'align-items': 'stretch', 'text-align': 'left',
     width: '100%', 'box-sizing': 'border-box', padding: '14px 18px', 'margin-bottom': '10px',
     'border-radius': '8px', border: '1px solid #edebe9', 'background-color': '#faf9f8',
   },
   children: [
     {
-      elmType: 'div', txtContent: 'SCANレポート',
+      elmType: 'div', txtContent: 'レポート',
       style: {
         'font-size': '13px', 'font-weight': '600', color: '#201f1e',
         'padding-bottom': '8px', 'margin-bottom': '12px', 'border-bottom': '1px solid #edebe9',
       },
     },
-    twoColumns([link('JP（日本語）', 'ReportJa')], [link('EN（英語）', 'ReportEn')]),
+    twoColumns(
+      [link('SCAN / JP（日本語）', 'ReportJa'), link('SCAN / EN（英語）', 'ReportEn')],
+      [link('Ticket / JP（日本語）', 'TicketReportJa'), link('Ticket / EN（英語）', 'TicketReportEn')],
+    ),
   ],
 });
 

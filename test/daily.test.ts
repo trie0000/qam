@@ -71,12 +71,14 @@ describe('レポート対象の抽出', () => {
 });
 
 describe('レポートの保存先と名前', () => {
-  it('日付フォルダの下に IP と言語で分けて置く', () => {
-    expect(reportPath('2026-08-17T10-30-00', '10.0.0.1', 'ja')).toBe('reports/2026-08-17/10.0.0.1-ja-2026-08-17T10-30-00.pdf');
+  it('日付フォルダの下に IP・種別・言語で分けて置く', () => {
+    // 種別（SCAN / Ticket）を名前に入れないと、同じホスト・同じ言語で上書きし合う。
+    expect(reportPath('2026-08-17T10-30-00', '10.0.0.1', 'ja')).toBe('reports/2026-08-17/10.0.0.1-scan-ja-2026-08-17T10-30-00.pdf');
+    expect(reportPath('2026-08-17T10-30-00', '10.0.0.1', 'ja', 'ticket')).toBe('reports/2026-08-17/10.0.0.1-ticket-ja-2026-08-17T10-30-00.pdf');
   });
 
   it('パスに使えない文字は落とす（IP以外が来ても壊れない）', () => {
-    expect(reportPath('2026-08-17T10-30-00', 'a/b:c', 'en')).toContain('a_b_c-en-');
+    expect(reportPath('2026-08-17T10-30-00', 'a/b:c', 'en')).toContain('a_b_c-scan-en-');
   });
 
   it('タイトルは 128 文字に収める（Qualys の上限）', () => {

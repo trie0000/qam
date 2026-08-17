@@ -107,6 +107,8 @@ export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: st
   cveXlsxPath: string;      // CVE対応策一覧の Excel（保管先ライブラリからの相対パス）
   reportTemplateJa: string; // SCANレポートのテンプレートID（日本語アカウント用）
   reportTemplateEn: string; // 同（英語アカウント用）
+  ticketTemplateJa: string; // チケット(Remediation)レポートのテンプレートID（日本語）
+  ticketTemplateEn: string; // 同（英語）
   // ↓ qam.env でのみ設定する（画面は表示のみ。POST では受け付けない）
   bundleSource: string; bundleLocalBase: string; logDir: string }
 // 設定は relay が持つが、SharePoint ページ上で動くとき relay は Qualys 取得にしか要らない。

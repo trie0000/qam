@@ -60,8 +60,8 @@ export function reportTargets(results: TicketChangeResult[]): ReportTarget[] {
 }
 
 /** レポートの保存先。保管先ライブラリからの相対パス。 */
-export const reportPath = (stamp: string, ip: string, lang: 'ja' | 'en'): string =>
-  `reports/${stamp.slice(0, 10)}/${ip.replace(/[^\w.-]/g, '_')}-${lang}-${stamp}.pdf`;
+export const reportPath = (stamp: string, ip: string, lang: 'ja' | 'en', kind: 'scan' | 'ticket' = 'scan'): string =>
+  `reports/${stamp.slice(0, 10)}/${ip.replace(/[^\w.-]/g, '_')}-${kind}-${lang}-${stamp}.pdf`;
 
 /** レポートのタイトル（Qualys 側に残る名前）。128 文字まで。 */
 export const reportTitle = (ip: string, fqdn: string, stamp: string): string =>
@@ -75,6 +75,6 @@ export interface DailyRunSummary {
   searchLists: SearchListResult[];
   /** 検索リストの補足（作り直しを行った等）。実行しなかったものとは区別する。 */
   searchNote?: string;
-  reports: { ip: string; lang: 'ja' | 'en'; path?: string; error?: string }[];
+  reports: { ip: string; lang: 'ja' | 'en'; kind: 'scan' | 'ticket'; path?: string; error?: string }[];
   notes: string[];           // 実行しなかった理由など（黙って飛ばさない）
 }
