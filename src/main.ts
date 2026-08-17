@@ -170,6 +170,19 @@ const root = (() => {
 // 自前の要素探索（モーダル/ポップオーバー）は shadow 内を見る必要がある。
 setUiRoot(uiScope, root);
 
+// ★入力欄で打ったキーをホストページ（SharePoint）へ流さない。
+//   SharePoint のページは document にショートカットを張っており、'/' や 's' のような
+//   1文字キーを preventDefault で奪う。アプリは shadow DOM の中にあるがイベントは
+//   document まで上がるため、パスワード欄などで「打てない文字がある」ことになる（実測）。
+//   奪われるのは印字される1文字キーだけなので、そこに限って止める。
+//   Esc / Enter / PageUp などは止めない（モーダルや表のキー操作に使っている）。
+root.addEventListener('keydown', (e) => {
+  const t = e.composedPath()[0] as HTMLElement | undefined;
+  if (!t || !/^(INPUT|TEXTAREA)$/.test(t.tagName)) return;
+  if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
+  e.stopPropagation();
+});
+
 // テーマ・文字サイズを載せる先。スコープ済み CSS は #qam-root を起点に見るので、
 // html に付けても一致しない（暗色にしても効かない）。root 自身に付ける。
 const themeHost = root;
