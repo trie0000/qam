@@ -106,16 +106,16 @@ function Set-Cors { param($Resp)
 
 # コンソールに出しつつ relay.log にも追記（コンソールを見れない時の証跡）。
 function Add-QamLog { param([string]$Text)
-    try { Add-Content -LiteralPath $script:LogFile -Value ("{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Text) -Encoding UTF8 } catch { }
+    try { Add-Content -LiteralPath $script:LogFile -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' ' + $Text) -Encoding UTF8 } catch { }
 }
 
 # 更新系 API（Qualys への書き込み）の監査ログ。専用ファイルに「実行者・発行API・パラメータ・結果」を残す。
 # 参照系は対象外。認証情報は絶対に書かない（$Fields に user/pass は含めない前提で呼ぶこと）。
 function Add-QamAudit {
     param([string]$Author, [string]$Method, [string]$Url, [string]$Fields, [string]$Result)
-    $line = "{0}`tauthor={1}`t{2} {3}`tparams={4}`tresult={5}" -f `
-        (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), `
-        $(if ($Author) { $Author } else { '(未設定)' }), $Method, $Url, $Fields, $Result
+    $who = if ($Author) { $Author } else { '(未設定)' }
+    $line = (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + "`tauthor=" + $who + "`t" + $Method + ' ' + $Url +
+        "`tparams=" + $Fields + "`tresult=" + $Result
     try { Add-Content -LiteralPath $script:AuditFile -Value $line -Encoding UTF8 } catch { }
     Write-Host "[qam] AUDIT $line" -ForegroundColor Yellow
 }
@@ -284,7 +284,7 @@ function Invoke-QualysScheduleAdd { param($Body)
     if ($Body.fields) {
         foreach ($p in $Body.fields.PSObject.Properties) {
             if ($null -eq $p.Value -or [string]$p.Value -eq '') { continue }
-            [void]$parts.Add("{0}={1}" -f [Uri]::EscapeDataString([string]$p.Name), [Uri]::EscapeDataString([string]$p.Value))
+            [void]$parts.Add([Uri]::EscapeDataString([string]$p.Name) + '=' + [Uri]::EscapeDataString([string]$p.Value))
         }
     }
     $form = $parts -join '&'
@@ -329,7 +329,7 @@ function Invoke-QualysUserAdd { param($Body)
     if ($Body.fields) {
         foreach ($p in $Body.fields.PSObject.Properties) {
             if ($null -eq $p.Value -or [string]$p.Value -eq '') { continue }
-            [void]$parts.Add("{0}={1}" -f [Uri]::EscapeDataString([string]$p.Name), [Uri]::EscapeDataString([string]$p.Value))
+            [void]$parts.Add([Uri]::EscapeDataString([string]$p.Name) + '=' + [Uri]::EscapeDataString([string]$p.Value))
         }
     }
     $url = "$base/msp/user.php?" + ($parts -join '&')
@@ -437,7 +437,7 @@ function Invoke-QamResolve { param($Body)
     if ($names.Count -gt 100) { return [ordered]@{ ok = $false; error = '一度に検証できるのは 100 件までです'; results = @() } }
     foreach ($n in $names) {
         $r = Resolve-QamHost $n
-        Add-QamLog ("DNS {0} -> {1}" -f $n, $(if ($r.ok) { $r.addresses -join ',' } else { 'NG ' + $r.error }))
+        Add-QamLog ('DNS ' + $n + ' -> ' + $(if ($r.ok) { $r.addresses -join ',' } else { 'NG ' + $r.error }))
         $results += $r
     }
     return [ordered]@{ ok = $true; results = @($results) }
@@ -541,7 +541,7 @@ function Invoke-QamFetchBatch {
         [void]$ps.AddScript($worker).AddArgument($helperDefs).AddArgument($k).AddArgument($Body).AddArgument($outPath).AddArgument($QAM_PAGE_SEP)
         $jobs += [pscustomobject]@{ Kind = $k; PS = $ps; Handle = $ps.BeginInvoke() }
     }
-    Write-Host ("[qam] fetch-batch 開始: {0} (並列 {1})" -f ($kinds -join ','), $cap) -ForegroundColor Cyan
+    Write-Host ('[qam] fetch-batch 開始: ' + ($kinds -join ',') + ' (並列 ' + $cap + ')') -ForegroundColor Cyan
     Add-QamLog ("FETCH-BATCH start: " + ($kinds -join ',') + " parallel=$cap")
 
     $items = @()
@@ -558,8 +558,9 @@ function Invoke-QamFetchBatch {
     }
     $pool.Close(); $pool.Dispose()
     foreach ($i in $items) {
-        Write-Host ("[qam] fetch-batch {0}: ok={1} pages={2} bytes={3} {4}" -f $i.kind, $i.ok, $i.pages, $i.bytes, $i.error) -ForegroundColor DarkCyan
-        Add-QamLog ("FETCH-BATCH {0}: ok={1} pages={2} bytes={3} {4}" -f $i.kind, $i.ok, $i.pages, $i.bytes, $i.error)
+        $line = 'FETCH-BATCH ' + $i.kind + ': ok=' + $i.ok + ' pages=' + $i.pages + ' bytes=' + $i.bytes + ' ' + $i.error
+        Write-Host ('[qam] ' + $line) -ForegroundColor DarkCyan
+        Add-QamLog $line
     }
     return [ordered]@{ ok = $true; items = $items }
 }
@@ -606,7 +607,7 @@ $IndexHtml = '<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta n
 function Invoke-Route { param($Ctx)
     $req = $Ctx.Request
     $path = $req.Url.AbsolutePath
-    $reqLine = "{0} {1}" -f $req.HttpMethod, $path
+    $reqLine = [string]$req.HttpMethod + ' ' + $path
     Write-Host ("[qam] " + (Get-Date -Format 'HH:mm:ss') + " " + $reqLine) -ForegroundColor DarkGray
     Add-QamLog "REQ $reqLine"
     if ($req.HttpMethod -eq 'OPTIONS') { Send-Bytes $Ctx ([byte[]]@()) 'text/plain' 204; return }
@@ -623,7 +624,11 @@ function Invoke-Route { param($Ctx)
         }
         '^/qam/qualys/schedule-add$' {
             try { Send-Json $Ctx (Invoke-QualysScheduleAdd (Get-Body $req | ConvertFrom-Json)) }
-            catch { Send-Json $Ctx @{ ok = $false; error = $_.Exception.Message } 502 }
+            catch {
+                # ★どこで落ちたかまで返す。メッセージだけだと原因の行に辿り着けない。
+                Add-QamLog ('SCHEDADD error ' + $_.Exception.Message + ' @ ' + $_.InvocationInfo.ScriptLineNumber + ': ' + $_.InvocationInfo.Line)
+                Send-Json $Ctx @{ ok = $false; error = ($_.Exception.Message + ' @ line ' + $_.InvocationInfo.ScriptLineNumber) } 502
+            }
             return
         }
         '^/qam/secret/protect$' {
@@ -722,10 +727,9 @@ function Invoke-Route { param($Ctx)
                 Import-QamEnv $EnvFile
             }
             $baseV = $env:QAM_QUALYS_API_BASE; $userV = $env:QAM_QUALYS_USER; $proxyV = $env:QAM_PROXY_URL
-            Write-Host ("[qam] config base={0} user={1} proxy={2}" -f `
-                $(if ($baseV) { $baseV } else { '(空)' }), `
-                $(if ($userV) { 'set' } else { '(空)' }), `
-                $(if ($proxyV) { $proxyV } else { '(空)' })) -ForegroundColor Cyan
+            Write-Host ('[qam] config base=' + $(if ($baseV) { $baseV } else { '(空)' }) +
+                ' user=' + $(if ($userV) { 'set' } else { '(空)' }) +
+                ' proxy=' + $(if ($proxyV) { $proxyV } else { '(空)' })) -ForegroundColor Cyan
             Send-Json $Ctx @{
                 qualysBase = $baseV; qualysUser = $userV; proxy = $proxyV; port = $Port
                 retentionDays = if ($env:QAM_RAW_RETENTION_DAYS) { [int]$env:QAM_RAW_RETENTION_DAYS } else { 90 }
