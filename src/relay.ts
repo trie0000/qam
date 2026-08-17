@@ -92,6 +92,11 @@ export async function resolveHosts(names: string[]): Promise<ResolveRow[]> {
 // regions: 地域区分「ラベル=コード」のカンマ区切り（空なら既定6区分）。ドメイン名の末尾に使う。
 // spSiteUrl / spLibrary: 管理データの保管先（SharePoint）。SPO を読む前に要るのでローカル設定に置く。
 export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: string; port: number; retentionDays: number; licenseLimit: number; userBusinessUnit: string; userCountry: string; fiscalStartMonth: number; inspectionAgPattern: string; scanOptionProfile: string; mapOptionProfile: string; scannerAppliance: string; scheduleTimeZone: string; regions: string; spSiteUrl: string; spLibrary: string;
+  // 日次更新（検索リスト更新・レポート作成）で使う設定。
+  searchListIds: string;    // 更新対象の動的検索リストID（カンマ/改行区切り・複数）
+  cveXlsxPath: string;      // CVE対応策一覧の Excel（保管先ライブラリからの相対パス）
+  reportTemplateJa: string; // SCANレポートのテンプレートID（日本語アカウント用）
+  reportTemplateEn: string; // 同（英語アカウント用）
   // ↓ qam.env でのみ設定する（画面は表示のみ。POST では受け付けない）
   bundleSource: string; bundleLocalBase: string; logDir: string }
 // 設定は relay が持つが、SharePoint ページ上で動くとき relay は Qualys 取得にしか要らない。

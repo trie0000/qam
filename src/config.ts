@@ -21,6 +21,10 @@ export const LS = {
   qualysPass: 'qam.qualys.pass', // 旧: 平文パスワード（互換のため読むだけ。保存はしない）
   qualysSecret: 'qam.qualys.secret', // Qualys パスワードの DPAPI 暗号文（平文は持たない）
   author: 'qam.author',          // メモ(コメント)/操作履歴の記入者名
+  // 英語レポート用の Qualys アカウント。レポートの言語はアカウントに紐づくので、
+  // 既存アカウント（日本語）とは別にもう1組だけ持つ。
+  qualysUserEn: 'qam.qualys.user.en',
+  qualysSecretEn: 'qam.qualys.secret.en',
   bundlePrev: 'qam.bundle.prev', // 本体を差し替える直前の版（更新後に「更新しました」を出すため）
   table: (view: string) => `qam.table.${view}`,
 };

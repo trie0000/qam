@@ -26,6 +26,7 @@ import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type
 import { parseQualysXml } from './ingest/parse';
 import { ticketQuery, resolveTicketMode } from './tickets';
 import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
+import { parseSearchListIds } from './searchlist';
 import {
   RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
   companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
@@ -1591,16 +1592,21 @@ async function deployBundleToSharePoint(): Promise<void> {
 
 // 入力された平文パスワードを暗号化して保存する（平文は localStorage に残さない）。
 // relay に暗号化を委ねるので、relay が落ちていれば保存できない旨を返す。
-async function storeQualysPassword(plain: string): Promise<boolean> {
-  if (!plain) { localStorage.removeItem(LS.qualysSecret); localStorage.removeItem(LS.qualysPass); return true; }
+async function storeSecret(key: string, plain: string): Promise<boolean> {
+  if (!plain) { localStorage.removeItem(key); return true; }
   try {
-    localStorage.setItem(LS.qualysSecret, await protectSecret(plain));
-    localStorage.removeItem(LS.qualysPass); // 旧バージョンの平文が残っていれば消す
+    localStorage.setItem(key, await protectSecret(plain));
     return true;
   } catch (e) {
     toast(`認証情報を保護できませんでした（中継サーバを確認してください）: ${(e as Error).message}`, 'error');
     return false;
   }
+}
+
+async function storeQualysPassword(plain: string): Promise<boolean> {
+  const ok = await storeSecret(LS.qualysSecret, plain);
+  if (ok) localStorage.removeItem(LS.qualysPass); // 旧バージョンの平文が残っていれば消す
+  return ok;
 }
 
 // 保存済みの認証情報。パスワードは DPAPI 暗号文（secret）で持ち、平文は保持しない。
@@ -2234,6 +2240,17 @@ async function openSettings(): Promise<void> {
   const regionsIn = el('input', { class: 'in', value: cfg.regions || formatRegions(DEFAULT_REGIONS), placeholder: formatRegions(DEFAULT_REGIONS) }) as HTMLInputElement;
   const spSite = el('input', { class: 'in', value: cfg.spSiteUrl || '', placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE' }) as HTMLInputElement;
   const spLib = el('input', { class: 'in', value: cfg.spLibrary || 'QamData', placeholder: 'QamData' }) as HTMLInputElement;
+  const slIds = el('textarea', { class: 'in', rows: '4', style: 'width:100%;font-family:var(--font-mono)', placeholder: '例)\n381\n6343529' }) as HTMLTextAreaElement;
+  slIds.value = parseSearchListIds(cfg.searchListIds || '').join('\n');
+  const cvePath = el('input', { class: 'in', value: cfg.cveXlsxPath || '', placeholder: '例: ras/CVE対応策一覧.xlsx' }) as HTMLInputElement;
+  const tplJa = el('input', { class: 'in', value: cfg.reportTemplateJa || '', placeholder: '例: 1234567' }) as HTMLInputElement;
+  const tplEn = el('input', { class: 'in', value: cfg.reportTemplateEn || '', placeholder: '例: 1234568' }) as HTMLInputElement;
+  const userEn = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUserEn) || '' }) as HTMLInputElement;
+  const hasSecretEn = !!localStorage.getItem(LS.qualysSecretEn);
+  const passEn = el('input', {
+    class: 'in', type: 'password',
+    placeholder: hasSecretEn ? '保存済み（変更するときだけ入力）' : '',
+  }) as HTMLInputElement;
   // 暗号文は復号口が無いので画面へは戻せない。保存済みなら「入力済み」を示すだけにする。
   const hasSecret = !!localStorage.getItem(LS.qualysSecret);
   const pass = el('input', {
@@ -2313,7 +2330,22 @@ async function openSettings(): Promise<void> {
             toast('設定を保存しました', 'ok'); return true;
           },
         }) }] },
-        { title: '接続', items: [{ key: 'qualysAccount', label: 'Qualys アカウント', render: () => ({
+        { title: '接続', items: [
+          { key: 'qualysAccountEn', label: 'Qualys アカウント（英語レポート用）', render: () => ({
+            body: el('div', {}, [
+              setHead('Qualys アカウント（英語レポート用）', 'レポートの言語は Qualys のアカウント設定に紐づきます。既存のアカウント（日本語）とは別に、英語レポートを作るアカウントをここに登録します。未登録なら英語レポートは作らず、日本語だけ作ります。'),
+              field('Qualys アカウント（英語）', userEn),
+              field('Qualys パスワード（英語）', passEn, '空のまま保存すると変更しません。'),
+            ]),
+            save: async () => {
+              if (userEn.value.trim()) localStorage.setItem(LS.qualysUserEn, userEn.value.trim()); else localStorage.removeItem(LS.qualysUserEn);
+              if (passwordInputAction(passEn.value) === 'save') {
+                if (!(await storeSecret(LS.qualysSecretEn, passEn.value))) return false;
+              }
+              toast('設定を保存しました', 'ok'); return true;
+            },
+          }) },
+          { key: 'qualysAccount', label: 'Qualys アカウント', render: () => ({
           body: el('div', {}, [
             setHead('Qualys アカウント', 'Qualys API の認証情報です。共有の env ではなくこのブラウザにだけ保存します（パスワードは中継サーバで暗号化して保持し、平文では持ちません）。'),
             field('Qualys アカウント', user),
@@ -2326,7 +2358,8 @@ async function openSettings(): Promise<void> {
             if (passwordInputAction(pass.value) === 'save') { if (!(await storeQualysPassword(pass.value))) return false; }
             toast('設定を保存しました', 'ok'); return true;
           },
-        }) }] },
+        }) },
+        ] },
       ],
     },
     {
@@ -2351,6 +2384,24 @@ async function openSettings(): Promise<void> {
           { key: 'retention', label: '保存期間', render: () => ({
             body: el('div', {}, [setHead('保存期間', '取り込んだ生XMLとスナップショットを何日残すかです。'), field('保存期間（日）', ret)]),
             save: () => saveConfig({ retentionDays: parseInt(ret.value, 10) || 90 }),
+          }) },
+        ] },
+        { title: '日次更新', items: [
+          { key: 'searchList', label: '検索リストと CVE 一覧', render: () => ({
+            body: el('div', {}, [
+              setHead('検索リストと CVE 一覧', 'Excel の CVE 一覧に合わせて Qualys の動的検索リストを更新します。'),
+              field('更新する検索リストID', slIds, '1行1件（カンマ区切りも可）。数字だけを受け付けます。Qualys の「検索リスト」画面の ID です。未設定だと日次更新の Search List 更新は実行できません。'),
+              field('CVE対応策一覧の Excel', cvePath, `保管先ライブラリ（${cfg.spLibrary || 'QamData'}）からの相対パス。シート「CVE対応策一覧」の A3 以下を CVE 番号として読みます。`),
+            ]),
+            save: () => saveConfig({ searchListIds: parseSearchListIds(slIds.value).join(','), cveXlsxPath: cvePath.value.trim() }),
+          }) },
+          { key: 'reportTemplate', label: 'SCANレポートのテンプレート', render: () => ({
+            body: el('div', {}, [
+              setHead('SCANレポートのテンプレート', '新規に脆弱性が見つかった RAS 資産について、ホスト単位で SCAN レポートを作ります。テンプレートIDは Qualys の「レポートテンプレート」画面の ID です。'),
+              field('テンプレートID（日本語）', tplJa, '既存アカウント（日本語）で作るレポートのテンプレート。'),
+              field('テンプレートID（英語）', tplEn, '英語アカウントで作るレポートのテンプレート。英語アカウントが未登録なら使いません。'),
+            ]),
+            save: () => saveConfig({ reportTemplateJa: tplJa.value.trim(), reportTemplateEn: tplEn.value.trim() }),
           }) },
         ] },
         { title: 'ライセンス', items: [{ key: 'license', label: 'ライセンス上限', render: () => ({

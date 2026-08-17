@@ -669,6 +669,10 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'regions') { Set-QamEnvValue $EnvFile 'QAM_REGIONS' $b.regions }
                 if ($b.PSObject.Properties.Name -contains 'spSiteUrl') { Set-QamEnvValue $EnvFile 'QAM_SP_SITE_URL' $b.spSiteUrl }
                 if ($b.PSObject.Properties.Name -contains 'spLibrary') { Set-QamEnvValue $EnvFile 'QAM_SP_LIBRARY' $b.spLibrary }
+                if ($b.PSObject.Properties.Name -contains 'searchListIds') { Set-QamEnvValue $EnvFile 'QAM_SEARCH_LIST_IDS' $b.searchListIds }
+                if ($b.PSObject.Properties.Name -contains 'cveXlsxPath') { Set-QamEnvValue $EnvFile 'QAM_CVE_XLSX_PATH' $b.cveXlsxPath }
+                if ($b.PSObject.Properties.Name -contains 'reportTemplateJa') { Set-QamEnvValue $EnvFile 'QAM_REPORT_TEMPLATE_JA' $b.reportTemplateJa }
+                if ($b.PSObject.Properties.Name -contains 'reportTemplateEn') { Set-QamEnvValue $EnvFile 'QAM_REPORT_TEMPLATE_EN' $b.reportTemplateEn }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -693,6 +697,10 @@ function Invoke-Route { param($Ctx)
                 scheduleTimeZone = if ($env:QAM_SCHEDULE_TIME_ZONE) { $env:QAM_SCHEDULE_TIME_ZONE } else { 'JP' }
                 spSiteUrl = $env:QAM_SP_SITE_URL
                 spLibrary = if ($env:QAM_SP_LIBRARY) { $env:QAM_SP_LIBRARY } else { 'QamData' }
+                searchListIds = $env:QAM_SEARCH_LIST_IDS
+                cveXlsxPath = $env:QAM_CVE_XLSX_PATH
+                reportTemplateJa = $env:QAM_REPORT_TEMPLATE_JA
+                reportTemplateEn = $env:QAM_REPORT_TEMPLATE_EN
                 # ★以下は qam.env でのみ設定する（画面には出すが編集させない）。
                 #   二重管理を避けるため、POST では受け付けない。
                 bundleSource = if ($env:QAM_BUNDLE_SOURCE) { ([string]$env:QAM_BUNDLE_SOURCE).ToLower() } else { 'sp' }
