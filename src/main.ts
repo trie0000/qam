@@ -171,17 +171,27 @@ const root = (() => {
 setUiRoot(uiScope, root);
 
 // ★入力欄で打ったキーをホストページ（SharePoint）へ流さない。
-//   SharePoint のページは document にショートカットを張っており、'/' や 's' のような
+//   SharePoint のページは document にショートカットを張っており、'g' '/' 's' のような
 //   1文字キーを preventDefault で奪う。アプリは shadow DOM の中にあるがイベントは
-//   document まで上がるため、パスワード欄などで「打てない文字がある」ことになる（実測）。
-//   奪われるのは印字される1文字キーだけなので、そこに限って止める。
-//   Esc / Enter / PageUp などは止めない（モーダルや表のキー操作に使っている）。
-root.addEventListener('keydown', (e) => {
-  const t = e.composedPath()[0] as HTMLElement | undefined;
-  if (!t || !/^(INPUT|TEXTAREA)$/.test(t.tagName)) return;
-  if (e.key.length !== 1 || e.ctrlKey || e.altKey || e.metaKey) return;
-  e.stopPropagation();
-});
+//   document まで上がるため、パスワード欄などで「打てない文字がある」ことになる。
+//
+//   ★window の **capture** で止めること。ホスト側が document の capture で奪う場合、
+//     自分の要素で bubble を止めても手遅れになる（capture は window → document → 要素の順に
+//     走るため、document capture のほうが先）。window capture ならホストより先に取れる。
+//     実測: root の bubble では 'g' '/' 's' が奪われたままだが、window capture では通る。
+//
+//   止めるのは印字される1文字キーだけ。Esc / Enter / PageUp などは止めない
+//   （モーダルの閉じる操作や表のページ送りに使っている）。
+for (const type of ['keydown', 'keypress'] as const) {
+  window.addEventListener(type, (e: KeyboardEvent) => {
+    if (e.ctrlKey || e.altKey || e.metaKey || e.key.length !== 1) return;
+    const path = e.composedPath();
+    if (!path.some((n) => (n as HTMLElement)?.id === 'qam-host')) return; // アプリの外は触らない
+    const t = path[0] as HTMLElement | undefined;
+    if (!t || !/^(INPUT|TEXTAREA)$/.test(t.tagName)) return;  // 入力中だけ
+    e.stopPropagation();
+  }, true);
+}
 
 // テーマ・文字サイズを載せる先。スコープ済み CSS は #qam-root を起点に見るので、
 // html に付けても一致しない（暗色にしても効かない）。root 自身に付ける。
