@@ -88,7 +88,7 @@ export function buildCompanyMails(input: BuildMailsInput): CompanyMail[] {
       company,
       name: list.map((c) => c.name).join('、'),
       dept: list[0].dept,
-      greeting: greetingFor(company, list.map((c) => c.name).join('、'), input.perms),
+      greeting: greetingFor(company, list.map((c) => c.name).join('、')),
       count: String(tickets.length),
       tickets: ticketLines(tickets),
     };

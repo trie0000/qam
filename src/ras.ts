@@ -288,11 +288,9 @@ export interface RasPerms {
   aliasesByCompany: Record<string, string[]>;
   /** 事業会社名 → 体制表（宛先Excel）の「管轄範囲」の表記。1:1 で対応するが名前が違う。 */
   contactNameByCompany: Record<string, string>;
-  /** 事業会社名 → メール本文の宛名。空なら既定の書式を使う。送付先ごとに変えられる。 */
-  greetingByCompany: Record<string, string>;
 }
 
-export const EMPTY_RAS_PERMS: RasPerms = { adminGroupIds: [], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {}, greetingByCompany: {} };
+export const EMPTY_RAS_PERMS: RasPerms = { adminGroupIds: [], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {} };
 
 const ids = (v: unknown): number[] =>
   (Array.isArray(v) ? [...new Set(v.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : []);
@@ -335,7 +333,7 @@ export function normalizeRasPerms(v: unknown): RasPerms {
   };
   return {
     adminGroupIds: ids(o.adminGroupIds), byBusinessCompany: by, aliasesByCompany: aliases,
-    contactNameByCompany: strMap(o.contactNameByCompany), greetingByCompany: strMap(o.greetingByCompany),
+    contactNameByCompany: strMap(o.contactNameByCompany),
   };
 }
 
@@ -343,16 +341,9 @@ export function normalizeRasPerms(v: unknown): RasPerms {
 export const contactNameFor = (company: string, p: RasPerms): string =>
   p.contactNameByCompany[String(company ?? '').trim()] || String(company ?? '').trim();
 
-/** 既定の宛名。「〈事業会社名〉事業場ITセキュリティ責任者 〈氏名〉」。 */
-export const defaultGreeting = (company: string, name: string): string =>
+/** メール本文の書き出し。会社名と氏名は体制表から入る。書式は固定。 */
+export const greetingFor = (company: string, name: string): string =>
   `${company} 事業場ITセキュリティ責任者 ${name} 様`;
-
-/** その事業会社の宛名。設定があればそれを使い、無ければ既定の書式。 */
-export const greetingFor = (company: string, name: string, p: RasPerms): string => {
-  const tpl = p.greetingByCompany[String(company ?? '').trim()];
-  return tpl ? tpl.replace(/\{\{\s*company\s*\}\}/g, company).replace(/\{\{\s*name\s*\}\}/g, name)
-    : defaultGreeting(company, name);
-};
 
 /** その事業会社の略称。 */
 export const aliasesFor = (company: string, p: RasPerms): string[] => p.aliasesByCompany[String(company ?? '').trim()] ?? [];
@@ -394,16 +385,14 @@ export function mergeCompanies(p: RasPerms, names: string[]): RasPerms {
   const next: Record<string, number[]> = {};
   const aliases: Record<string, string[]> = {};
   const contact: Record<string, string> = {};
-  const greet: Record<string, string> = {};
   for (const name of names) {
     next[name] = p.byBusinessCompany[name] ?? [];
     if (p.aliasesByCompany[name]) aliases[name] = p.aliasesByCompany[name];
     if (p.contactNameByCompany[name]) contact[name] = p.contactNameByCompany[name];
-    if (p.greetingByCompany[name]) greet[name] = p.greetingByCompany[name];
   }
   return {
     adminGroupIds: [...p.adminGroupIds], byBusinessCompany: next, aliasesByCompany: aliases,
-    contactNameByCompany: contact, greetingByCompany: greet,
+    contactNameByCompany: contact,
   };
 }
 

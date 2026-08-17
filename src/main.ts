@@ -1852,8 +1852,8 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
     const mapBox = el('div', { class: 'qam-card' });
     mapBox.append(el('div', { class: 'qam-card-title' }, ['事業会社ごとの参照グループ・宛先']));
     mapBox.append(el('div', { class: 'qam-hint' }, [
-      '左から: 参照グループ / 管理CSV の略称 / 体制表での表記 / その表記で引ける送信先 / メール本文の宛名の書式。'
-      + '送信先のアドレスは体制表から取るので入力しません。「体制表を読み込む」を押すと、対応が合っているかを確かめられます。',
+      '左から: 参照グループ / 管理CSV の略称 / 体制表での表記 / その表記で引ける送信先。'
+      + '送信先の氏名とアドレスは体制表から取ります。「体制表を読み込む」を押すと、対応が合っているかを確かめられます。',
     ]));
     // 体制表を読み込むと、管轄範囲を選べるようになる（＋引ける宛先が出る）。
     const loadBtn = el('button', { class: 'btn btn--sm' }, [contacts.size ? '体制表を読み直す' : '体制表を読み込む']);
@@ -1907,17 +1907,7 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
           : '—',
       ]);
 
-      // メール本文の宛名。既定は「〈事業会社名〉事業場ITセキュリティ責任者 〈氏名〉様」。
-      const gr = el('input', {
-        type: 'text', class: 'in', style: 'width:200px', placeholder: '宛名の書式（既定: {{company}} 事業場ITセキュリティ責任者 {{name}} 様）',
-        value: perms.greetingByCompany[c] ?? '',
-      }) as HTMLInputElement;
-      gr.addEventListener('change', () => {
-        const next = { ...perms.greetingByCompany };
-        if (gr.value.trim()) next[c] = gr.value.trim(); else delete next[c];
-        void save({ ...perms, greetingByCompany: next });
-      });
-      row.append(al, cn, who, gr);
+      row.append(al, cn, who);
       const b = el('button', { class: 'btn btn--sm' }, ['グループを選ぶ']);
       b.addEventListener('click', async () => {
         const picked = await pickGroups(`${c} の参照グループ`, `${c} の資産・チケットに読み取りを付けるグループ`, ids);

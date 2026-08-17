@@ -191,9 +191,9 @@ describe('RASチケットの絞り込み', () => {
 
 describe('アクセス権の設定', () => {
   it('壊れた保存値でも落とさず既定に整える', () => {
-    expect(normalizeRasPerms(null)).toEqual({ adminGroupIds: [], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {}, greetingByCompany: {} });
+    expect(normalizeRasPerms(null)).toEqual({ adminGroupIds: [], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {} });
     expect(normalizeRasPerms({ adminGroupIds: ['3', 0, -1, 3], byBusinessCompany: 'x' }))
-      .toEqual({ adminGroupIds: [3], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {}, greetingByCompany: {} });
+      .toEqual({ adminGroupIds: [3], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {} });
   });
 
   it('割当が空でも登録済みの会社は残す', () => {
@@ -363,7 +363,6 @@ describe('体制表との対応付けと宛名', () => {
   const p = normalizeRasPerms({
     byBusinessCompany: { 'A事業会社': [7], 'B事業会社': [] },
     contactNameByCompany: { 'A事業会社': 'A社（体制表の表記）', '消えた会社': 'X' },
-    greetingByCompany: { 'B事業会社': '{{company}} ご担当 {{name}} 様' },
   });
 
   it('体制表での表記を引ける。未設定なら事業会社名そのもの', () => {
@@ -375,17 +374,11 @@ describe('体制表との対応付けと宛名', () => {
     expect(contactNameFor('消えた会社', p)).toBe('消えた会社'); // 保存値は捨てられている
   });
 
-  it('宛名は既定で「〈事業会社名〉事業場ITセキュリティ責任者 〈氏名〉様」', () => {
-    expect(greetingFor('A事業会社', '山田 太郎', p)).toBe('A事業会社 事業場ITセキュリティ責任者 山田 太郎 様');
+  it('本文の書き出しは「〈事業会社名〉事業場ITセキュリティ責任者 〈氏名〉様」。会社名も氏名も体制表から入る', () => {
+    expect(greetingFor('A事業会社', '山田 太郎')).toBe('A事業会社 事業場ITセキュリティ責任者 山田 太郎 様');
   });
 
-  it('宛名は送付先ごとに変えられる', () => {
-    expect(greetingFor('B事業会社', '佐藤 花子', p)).toBe('B事業会社 ご担当 佐藤 花子 様');
-  });
-
-  it('会社を再登録しても対応付けと宛名は消えない', () => {
-    const next = mergeCompanies(p, ['A事業会社', 'B事業会社', 'C事業会社']);
-    expect(next.contactNameByCompany['A事業会社']).toBe('A社（体制表の表記）');
-    expect(next.greetingByCompany['B事業会社']).toBeTruthy();
+  it('会社を再登録しても対応付けは消えない', () => {
+    expect(mergeCompanies(p, ['A事業会社', 'C事業会社']).contactNameByCompany['A事業会社']).toBe('A社（体制表の表記）');
   });
 });
