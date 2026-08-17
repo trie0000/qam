@@ -422,8 +422,9 @@ describe('脆弱性種別の判定', () => {
   });
 
   it('チケット一覧の組み立てで種別が入る', () => {
-    const assets = [{ hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100', businessCompany: 'A社',
-                      managementCompany: '', aliveStatus: '', registeredAt: '', lastScan: '', trackingMethod: '' }];
+    const assets: RasAsset[] = [{ key: 'R100:10.0.0.1', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
+      businessCompany: 'A社', managementCompany: '', status: '', note: '',
+      registeredAt: '', lastScan: '', trackingMethod: '' }];
     const tk = [{ number: '1', state: 'OPEN', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a',
                   created: '', firstFound: '', lastFound: '', cves: ['CVE-2024-1111'] }];
     expect(deriveRasTickets(tk, assets, {}, sheet)[0].vulnKind).toBe(VULN_CSIRT);
