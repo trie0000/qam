@@ -1852,13 +1852,13 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
     const mapBox = el('div', { class: 'qam-card' });
     mapBox.append(el('div', { class: 'qam-card-title' }, ['事業会社ごとの参照グループ・宛先']));
     mapBox.append(el('div', { class: 'qam-hint' }, [
-      '左から: 参照グループ / 管理CSV の略称 / 体制表での管轄範囲 / 引ける宛先 / メール本文の宛名の書式。'
-      + 'メールの宛先（氏名・アドレス）は体制表から読むので、ここでは入力しません。',
+      '左から: 参照グループ / 管理CSV の略称 / 体制表での表記 / その表記で引ける送信先 / メール本文の宛名の書式。'
+      + '送信先のアドレスは体制表から取るので入力しません。「体制表を読み込む」を押すと、対応が合っているかを確かめられます。',
     ]));
     // 体制表を読み込むと、管轄範囲を選べるようになる（＋引ける宛先が出る）。
     const loadBtn = el('button', { class: 'btn btn--sm' }, [contacts.size ? '体制表を読み直す' : '体制表を読み込む']);
     const loadNote = el('span', { class: 'qam-hint', style: 'margin-left:var(--s-3)' }, [
-      contactErr ? contactErr : contacts.size ? `体制表: ${contacts.size} 件の管轄範囲を読み込み済み` : '未読み込み（読み込むと管轄範囲を選べます）',
+      contactErr ? contactErr : contacts.size ? `体制表: ${contacts.size} 件の管轄範囲を読み込み済み` : '未読み込み（読み込むと、右側に実際の送信先が出ます）',
     ]);
     loadBtn.addEventListener('click', async () => {
       loadBtn.setAttribute('disabled', 'true');
@@ -1886,27 +1886,27 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
         if (list.length) next[c] = list; else delete next[c];
         void save({ ...perms, aliasesByCompany: next });
       });
-      // 体制表での管轄範囲。読み込んだ値から選ぶ（手で打つと1文字違いで引けなくなる）。
+      // 体制表での管轄範囲の表記。事業会社名と違うので、ここで手入力して結び付ける。
+      // ★ここで決めるのは「名前の対応」だけ。送信先アドレスは体制表から引く（下に出す）。
       const cur = perms.contactNameByCompany[c] ?? '';
-      const cn = el('select', { class: 'in', style: 'width:210px' }) as HTMLSelectElement;
-      const opts = [...new Set([...contacts.keys(), ...(cur ? [cur] : [])])].sort((x, y) => x.localeCompare(y, 'ja'));
-      cn.append(el('option', { value: '' }, [contacts.size ? '（事業会社名と同じ）' : '（体制表を読み込んでください）']));
-      for (const o of opts) cn.append(el('option', { value: o, selected: o === cur }, [o]));
-      cn.disabled = !contacts.size && !cur;
+      const cn = el('input', {
+        type: 'text', class: 'in', style: 'width:200px', placeholder: '体制表での表記（既定: 同じ）', value: cur,
+      }) as HTMLInputElement;
       cn.addEventListener('change', () => {
         const next = { ...perms.contactNameByCompany };
-        if (cn.value) next[c] = cn.value; else delete next[c];
+        if (cn.value.trim()) next[c] = cn.value.trim(); else delete next[c];
         void save({ ...perms, contactNameByCompany: next });
       });
-      // 実際に引ける宛先を出す。ここが空なら、そのままではメールを作れない。
+      // その表記で実際に引ける送信先。空ならメールを作れないので、実行前に気付けるようにする。
       const resolved = contacts.get(cur || c) ?? [];
       const who = el('span', {
-        class: resolved.length ? 'qam-hint' : '', style: `width:220px;${resolved.length ? '' : 'color:var(--danger)'}`,
+        class: resolved.length ? 'qam-hint' : '', style: `width:230px;${resolved.length ? '' : 'color:var(--danger)'}`,
       }, [
         contacts.size
           ? (resolved.length ? resolved.map((x) => `${x.name} <${x.email}>`).join(', ') : '体制表に該当なし')
           : '—',
       ]);
+
       // メール本文の宛名。既定は「〈事業会社名〉事業場ITセキュリティ責任者 〈氏名〉様」。
       const gr = el('input', {
         type: 'text', class: 'in', style: 'width:200px', placeholder: '宛名の書式（既定: {{company}} 事業場ITセキュリティ責任者 {{name}} 様）',
