@@ -1070,9 +1070,11 @@ function openDailyUpdate(): void {
   const cbQualys = el('input', { type: 'checkbox' }) as HTMLInputElement; cbQualys.checked = true;
   const cbSearch = el('input', { type: 'checkbox' }) as HTMLInputElement; cbSearch.checked = true;
   // 作り直しは既定 OFF。ONだと割り当てが崩れて全リストが更新され得る。
+  // ★押せないチェックボックスは作らない（なぜ押せないのかが画面から分からない）。
+  //   作り直しは Search List の更新の一種なので、選んだら親も入れる／親を外したら一緒に外す。
   const cbRebuild = el('input', { type: 'checkbox' }) as HTMLInputElement;
-  const syncRebuild = (): void => { cbRebuild.disabled = !cbSearch.checked; };
-  cbSearch.addEventListener('change', syncRebuild);
+  cbRebuild.addEventListener('change', () => { if (cbRebuild.checked) cbSearch.checked = true; });
+  cbSearch.addEventListener('change', () => { if (!cbSearch.checked) cbRebuild.checked = false; });
   const prog = el('div', { class: 'qam-progress', style: 'display:none' });
   const setProg = (msg: string, busy: boolean): void => {
     clear(prog); prog.style.display = 'flex';
@@ -1097,7 +1099,7 @@ function openDailyUpdate(): void {
     title: '日次更新', body, primaryLabel: 'OK', wide: true, dismissBackdrop: false,
     onPrimary: async () => {
       if (!cbQualys.checked && !cbSearch.checked) { toast('実行する内容を選んでください', 'error'); return false; }
-      const r = await runDailyUpdate(cbQualys.checked, cbSearch.checked, cbRebuild.checked && cbSearch.checked, setProg);
+      const r = await runDailyUpdate(cbQualys.checked, cbSearch.checked, cbRebuild.checked, setProg);
       if (r) { showDailyResult(r); return true; }
       return false;
     },
