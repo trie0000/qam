@@ -60,3 +60,19 @@ console.log('[qam] built dist/qam.bundle.js  version=' + BUILD_ID + '  built=' +
     process.exit(1);
   }
 }
+
+// ★メールを自動送信しないことをビルドで担保する。
+//   Outlook の下書きは Display() までで、.Send() は絶対に呼ばない方針。
+//   コメントで書いてあるだけでは、あとから1行足されたときに気付けない。
+{
+  const relay = path.join(__dirname, 'dist', 'qam-relay.ps1');
+  const lines = fs.readFileSync(relay, 'utf8').split('\n');
+  const bad = lines
+    .map((l, i) => ({ n: i + 1, t: l.replace(/^\uFEFF/, '').trim() }))
+    .filter(({ t }) => !t.startsWith('#') && /\.Send\s*\(/.test(t));
+  if (bad.length) {
+    console.error('[qam] 中継サーバにメール送信の呼び出しがあります（下書き表示までに留めること）:');
+    for (const b of bad) console.error(`  ${relay}:${b.n}  ${b.t}`);
+    process.exit(1);
+  }
+}

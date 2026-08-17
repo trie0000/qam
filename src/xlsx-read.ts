@@ -136,8 +136,14 @@ export function columnUntilBlankRow(rows: SheetRow[], col: string, fromRow: numb
 
 export interface XlsxSheet { name: string; rows: SheetRow[] }
 
+/** xlsx を開いて、条件に合うシートを読む。シート名は部分一致でも指定できる。 */
+export const readXlsxSheetLike = (buf: ArrayBuffer, part: string): Promise<XlsxSheet> =>
+  readXlsxSheet(buf, (name) => name.includes(part), `「${part}」を含むシート`);
+
 /** xlsx を開いて、指定名のシートを読む。シートが無ければ、在るシート名を添えて失敗させる。 */
-export async function readXlsxSheet(buf: ArrayBuffer, sheetName: string): Promise<XlsxSheet> {
+export async function readXlsxSheet(
+  buf: ArrayBuffer, sheetName: string | ((name: string) => boolean), label?: string,
+): Promise<XlsxSheet> {
   const idx = readZipIndex(buf);
   const need = (name: string): ZipEntry => {
     const e = idx.get(name);
@@ -150,8 +156,10 @@ export async function readXlsxSheet(buf: ArrayBuffer, sheetName: string): Promis
     name: unescapeXml(/\bname="([^"]*)"/.exec(m[1])?.[1] ?? ''),
     rid: /\br:id="([^"]*)"/.exec(m[1])?.[1] ?? '',
   }));
-  const hit = sheets.find((s) => s.name === sheetName);
-  if (!hit) throw new Error(`シート「${sheetName}」がありません（このファイルのシート: ${sheets.map((s) => s.name).join(' / ') || 'なし'}）`);
+  const match = typeof sheetName === 'function' ? sheetName : (n: string) => n === sheetName;
+  const want = label ?? `シート「${String(sheetName)}」`;
+  const hit = sheets.find((s) => match(s.name));
+  if (!hit) throw new Error(`${want}がありません（このファイルのシート: ${sheets.map((s) => s.name).join(' / ') || 'なし'}）`);
   const target = /\bTarget="([^"]*)"/.exec(
     new RegExp(`<Relationship\\b[^>]*Id="${hit.rid}"[^>]*>`).exec(rels)?.[0] ?? '',
   )?.[1] ?? '';
