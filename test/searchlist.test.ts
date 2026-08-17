@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { qualysActionError } from '../src/qualys';
+import { qualysActionError, parseReportStates } from '../src/qualys';
 import {
   parseDynamicLists, parseCveList, diffCves, cveUpdateFields, parseSearchListIds,
   normalizeCve, searchListSummary, planSearchListUpdates, chunkCves, CVE_PER_LIST,
@@ -208,5 +208,27 @@ describe('Qualys の実行系(POST)応答が成功か失敗か', () => {
   it('ERROR 要素は従来どおり失敗', () => {
     expect(qualysActionError('<REMEDIATION_TICKETS><ERROR number="999">not authorized</ERROR></REMEDIATION_TICKETS>'))
       .toBe('not authorized');
+  });
+});
+
+describe('レポートの状態を一括で読む', () => {
+  it('REPORT ごとに ID と STATE を対にする（1本ずつ聞かずに済ませる）', () => {
+    // ★1本ずつ id 指定で聞くと、レポートの数だけ API を叩くことになる。
+    const xml = `<?xml version="1.0"?><REPORT_LIST_OUTPUT><RESPONSE><REPORT_LIST>
+      <REPORT><ID>1001</ID><TITLE>a</TITLE><STATUS><STATE>Finished</STATE></STATUS></REPORT>
+      <REPORT><ID>1002</ID><TITLE>b</TITLE><STATUS><STATE>Running</STATE></STATUS></REPORT>
+    </REPORT_LIST></RESPONSE></REPORT_LIST_OUTPUT>`;
+    const m = parseReportStates(xml);
+    expect(m.get('1001')).toBe('Finished');
+    expect(m.get('1002')).toBe('Running');
+  });
+
+  it('STATE が直下にある版も読む', () => {
+    const xml = '<REPORT_LIST><REPORT><ID>7</ID><STATE>Finished</STATE></REPORT></REPORT_LIST>';
+    expect(parseReportStates(xml).get('7')).toBe('Finished');
+  });
+
+  it('空応答でも落とさない', () => {
+    expect(parseReportStates('').size).toBe(0);
   });
 });

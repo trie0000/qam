@@ -153,8 +153,8 @@ export const ALL_LISTS: {
     titleLabel: 'Ticket No',
     viewFields: ['Title', 'State', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound', 'ReportJa', 'ReportEn'],
     fieldFormatters: {
-      ReportJa: reportLinkColumnFormat('ReportJa', '日本語'),
-      ReportEn: reportLinkColumnFormat('ReportEn', '英語'),
+      ReportJa: reportLinkColumnFormat('ReportJa', 'JP'),
+      ReportEn: reportLinkColumnFormat('ReportEn', 'EN'),
     },
   },
 ];

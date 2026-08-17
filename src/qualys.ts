@@ -474,15 +474,39 @@ export async function launchScanReport(
   return id;
 }
 
-/** レポートの状態。Finished になるまで待つ。 */
-export async function reportState(creds: QualysCreds, id: string): Promise<string> {
+/**
+ * レポートの状態を**まとめて**取る。
+ * ★1本ずつ id 指定で聞くと、レポートの数だけ API を叩くことになる。action=list は
+ *   一覧をまとめて返すので、1回で全部の状態が分かる。
+ * ★レポートは作成したアカウントのものしか見えない。日本語/英語で別アカウントを使う
+ *   場合は、アカウントごとに呼ぶこと。
+ */
+export async function reportStates(creds: QualysCreds): Promise<Map<string, string>> {
   const base = creds.base.replace(/\/+$/, '');
   const res = await fetchQualys({
-    base, url: `${base}${REPORT_PATH}?action=list&id=${encodeURIComponent(id)}`,
+    base, url: `${base}${REPORT_PATH}?action=list`,
     user: creds.user, pass: creds.pass, secret: creds.secret, proxy: creds.proxy, noSession: true,
   });
   if (!res.ok) throw new Error(`レポートの状態を取得できません (status ${res.status})`);
-  return /<STATE>\s*([^<]+?)\s*<\/STATE>/i.exec(res.xml)?.[1] ?? '';
+  return parseReportStates(res.xml);
+}
+
+/** REPORT_LIST の応答から ID→状態。★ID と STATE は同じ REPORT の中で対にする。 */
+export function parseReportStates(xml: string): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!xml.trim()) return out;
+  let doc: Document;
+  try { doc = new DOMParser().parseFromString(xml, 'application/xml'); } catch { return out; }
+  for (const el of Array.from(doc.getElementsByTagName('REPORT'))) {
+    const kids = Array.from(el.children);
+    const id = (kids.find((c) => c.tagName === 'ID')?.textContent ?? '').trim();
+    const st = kids.find((c) => c.tagName === 'STATUS');
+    // STATE は STATUS の中（<STATUS><STATE>Finished</STATE></STATUS>）。直下に置く版もある。
+    const state = ((st ? Array.from(st.children).find((c) => c.tagName === 'STATE')?.textContent : null)
+      ?? kids.find((c) => c.tagName === 'STATE')?.textContent ?? '').trim();
+    if (id) out.set(id, state);
+  }
+  return out;
 }
 
 /** 完成した PDF を取り出す（base64）。 */

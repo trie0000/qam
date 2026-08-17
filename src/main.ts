@@ -16,7 +16,7 @@ import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
 import { downloadEntitiesParallel, type TicketResult, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole, type QualysCreds, type InspectionDownload, qualysDateTimeUtc,
-  fetchSearchLists, updateSearchList, launchScanReport, reportState, fetchReportPdf } from './qualys';
+  fetchSearchLists, updateSearchList, launchScanReport, reportStates, fetchReportPdf } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
 import { buildInspectionForm } from './ui/views/schedule-form';
@@ -945,11 +945,14 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       },
       { id: 'state', label: 'ステータス', width: 110, render: (t: RasTicket) => esc(t.state) },
       {
-        id: 'report', label: 'レポート', width: 130,
-        render: (t: RasTicket) => [
-          t.reportJa ? `<a href="${esc(t.reportJa)}" target="_blank" rel="noopener noreferrer">日本語</a>` : '',
-          t.reportEn ? `<a href="${esc(t.reportEn)}" target="_blank" rel="noopener noreferrer">英語</a>` : '',
-        ].filter(Boolean).join(' / '),
+        id: 'report', label: 'SCANレポート', width: 130,
+        // JP / EN を常に併記する。無い方は薄く出して「まだ作られていない」と分かるようにする。
+        render: (t: RasTicket) => (['JP', 'EN'] as const).map((tag) => {
+          const url = tag === 'JP' ? t.reportJa : t.reportEn;
+          return url
+            ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${tag}</a>`
+            : `<span class="qam-hint">${tag}</span>`;
+        }).join(' / '),
         sortVal: (t: RasTicket) => (t.reportJa || t.reportEn ? '1' : '0'),
       },
       { id: 'businessCompany', label: '事業会社', width: 180, render: (t: RasTicket) => esc(t.businessCompany) },
@@ -1317,45 +1320,71 @@ async function buildScanReports(
   }
   if (!langs.length) return;
 
-  // 1 ホストぶん。日本語と英語は別アカウント・別リクエストなので同時に走らせる。
-  const oneHost = async (t: ReportTarget): Promise<{ tickets: string[]; reportJa?: string; reportEn?: string }> => {
-    const link: { reportJa?: string; reportEn?: string } = {};
-    await Promise.all(langs.map(async (l) => {
-      const stamp = stampNow();
-      try {
-        const id = await launchScanReport(l.creds, author, {
-          templateId: l.template, title: reportTitle(t.ip, t.fqdn, stamp), ip: t.ip,
-        });
-        // 生成は非同期。完成するまで待つ（待たずに fetch すると XML のエラーが返る）。
-        const state = await waitReport(l.creds, id, () => undefined);
-        if (state !== 'Finished') throw new Error(`レポートが完成しませんでした（状態: ${state || '不明'}）`);
-        const b64 = await fetchReportPdf(l.creds, id);
-        const path = reportPath(stamp, t.ip, l.lang);
-        if (!backend.writeBinary) throw new Error('この保管先には PDF を保存できません');
-        await backend.writeBinary(path, b64);
-        const url = spFileUrl(cfg, path);
-        if (l.lang === 'ja') link.reportJa = url; else link.reportEn = url;
-        summary.reports.push({ ip: t.ip, lang: l.lang, path: url });
-      } catch (e) {
-        summary.reports.push({ ip: t.ip, lang: l.lang, error: (e as Error).message });
-      }
-    }));
-    return { tickets: t.tickets, ...link };
-  };
+  interface Job {
+    target: ReportTarget; lang: 'ja' | 'en'; creds: QualysCreds; stamp: string;
+    id?: string; done?: boolean;
+  }
 
-  // ホストも並行に走らせるが、Qualys を叩きすぎないよう本数は絞る。
-  let done = 0;
-  const results = await mapLimit(targets, 3, async (t) => {
-    const r = await oneHost(t);
-    setProg(`レポート作成中… ${++done} / ${targets.length} ホスト`, true);
-    return r;
+  // 1) まず全部の作成を依頼する（Qualys を叩きすぎないよう本数は絞る）。
+  setProg(`レポートの作成を依頼中…（${targets.length} ホスト × ${langs.length} 言語）`, true);
+  const jobs: Job[] = targets.flatMap((t) => langs.map((l) => ({ target: t, lang: l.lang, creds: l.creds, stamp: stampNow() })));
+  await mapLimit(jobs, 4, async (j) => {
+    const l = langs.find((x) => x.lang === j.lang)!;
+    try {
+      j.id = await launchScanReport(j.creds, author, {
+        templateId: l.template, title: reportTitle(j.target.ip, j.target.fqdn, j.stamp), ip: j.target.ip,
+      });
+    } catch (e) {
+      j.done = true;
+      summary.reports.push({ ip: j.target.ip, lang: j.lang, error: (e as Error).message });
+    }
   });
 
-  const marks: { number: string; reportJa?: string; reportEn?: string }[] = [];
-  for (const r of results) {
-    if (!r.reportJa && !r.reportEn) continue;
-    for (const no of r.tickets) marks.push({ number: no, reportJa: r.reportJa, reportEn: r.reportEn });
+  // 2) 完成待ち。★依頼直後は必ず生成中なので 30 秒待ってから、以後 30 秒間隔。
+  //    状態は 1 本ずつ聞かずアカウントごとに 1 回でまとめて取る
+  //    （レポートは作成したアカウントのものしか見えないので、言語ごとに 1 回）。
+  const links = new Map<ReportTarget, { reportJa?: string; reportEn?: string }>();
+  const deadline = Date.now() + 30 * 60_000;
+  for (;;) {
+    const pending = jobs.filter((j) => j.id && !j.done);
+    if (!pending.length) break;
+    if (Date.now() > deadline) {
+      for (const j of pending) summary.reports.push({ ip: j.target.ip, lang: j.lang, error: 'レポートが時間内に完成しませんでした' });
+      break;
+    }
+    setProg(`レポートの完成待ち…（残り ${pending.length} 本）`, true);
+    await new Promise((res) => setTimeout(res, 30_000));
+
+    for (const l of langs) {
+      const mine = pending.filter((j) => j.lang === l.lang);
+      if (!mine.length) continue;
+      let states: Map<string, string>;
+      try { states = await reportStates(l.creds); }
+      catch { continue; } // 一時的な失敗。次の周回で聞き直す
+      for (const j of mine) {
+        const st = states.get(j.id!) ?? '';
+        if (!st || st === 'Running' || st === 'Submitted') continue;
+        j.done = true;
+        if (st !== 'Finished') { summary.reports.push({ ip: j.target.ip, lang: j.lang, error: `レポートが完成しませんでした（状態: ${st}）` }); continue; }
+        try {
+          const b64 = await fetchReportPdf(j.creds, j.id!);
+          const path = reportPath(j.stamp, j.target.ip, j.lang);
+          if (!backend.writeBinary) throw new Error('この保管先には PDF を保存できません');
+          await backend.writeBinary(path, b64);
+          const url = spFileUrl(cfg, path);
+          const cur = links.get(j.target) ?? {};
+          if (j.lang === 'ja') cur.reportJa = url; else cur.reportEn = url;
+          links.set(j.target, cur);
+          summary.reports.push({ ip: j.target.ip, lang: j.lang, path: url });
+        } catch (e) {
+          summary.reports.push({ ip: j.target.ip, lang: j.lang, error: (e as Error).message });
+        }
+      }
+    }
   }
+
+  const marks: { number: string; reportJa?: string; reportEn?: string }[] = [];
+  for (const [t, link] of links) for (const no of t.tickets) marks.push({ number: no, ...link });
   if (marks.length) await repo.setRasTicketMarks(marks);
 }
 
@@ -1372,22 +1401,6 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   };
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
   return out;
-}
-
-// レポートの完成待ち。Qualys 側の生成は数分かかることがある。
-async function waitReport(creds: QualysCreds, id: string, onWait: (msg: string) => void): Promise<string> {
-  const started = Date.now();
-  // ★依頼した直後は必ず生成中。すぐ聞きに行っても Running が返るだけなので、
-  //   最初の1回ぶんの呼び出しを省く（API 呼び出しは少ないほどよい）。
-  await new Promise((res) => setTimeout(res, 10_000));
-  for (let i = 0; ; i++) {
-    const state = await reportState(creds, id);
-    if (state && state !== 'Running' && state !== 'Submitted') return state;
-    // 生成が終わらないまま待ち続けない（他の対象へ進めなくなる）。
-    if (Date.now() - started > 15 * 60_000) return state || 'Running';
-    onWait(`生成待ち ${Math.round((Date.now() - started) / 1000)} 秒`);
-    await new Promise((res) => setTimeout(res, Math.min(15_000, 3_000 + i * 2_000)));
-  }
 }
 
 /** 保管先ライブラリのファイルを開く URL。 */

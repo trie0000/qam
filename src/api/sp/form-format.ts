@@ -102,7 +102,7 @@ const reportCard = (): Node => ({
         'padding-bottom': '8px', 'margin-bottom': '12px', 'border-bottom': '1px solid #edebe9',
       },
     },
-    twoColumns([link('日本語', 'ReportJa')], [link('英語', 'ReportEn')]),
+    twoColumns([link('JP（日本語）', 'ReportJa')], [link('EN（英語）', 'ReportEn')]),
   ],
 });
 
