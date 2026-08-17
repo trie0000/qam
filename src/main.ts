@@ -970,21 +970,46 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
         sortVal: (t: RasTicket) => t.note ?? '',
       },
     ];
-    // 選択したチケットのレポートを開く。選択が無いときは出さない（押せないボタンを置かない）。
-    const dlReports = (lang: 'ja' | 'en') => async (keys: string[]): Promise<void> => {
-      const urls = keys.map((k) => tickets.find((t) => t.number === k))
-        .map((t) => (lang === 'ja' ? t?.reportJa : t?.reportEn)).filter((u): u is string => !!u);
-      if (!urls.length) { toast(`選択したチケットに${lang === 'ja' ? '日本語' : '英語'}のレポートがありません`, 'info'); return; }
-      for (const u of urls) window.open(u, '_blank', 'noopener');
+    // 選択したチケットのホストについて、レポートを作り直して保存する（日本語・英語を同時に）。
+    const refreshReports = async (keys: string[]): Promise<void> => {
+      const picked = keys.map((k) => tickets.find((t) => t.number === k)).filter((t): t is RasTicket => !!t);
+      // レポートはホスト単位。同じホストのチケットは1回にまとめる。
+      const byHost = new Map<string, ReportTarget>();
+      for (const t of picked) {
+        if (!t.ip) continue; // IP が無いと Qualys に対象を渡せない
+        const key = t.hostId || t.ip;
+        const hit = byHost.get(key);
+        if (hit) { hit.tickets.push(t.number); continue; }
+        byHost.set(key, { hostId: t.hostId, ip: t.ip, fqdn: t.fqdn, tickets: [t.number] });
+      }
+      const targets = [...byHost.values()];
+      if (!targets.length) { toast('IP が分かるチケットを選んでください', 'error'); return; }
+      await ensureAuthor();
+      const creds = await resolveQualysCreds();
+      if (!creds) return;
+      const summary: DailyRunSummary = { ingested: [], ticketsNew: 0, ticketsClosed: 0, ticketsReopened: 0, searchLists: [], reports: [], notes: [] };
+      setRelayBusy(true);
+      toast(`レポートを作成中…（${targets.length} ホスト）`, 'info');
+      try {
+        await buildScanReports(creds, await getConfig(), targets, summary, () => undefined);
+        const ok = summary.reports.filter((r) => r.path).length;
+        const ng = summary.reports.filter((r) => r.error).length;
+        toast(`レポートを更新しました（成功 ${ok} / 失敗 ${ng}）`, ng ? 'error' : 'ok');
+        recordOp('RASレポート更新', `${targets.length} ホスト（成功 ${ok} / 失敗 ${ng}）`);
+        showDailyResult(summary);
+        refresh();
+      } catch (e) {
+        toast('レポートの更新に失敗: ' + (e as Error).message, 'error');
+      } finally { setRelayBusy(false); }
     };
     host.append(renderTable({
       viewId: 'ras.tickets', columns: cols, rows, getKey: (t: RasTicket) => t.number,
       selected: state.selected, exportRef, filterRef, columnRef,
-      bulkActions: (keys) => (['ja', 'en'] as const).map((lang) => {
-        const b = el('button', { class: 'btn btn--sm' }, [`レポート(${lang === 'ja' ? '日本語' : '英語'})を開く`]);
-        b.addEventListener('click', () => { void dlReports(lang)(keys); });
-        return b;
-      }),
+      bulkActions: (keys) => {
+        const b = el('button', { class: 'btn btn--sm btn--primary', title: '選んだチケットのホストについて、日本語と英語のレポートを作り直します' }, ['レポート更新']);
+        b.addEventListener('click', () => { void refreshReports(keys); });
+        return [b];
+      },
     }));
     addExportButtons(toolbar, '独自RASチケット一覧', exportRef, columnRef);
   }
@@ -1292,18 +1317,17 @@ async function buildScanReports(
   }
   if (!langs.length) return;
 
-  const marks: { number: string; reportJa?: string; reportEn?: string }[] = [];
-  for (const t of targets) {
+  // 1 ホストぶん。日本語と英語は別アカウント・別リクエストなので同時に走らせる。
+  const oneHost = async (t: ReportTarget): Promise<{ tickets: string[]; reportJa?: string; reportEn?: string }> => {
     const link: { reportJa?: string; reportEn?: string } = {};
-    for (const l of langs) {
+    await Promise.all(langs.map(async (l) => {
       const stamp = stampNow();
       try {
-        setProg(`${t.ip} のレポート(${l.lang === 'ja' ? '日本語' : '英語'})を作成中…`, true);
         const id = await launchScanReport(l.creds, author, {
           templateId: l.template, title: reportTitle(t.ip, t.fqdn, stamp), ip: t.ip,
         });
         // 生成は非同期。完成するまで待つ（待たずに fetch すると XML のエラーが返る）。
-        const state = await waitReport(l.creds, id, (msg) => setProg(`${t.ip} のレポート: ${msg}`, true));
+        const state = await waitReport(l.creds, id, () => undefined);
         if (state !== 'Finished') throw new Error(`レポートが完成しませんでした（状態: ${state || '不明'}）`);
         const b64 = await fetchReportPdf(l.creds, id);
         const path = reportPath(stamp, t.ip, l.lang);
@@ -1315,10 +1339,39 @@ async function buildScanReports(
       } catch (e) {
         summary.reports.push({ ip: t.ip, lang: l.lang, error: (e as Error).message });
       }
-    }
-    if (link.reportJa || link.reportEn) for (const no of t.tickets) marks.push({ number: no, ...link });
+    }));
+    return { tickets: t.tickets, ...link };
+  };
+
+  // ホストも並行に走らせるが、Qualys を叩きすぎないよう本数は絞る。
+  let done = 0;
+  const results = await mapLimit(targets, 3, async (t) => {
+    const r = await oneHost(t);
+    setProg(`レポート作成中… ${++done} / ${targets.length} ホスト`, true);
+    return r;
+  });
+
+  const marks: { number: string; reportJa?: string; reportEn?: string }[] = [];
+  for (const r of results) {
+    if (!r.reportJa && !r.reportEn) continue;
+    for (const no of r.tickets) marks.push({ number: no, reportJa: r.reportJa, reportEn: r.reportEn });
   }
   if (marks.length) await repo.setRasTicketMarks(marks);
+}
+
+/** 同時実行数を絞って並行に走らせる。 */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }
 
 // レポートの完成待ち。Qualys 側の生成は数分かかることがある。

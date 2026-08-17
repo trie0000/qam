@@ -376,3 +376,40 @@ describe('列名の安全性', () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe('資産で設定した会社をチケットへ写す', () => {
+  const asset = (hostId: string, ip: string) =>
+    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '',
+       trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: '', managementCompany: '' });
+  const ticket = (n: string, hostId: string, ip: string) =>
+    ({ number: n, state: 'OPEN', hostId, ip, fqdn: 'a', settenId: 'R100', businessCompany: '', managementCompany: '',
+       created: '', firstFound: '2026-08-01 00:00:00', lastFound: '' });
+
+  it('資産の会社を変えると、同じホストのチケットにも反映される', async () => {
+    // ★写さないと、資産で直しても次の取込までチケット一覧が古いままになり、
+    //   事業会社に至ってはアクセス権の判定もずれる。
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('h1', '10.0.0.1')]);
+    await repo.syncRasTickets([ticket('11', 'h1', '10.0.0.1'), ticket('12', 'h9', '10.9.9.9')]);
+    await repo.setRasCompany('h1', 'A事業会社', 'X保守');
+    const rows = lists.rows[LIST_RAS_TICKETS];
+    expect(rows.find((r) => r.Title === '11')!.BusinessCompany).toBe('A事業会社');
+    expect(rows.find((r) => r.Title === '11')!.ManagementCompany).toBe('X保守');
+    expect(rows.find((r) => r.Title === '12')!.BusinessCompany).toBe(''); // 別ホストは触らない
+  });
+
+  it('CSV の一括取込でも同じように反映される', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('h1', '10.0.0.1'), asset('h2', '10.0.0.2')]);
+    await repo.syncRasTickets([ticket('11', 'h1', '10.0.0.1'), ticket('21', 'h2', '10.0.0.2')]);
+    await repo.setRasCompaniesBulk([
+      { key: 'h1', businessCompany: 'A事業会社', managementCompany: 'X保守' },
+      { key: 'h2', businessCompany: 'B事業会社', managementCompany: 'Y保守' },
+    ]);
+    const rows = lists.rows[LIST_RAS_TICKETS];
+    expect(rows.find((r) => r.Title === '11')!.BusinessCompany).toBe('A事業会社');
+    expect(rows.find((r) => r.Title === '21')!.ManagementCompany).toBe('Y保守');
+  });
+});

@@ -33,6 +33,25 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
   const permsApi = (): SpPermsClient => (o.permsClient ?? createSpPermsClient(http));
   const now = o.now ?? (() => Date.now());
 
+  // 資産で設定した会社をチケット側へ写す。チケットは資産に紐づく情報しか持たないので、
+  // ここで同じ値を持たせないと一覧の表示とアクセス権の判定がずれる。
+  // 突き合わせはホストID優先、無ければ IP（host list に居ない資産のチケットは通常無い）。
+  async function propagateCompanies(
+    assets: { hostId: string; ip: string; businessCompany: string; managementCompany: string }[],
+  ): Promise<void> {
+    if (!assets.length) return;
+    const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'HostId', 'Ip', 'BusinessCompany', 'ManagementCompany']);
+    if (!rows.length) return;
+    const byHost = new Map(assets.filter((a) => a.hostId).map((a) => [a.hostId, a]));
+    const byIp = new Map(assets.filter((a) => a.ip).map((a) => [a.ip, a]));
+    for (const r of rows) {
+      const a = byHost.get(String(r.HostId ?? '')) ?? byIp.get(String(r.Ip ?? ''));
+      if (!a) continue;
+      if (String(r.BusinessCompany ?? '') === a.businessCompany && String(r.ManagementCompany ?? '') === a.managementCompany) continue;
+      await lists.update(LIST_RAS_TICKETS, r.Id, { BusinessCompany: a.businessCompany, ManagementCompany: a.managementCompany }, r.__etag);
+    }
+  }
+
   // 取込ロック: SettingKey='lock:ingest' の 1 行を claim する。
   // SettingKey に一意制約が張ってあるので、同時に取りに来ても **行を作れるのは 1 人だけ**。
   // 期限切れの行は If-Match 付きの更新で奪う（これも同時なら片方だけ成功する）。
@@ -232,24 +251,35 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
     async setRasCompany(key, businessCompany, managementCompany) {
       for (let i = 0; i <= MAX_RETRY; i++) {
-        const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'DedupKey']);
+        const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'Ip', 'DedupKey']);
         const cur = rows.find((r) => String(r.DedupKey ?? '') === key);
         if (!cur) throw new Error(`RAS資産が見つかりません (${key})`);
-        if (await lists.update(LIST_RAS_ASSETS, cur.Id, { BusinessCompany: businessCompany, ManagementCompany: managementCompany }, cur.__etag)) return;
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, { BusinessCompany: businessCompany, ManagementCompany: managementCompany }, cur.__etag)) {
+          // ★チケット側にも同じ値を写す。写さないと、資産で直しても次の取込まで
+          //   チケット一覧が古いままになり、事業会社に至ってはアクセス権の判定もずれる。
+          await propagateCompanies([{ hostId: String(cur.HostId ?? ''), ip: String(cur.Ip ?? ''), businessCompany, managementCompany }]);
+          return;
+        }
       }
       throw new Error('他の利用者が同じ資産を更新しています。画面を更新してからやり直してください');
     },
 
     async setRasCompaniesBulk(updates) {
       // 全件を1回だけ読み、行キーで引き当てて必要な分だけ書く。
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'Ip', 'DedupKey']);
       const byKey = new Map(rows.map((x) => [String(x.DedupKey ?? ''), x]));
       let n = 0;
+      const done: { hostId: string; ip: string; businessCompany: string; managementCompany: string }[] = [];
       for (const u of updates) {
         const cur = byKey.get(u.key);
         if (!cur) continue; // 同期のタイミングで消えた資産。取込全体は止めない。
-        if (await lists.update(LIST_RAS_ASSETS, cur.Id, { BusinessCompany: u.businessCompany, ManagementCompany: u.managementCompany }, cur.__etag)) n++;
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, { BusinessCompany: u.businessCompany, ManagementCompany: u.managementCompany }, cur.__etag)) {
+          n++;
+          done.push({ hostId: String(cur.HostId ?? ''), ip: String(cur.Ip ?? ''), businessCompany: u.businessCompany, managementCompany: u.managementCompany });
+        }
       }
+      // ★チケット側にも写す（資産で直しても次の取込まで古いままになるのを防ぐ）。
+      await propagateCompanies(done);
       return n;
     },
 
