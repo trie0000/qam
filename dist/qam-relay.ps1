@@ -185,6 +185,13 @@ function Invoke-QualysFetch { param($Body)
             # 「2.0 → 3.0」ではなく 5.0 まで上げる（v5.0 のみ Active）。応答は SCHEDULE_SCAN_LIST_OUTPUT で同じ。
             'scansched' { $url = "$base/api/5.0/fo/schedule/scan/?action=list" }
             'mapsched'  { $url = "$base/msp/scheduled_scans.php?type=map" }
+            # 動的検索リスト。v2.0 は EOS(2026-08)/EOL(2027-02) なので v3.0 を使う。
+            # show_qids=0 … QID は使わないので落とす（数万件返ることがある）。
+            'searchlist' {
+                $ids = if ($Body.ids) { [string]$Body.ids } else { '' }
+                $url = "$base/api/3.0/fo/qid/search_list/dynamic/?action=list&show_qids=0"
+                if ($ids) { $url += "&ids=$([Uri]::EscapeDataString($ids))" }
+            }
             'ticket' {
                 $states = if ($Body.states) { [string]$Body.states } else { 'OPEN,RESOLVED,CLOSED,IGNORED' }
                 $url = "$base/msp/ticket_list.php?states=$states&show_host_id=1"
@@ -268,7 +275,8 @@ function Invoke-QualysScheduleAdd { param($Body)
         '/api/2.0/fo/schedule/scan/',   # SCAN スケジュール作成(v2)
         '/msp/scheduled_scans.php',     # MAP スケジュール作成(v1)
         '/api/2.0/fo/asset/group/',     # AssetGroup 作成(v2)
-        '/msp/asset_domain.php'         # ドメイン登録(v1)
+        '/msp/asset_domain.php',        # ドメイン登録(v1)
+        '/api/3.0/fo/qid/search_list/dynamic/'  # 動的検索リストの更新(v3)
     )
     if ($allowed -notcontains $path) { return [ordered]@{ ok = $false; error = "許可されていない送信先です: $path" } }
     $parts = New-Object System.Collections.ArrayList
@@ -482,7 +490,7 @@ function Invoke-QamFetchBatch {
             $pages = New-Object System.Collections.ArrayList
             # since は ticket だけが使う（modified_since_datetime）。他の kind では無視される。
             # since=チケット / after=検査 のみが使う。他の kind では無視される。
-            $body = @{ kind = $kind; base = $req.base; user = $req.user; pass = $req.pass; secret = $req.secret; proxy = $req.proxy; since = $req.since; states = $req.states; after = $req.after; noSession = $true }
+            $body = @{ kind = $kind; base = $req.base; user = $req.user; pass = $req.pass; secret = $req.secret; proxy = $req.proxy; since = $req.since; states = $req.states; after = $req.after; ids = $req.ids; noSession = $true }
             $res = Invoke-QualysFetch ([pscustomobject]$body)
             # 絞り込みパラメータ(launched_after_datetime)を受け付けない環境があるので、
             # scan だけは条件無しで取り直す（件数は増えるが四半期の判定は TS 側で行う）。
