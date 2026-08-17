@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { qualysActionError } from '../src/qualys';
 import {
   parseDynamicLists, parseCveList, diffCves, cveUpdateFields, parseSearchListIds,
   normalizeCve, searchListSummary, planSearchListUpdates, chunkCves, CVE_PER_LIST,
@@ -181,5 +182,31 @@ describe('複数リストへの割り当て', () => {
   it('中身が同じなら changed=false（無駄な更新をしない）', () => {
     const cur = [L('1', 'A', ['CVE-1', 'CVE-2'])];
     expect(planSearchListUpdates(['cve-2', ' CVE-1 '], ['1'], cur).assignments[0].changed).toBe(false);
+  });
+});
+
+describe('Qualys の実行系(POST)応答が成功か失敗か', () => {
+  const simple = (inner: string): string =>
+    `<?xml version="1.0"?><SIMPLE_RETURN><RESPONSE><DATETIME>x</DATETIME>${inner}</RESPONSE></SIMPLE_RETURN>`;
+
+  it('成功の SIMPLE_RETURN をエラーにしない', () => {
+    // ★SIMPLE_RETURN は成功でも返る。TEXT があるだけで失敗にすると、
+    //   更新が通っているのに「失敗 — search list updated successfully」と出る（実際に踏んだ）。
+    expect(qualysActionError(simple('<TEXT>search list updated successfully</TEXT>'))).toBe('');
+  });
+
+  it('CODE があるものは失敗として、コードを添えて返す', () => {
+    expect(qualysActionError(simple('<CODE>1905</CODE><TEXT>Invalid search list id</TEXT>')))
+      .toBe('Invalid search list id（コード 1905）');
+  });
+
+  it('レポート作成の成功応答（ITEM_LIST 付き）もエラーにしない', () => {
+    const xml = simple('<TEXT>New report launched</TEXT><ITEM_LIST><ITEM><KEY>ID</KEY><VALUE>4242</VALUE></ITEM></ITEM_LIST>');
+    expect(qualysActionError(xml)).toBe('');
+  });
+
+  it('ERROR 要素は従来どおり失敗', () => {
+    expect(qualysActionError('<REMEDIATION_TICKETS><ERROR number="999">not authorized</ERROR></REMEDIATION_TICKETS>'))
+      .toBe('not authorized');
   });
 });

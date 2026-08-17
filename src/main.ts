@@ -1216,7 +1216,7 @@ async function runSearchListUpdate(
   // 今どのリストに何が入っているか（Qualys の現状）を土台に割り当てる。
   // 位置で詰め直すと、Excel に1件足しただけで全リストがずれて全部更新になる。
   const plan = planSearchListUpdates(want, ids, lists, CVE_PER_LIST, rebuild);
-  if (rebuild) summary.notes.push('「作り直す」が指定されたため、既存の割り当てを無視して Excel の順に詰め直しました');
+  if (rebuild) summary.searchNote = '「作り直す」が指定されたため、既存の割り当てを無視して Excel の順に詰め直しました';
   if (plan.overflow.length) {
     // ★黙って捨てない。リストが足りないことと、あと何個要るかを出す。
     summary.notes.push(`CVE が ${want.length} 件あり、検索リスト ${ids.length} 個（1個あたり ${CVE_PER_LIST} 件）に収まりません。`
@@ -1319,9 +1319,12 @@ function showDailyResult(s: DailyRunSummary): void {
   ]));
 
   if (s.searchLists.length) {
-    body.append(sec('Search List', s.searchLists.map((r) => el('div', {
+    body.append(sec('Search List', [
+      ...(s.searchNote ? [el('div', { class: 'qam-hint', style: 'margin-bottom:var(--s-2)' }, [s.searchNote])] : []),
+      ...s.searchLists.map((r) => el('div', {
       class: r.error ? 'qam-hint' : '', style: r.error ? 'color:var(--danger)' : '',
-    }, [searchListSummary(r)]))));
+    }, [searchListSummary(r)])),
+    ]));
   }
   if (s.reports.length) {
     body.append(sec('SCANレポート', s.reports.map((r) => {

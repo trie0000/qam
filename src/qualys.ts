@@ -212,10 +212,29 @@ export interface InspectionDownload { raw: QamInspectionRaw; warnings: string[] 
 
 // Qualys は不正パラメータ等を HTTP 200 + <SIMPLE_RETURN><TEXT> や <ERROR> で返すことがある。
 // ok だけ見ると「エラー」と「0 件」を区別できず、黙って未対応表示になるので本文も検査する。
+// 一覧取得（GET）用。一覧を頼んだのに SIMPLE_RETURN が返るのは、それ自体が異常。
 export function qualysErrorText(xml: string): string {
   if (/<(SIMPLE|GENERIC)_RETURN/i.test(xml)) {
     const m = xml.match(/<TEXT>([\s\S]*?)<\/TEXT>/i);
     return (m ? m[1] : 'Qualys がエラーを返しました').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  const e = xml.match(/<ERROR[^>]*>([\s\S]*?)<\/ERROR>/i);
+  return e ? e[1].replace(/\s+/g, ' ').trim() : '';
+}
+
+/**
+ * 実行系（POST: update / launch など）用。
+ * ★SIMPLE_RETURN は**成功でも返る**（成功: <TEXT>search list updated successfully</TEXT>）。
+ *   一覧用と同じ判定を使うと、更新が通っているのに「失敗 — updated successfully」と出る（実際に踏んだ）。
+ *   失敗かどうかは <CODE> の有無で見る。
+ */
+export function qualysActionError(xml: string): string {
+  if (/<(SIMPLE|GENERIC)_RETURN/i.test(xml)) {
+    if (!/<CODE>/i.test(xml)) return '';
+    const code = xml.match(/<CODE>([\s\S]*?)<\/CODE>/i)?.[1]?.trim() ?? '';
+    const m = xml.match(/<TEXT>([\s\S]*?)<\/TEXT>/i);
+    const text = (m ? m[1] : 'Qualys がエラーを返しました').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return code ? `${text}（コード ${code}）` : text;
   }
   const e = xml.match(/<ERROR[^>]*>([\s\S]*?)<\/ERROR>/i);
   return e ? e[1].replace(/\s+/g, ' ').trim() : '';
@@ -423,7 +442,7 @@ export async function updateSearchList(creds: QualysCreds, author: string, field
     proxy: creds.proxy, path: SEARCH_LIST_PATH, author, fields,
   });
   if (!res.ok) throw new Error(res.error || `更新に失敗しました (status ${res.status})`);
-  const err = qualysErrorText(res.xml ?? '');
+  const err = qualysActionError(res.xml ?? '');
   if (err) throw new Error(err);
 }
 
@@ -447,7 +466,7 @@ export async function launchScanReport(
   });
   if (!res.ok) throw new Error(res.error || `レポート作成の依頼に失敗しました (status ${res.status})`);
   const xml = res.xml ?? '';
-  const err = qualysErrorText(xml);
+  const err = qualysActionError(xml);
   if (err) throw new Error(err);
   // SIMPLE_RETURN の ITEM_LIST に KEY=ID / VALUE=<id> で返る。
   const id = /<KEY>\s*ID\s*<\/KEY>\s*<VALUE>\s*(\d+)\s*<\/VALUE>/i.exec(xml)?.[1] ?? '';

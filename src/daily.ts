@@ -73,6 +73,8 @@ export interface DailyRunSummary {
   ticketsClosed: number;
   ticketsReopened: number;
   searchLists: SearchListResult[];
+  /** 検索リストの補足（作り直しを行った等）。実行しなかったものとは区別する。 */
+  searchNote?: string;
   reports: { ip: string; lang: 'ja' | 'en'; path?: string; error?: string }[];
   notes: string[];           // 実行しなかった理由など（黙って飛ばさない）
 }
