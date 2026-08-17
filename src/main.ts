@@ -1673,7 +1673,17 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
 }
 
 // 体制表（社内イントラ）から連絡先を取る。中継サーバがログインからダウンロードまでを行う。
-async function loadContacts(cfg: RelayConfig): Promise<Map<string, Contact[]>> {
+export interface ContactLoad {
+  byScope: Map<string, Contact[]>;
+  /** 何が取れたのかを画面で確かめるための情報。 */
+  info: {
+    file: string; url: string; bytes: number; sheet: string;
+    headers: Record<string, string>; total: number; skipped: number;
+    scopes: string[]; sample: Contact[];
+  };
+}
+
+async function loadContactsDetailed(cfg: RelayConfig): Promise<ContactLoad> {
   const uid = localStorage.getItem(LS.intraUser) || '';
   const secret = localStorage.getItem(LS.intraSecret) || '';
   if (!cfg.intraLoginUrl || !cfg.intraPageUrl) throw new Error('体制表の取得元が未設定です（設定 → 共通設定 → メール → 連絡先（体制表）の取得元）');
@@ -1686,7 +1696,58 @@ async function loadContacts(cfg: RelayConfig): Promise<Map<string, Contact[]>> {
   const buf = base64ToBytes(r.base64).buffer as ArrayBuffer;
   const sheet = await readXlsxSheetLike(buf, '体制含む');
   const parsed = parseContacts(sheet.rows);
-  return contactsByScope(parsed.contacts);
+  const byScope = contactsByScope(parsed.contacts);
+  return {
+    byScope,
+    info: {
+      file: r.name ?? '', url: r.url ?? '', bytes: r.bytes ?? 0, sheet: sheet.name,
+      headers: parsed.usedHeaders, total: parsed.contacts.length, skipped: parsed.skipped,
+      scopes: [...byScope.keys()].sort((a, b) => a.localeCompare(b, 'ja')),
+      sample: parsed.contacts.slice(0, 5),
+    },
+  };
+}
+
+const loadContacts = async (cfg: RelayConfig): Promise<Map<string, Contact[]>> =>
+  (await loadContactsDetailed(cfg)).byScope;
+
+/**
+ * 取得結果の明細。★「取れたのかどうか分からない」状態にしないため、
+ * どのファイルを・どのシートの・どの列から・何件読んだのかを全部出す。
+ */
+function showContactLoad(info: ContactLoad['info']): void {
+  const kb = (n: number): string => `${(n / 1024).toFixed(1)} KB`;
+  const rowOf = (k: string, v: string): HTMLElement =>
+    el('div', { style: 'display:flex;gap:var(--s-3);padding:2px 0' }, [
+      el('span', { class: 'qam-hint', style: 'min-width:150px' }, [k]),
+      el('span', { style: 'user-select:text;word-break:break-all' }, [v]),
+    ]);
+  const body = el('div', {}, [
+    el('div', { class: 'qam-card', style: 'margin-bottom:var(--s-4)' }, [
+      el('div', { class: 'qam-card-title' }, ['ダウンロードしたファイル']),
+      rowOf('ファイル名', info.file || '(不明)'),
+      rowOf('取得元', info.url || '(不明)'),
+      rowOf('サイズ', kb(info.bytes)),
+      rowOf('読んだシート', info.sheet),
+    ]),
+    el('div', { class: 'qam-card', style: 'margin-bottom:var(--s-4)' }, [
+      el('div', { class: 'qam-card-title' }, ['読み取った列（3行目の見出し）']),
+      ...Object.entries(info.headers).map(([k, v]) => rowOf(k, v || '(見つからず)')),
+    ]),
+    el('div', { class: 'qam-card', style: 'margin-bottom:var(--s-4)' }, [
+      el('div', { class: 'qam-card-title' }, ['件数']),
+      rowOf('「正」で読めた連絡先', `${info.total} 件`),
+      rowOf('除いた行', `${info.skipped} 件（「副」またはアドレス無し）`),
+      rowOf('管轄範囲', `${info.scopes.length} 件`),
+    ]),
+    el('div', { class: 'qam-card' }, [
+      el('div', { class: 'qam-card-title' }, ['先頭5件（中身の確認用）']),
+      ...(info.sample.length
+        ? info.sample.map((c) => el('div', { style: 'padding:2px 0;user-select:text' }, [`${c.scope} / ${c.dept} / ${c.name} <${c.email}>`]))
+        : [el('div', { class: 'qam-hint' }, ['1件も読めていません。見出しの位置やB列の「正」を確認してください'])]),
+    ]),
+  ]);
+  openModal({ title: '体制表の取得結果', body, wide: true });
 }
 
 /**
@@ -1863,9 +1924,15 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
     loadBtn.addEventListener('click', async () => {
       loadBtn.setAttribute('disabled', 'true');
       setBusy('体制表を読み込み中…');
-      try { contacts = await loadContacts(await getConfig()); contactErr = ''; }
-      catch (e) { contactErr = (e as Error).message; contacts = new Map(); }
-      finally { setBusy(''); loadBtn.removeAttribute('disabled'); paint(); }
+      try {
+        const r = await loadContactsDetailed(await getConfig());
+        contacts = r.byScope; contactErr = '';
+        paint();
+        showContactLoad(r.info); // 何が取れたのかを必ず見せる
+        return;
+      } catch (e) { contactErr = (e as Error).message; contacts = new Map(); }
+      finally { setBusy(''); loadBtn.removeAttribute('disabled'); }
+      paint();
     });
     mapBox.append(el('div', { class: 'qam-chip-row', style: 'margin:var(--s-2) 0' }, [loadBtn, loadNote]));
     const noGroup = companiesWithoutGroups(perms);
@@ -3052,6 +3119,15 @@ async function openSettings(): Promise<void> {
     try { await repo.writeSharedJson(RAS_MAIL_KEY, next); mailTpl = next; toast('設定を保存しました', 'ok'); return true; }
     catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
   };
+  // ★設定しただけでは「正しく取れるか」が分からない。ここで試せるようにする。
+  const intraTestBtn = el('button', { class: 'btn btn--sm' }, ['体制表を取得して確認']);
+  intraTestBtn.addEventListener('click', async () => {
+    intraTestBtn.setAttribute('disabled', 'true');
+    setBusy('体制表を取得中…');
+    try { showContactLoad((await loadContactsDetailed(await getConfig())).info); }
+    catch (e) { toast('取得できませんでした: ' + (e as Error).message, 'error'); }
+    finally { setBusy(''); intraTestBtn.removeAttribute('disabled'); }
+  });
   const TPL_HELP = '差し込み: {{company}} 事業会社名 / {{name}} 氏名 / {{dept}} 所属 / {{greeting}} 宛名 / {{count}} 件数 / {{tickets}} 脆弱性の一覧 / {{listLink}} SharePointの一覧へのリンク。差し込めなかったものは {{...}} のまま残ります。';
   const userEn = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUserEn) || '' }) as HTMLInputElement;
   const hasSecretEn = !!localStorage.getItem(LS.qualysSecretEn);
@@ -3260,6 +3336,7 @@ async function openSettings(): Promise<void> {
               field('ログインURL', intraLogin),
               field('ページURL', intraPage, '体制表へのリンクがあるページ。'),
               field('ファイル名のパターン', intraPat, '正規表現。空なら ^ITSecurity.*\\.xlsx?$ を使います。'),
+              field('取得の確認', intraTestBtn, '実際にログインして体制表を取り、何が読めたかを表示します（保存してから押してください）。'),
             ]),
             save: () => saveConfig({ intraLoginUrl: intraLogin.value.trim(), intraPageUrl: intraPage.value.trim(), intraFilePattern: intraPat.value.trim() }),
             inputs: [intraLogin, intraPage, intraPat],
