@@ -1760,6 +1760,11 @@ const rasTicketListUrl = (cfg: RelayConfig): string =>
 async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
   let perms = await loadRasPerms();
+  // ★宛先（氏名・メール）は体制表から引くもので、この画面では入力しない。
+  //   ここで決めるのは「アクセス権の事業会社名 ↔ 体制表の管轄範囲」の対応だけ。
+  //   手で打たせると表記が1文字違うだけで宛先を引けなくなるので、読み込んだ管轄範囲から選ばせる。
+  let contacts = new Map<string, Contact[]>();
+  let contactErr = '';
   let groups: SiteGroup[] = [];
   let groupsError = '';
   try { groups = await repo.listSiteGroups(); }
@@ -1846,7 +1851,23 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
     // 3) 事業会社ごとの参照グループ
     const mapBox = el('div', { class: 'qam-card' });
     mapBox.append(el('div', { class: 'qam-card-title' }, ['事業会社ごとの参照グループ・宛先']));
-    mapBox.append(el('div', { class: 'qam-hint' }, ['左から: 参照グループ / 管理CSV の略称 / 体制表（宛先Excel）での表記 / メールの宛名。体制表での表記が実際の「管轄範囲」と一致していないと、メールの宛先を引けません。']));
+    mapBox.append(el('div', { class: 'qam-hint' }, [
+      '左から: 参照グループ / 管理CSV の略称 / 体制表での管轄範囲 / 引ける宛先 / メール本文の宛名の書式。'
+      + 'メールの宛先（氏名・アドレス）は体制表から読むので、ここでは入力しません。',
+    ]));
+    // 体制表を読み込むと、管轄範囲を選べるようになる（＋引ける宛先が出る）。
+    const loadBtn = el('button', { class: 'btn btn--sm' }, [contacts.size ? '体制表を読み直す' : '体制表を読み込む']);
+    const loadNote = el('span', { class: 'qam-hint', style: 'margin-left:var(--s-3)' }, [
+      contactErr ? contactErr : contacts.size ? `体制表: ${contacts.size} 件の管轄範囲を読み込み済み` : '未読み込み（読み込むと管轄範囲を選べます）',
+    ]);
+    loadBtn.addEventListener('click', async () => {
+      loadBtn.setAttribute('disabled', 'true');
+      setBusy('体制表を読み込み中…');
+      try { contacts = await loadContacts(await getConfig()); contactErr = ''; }
+      catch (e) { contactErr = (e as Error).message; contacts = new Map(); }
+      finally { setBusy(''); loadBtn.removeAttribute('disabled'); paint(); }
+    });
+    mapBox.append(el('div', { class: 'qam-chip-row', style: 'margin:var(--s-2) 0' }, [loadBtn, loadNote]));
     const noGroup = companiesWithoutGroups(perms);
     if (noGroup.length) mapBox.append(el('div', { class: 'qam-hint' }, [`割当が無い事業会社: ${noGroup.join(' / ')}（管理者しか見られません）`]));
     const table = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-2);margin-top:var(--s-3)' });
@@ -1865,19 +1886,30 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
         if (list.length) next[c] = list; else delete next[c];
         void save({ ...perms, aliasesByCompany: next });
       });
-      // 体制表（宛先Excel）での会社名。1:1 で対応するが表記が違うので、ここで結び付ける。
-      const cn = el('input', {
-        type: 'text', class: 'in', style: 'width:200px', placeholder: '体制表での表記（既定: 同じ）',
-        value: perms.contactNameByCompany[c] ?? '',
-      }) as HTMLInputElement;
+      // 体制表での管轄範囲。読み込んだ値から選ぶ（手で打つと1文字違いで引けなくなる）。
+      const cur = perms.contactNameByCompany[c] ?? '';
+      const cn = el('select', { class: 'in', style: 'width:210px' }) as HTMLSelectElement;
+      const opts = [...new Set([...contacts.keys(), ...(cur ? [cur] : [])])].sort((x, y) => x.localeCompare(y, 'ja'));
+      cn.append(el('option', { value: '' }, [contacts.size ? '（事業会社名と同じ）' : '（体制表を読み込んでください）']));
+      for (const o of opts) cn.append(el('option', { value: o, selected: o === cur }, [o]));
+      cn.disabled = !contacts.size && !cur;
       cn.addEventListener('change', () => {
         const next = { ...perms.contactNameByCompany };
-        if (cn.value.trim()) next[c] = cn.value.trim(); else delete next[c];
+        if (cn.value) next[c] = cn.value; else delete next[c];
         void save({ ...perms, contactNameByCompany: next });
       });
+      // 実際に引ける宛先を出す。ここが空なら、そのままではメールを作れない。
+      const resolved = contacts.get(cur || c) ?? [];
+      const who = el('span', {
+        class: resolved.length ? 'qam-hint' : '', style: `width:220px;${resolved.length ? '' : 'color:var(--danger)'}`,
+      }, [
+        contacts.size
+          ? (resolved.length ? resolved.map((x) => `${x.name} <${x.email}>`).join(', ') : '体制表に該当なし')
+          : '—',
+      ]);
       // メール本文の宛名。既定は「〈事業会社名〉事業場ITセキュリティ責任者 〈氏名〉様」。
       const gr = el('input', {
-        type: 'text', class: 'in', style: 'width:220px', placeholder: '宛名（既定: {{company}} 事業場ITセキュリティ責任者 {{name}} 様）',
+        type: 'text', class: 'in', style: 'width:200px', placeholder: '宛名の書式（既定: {{company}} 事業場ITセキュリティ責任者 {{name}} 様）',
         value: perms.greetingByCompany[c] ?? '',
       }) as HTMLInputElement;
       gr.addEventListener('change', () => {
@@ -1885,7 +1917,7 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
         if (gr.value.trim()) next[c] = gr.value.trim(); else delete next[c];
         void save({ ...perms, greetingByCompany: next });
       });
-      row.append(al, cn, gr);
+      row.append(al, cn, who, gr);
       const b = el('button', { class: 'btn btn--sm' }, ['グループを選ぶ']);
       b.addEventListener('click', async () => {
         const picked = await pickGroups(`${c} の参照グループ`, `${c} の資産・チケットに読み取りを付けるグループ`, ids);
