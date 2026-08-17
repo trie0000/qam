@@ -16,12 +16,19 @@ const ticket = (no: string, state: string, ip: string, hostId?: string, fqdn?: s
    <DETECTION><IP>${ip}</IP>${hostId ? `<HOST_ID>${hostId}</HOST_ID>` : ''}
    <DNSNAME>dns.example</DNSNAME>${fqdn ? `<FQDN>${fqdn}</FQDN>` : ''}</DETECTION></TICKET>`;
 
+// show_vuln_details=1 のときだけ返る部分。脆弱性種別の判定に使う。
+const withVuln = (cves: string[]): string =>
+  `<TICKET><NUMBER>201</NUMBER><CURRENT_STATE>OPEN</CURRENT_STATE><DETECTION><IP>10.0.0.9</IP></DETECTION>
+   <VULNINFO><TITLE>t</TITLE><QID>1</QID><SEVERITY>3</SEVERITY>
+   <CVE_ID_LIST>${cves.map((c) => `<CVE_ID><ID>${c}</ID><URL>u</URL></CVE_ID>`).join('')}</CVE_ID_LIST>
+   </VULNINFO></TICKET>`;
+
 describe('チケット応答の解析', () => {
   it('TICKET から ID/状態/ホストID/IP/FQDN/起票日時を取り出す', () => {
     const t = parseTicketXml(page(ticket('101', 'OPEN', '10.0.0.1', '9001', 'host1.example')))[0];
     expect(t).toEqual({
       number: '101', state: 'OPEN', hostId: '9001', ip: '10.0.0.1',
-      fqdn: 'host1.example', created: '2026-08-01T09:30:00Z', firstFound: '', lastFound: '',
+      fqdn: 'host1.example', created: '2026-08-01T09:30:00Z', firstFound: '', lastFound: '', cves: [],
     });
   });
 
@@ -31,6 +38,19 @@ describe('チケット応答の解析', () => {
 
   it('show_host_id が効かず HOST_ID が無くても落ちない（空文字）', () => {
     expect(parseTicketXml(page(ticket('103', 'RESOLVED', '10.0.0.3')))[0].hostId).toBe('');
+  });
+
+  it('VULNINFO から CVE 番号を取り出す', () => {
+    expect(parseTicketXml(page(withVuln(['CVE-2024-1111', 'CVE-2024-2222'])))[0].cves)
+      .toEqual(['CVE-2024-1111', 'CVE-2024-2222']);
+  });
+
+  it('CVE が付かない応答でも空配列（種別の判定で落ちない）', () => {
+    expect(parseTicketXml(page(ticket('104', 'OPEN', '10.0.0.4')))[0].cves).toEqual([]);
+  });
+
+  it('同じ CVE が重複していても1つにする', () => {
+    expect(parseTicketXml(page(withVuln(['CVE-2024-1111', 'cve-2024-1111'])))[0].cves).toEqual(['CVE-2024-1111']);
   });
 
   it('空応答で例外を投げない（取込全体を巻き込まない）', () => {

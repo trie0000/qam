@@ -140,7 +140,8 @@ export const rasAssetFormFormatter = (): string => JSON.stringify({
 // ホストIDは載せない（担当者は IP / FQDN で資産を特定するため）。
 export const rasTicketFormFormatter = (): string => JSON.stringify({
   headerJSONFormatter: root([card('Ticket No ',
-    [item('ステータス', 'State'), item('事業会社', 'BusinessCompany'), item('管理会社', 'ManagementCompany')],
+    [item('ステータス', 'State'), item('脆弱性種別', 'VulnKind'), item('CVE ID', 'CveIds'),
+     item('事業会社', 'BusinessCompany'), item('管理会社', 'ManagementCompany')],
     [item('IP', 'Ip'), item('FQDN', 'Fqdn'), item('初回検知日', 'FirstFound'), item('最終検知日', 'LastFound')],
   ), reportCard()]),
   ...READONLY_BODY,

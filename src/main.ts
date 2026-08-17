@@ -1025,6 +1025,8 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
         }).join(' / '),
         sortVal: (t: RasTicket) => (t.reportJa || t.reportEn ? '1' : '0'),
       },
+      { id: 'vulnKind', label: '脆弱性種別', width: 190, render: (t: RasTicket) => esc(t.vulnKind ?? '') },
+      { id: 'cveIds', label: 'CVE ID', mono: true, width: 200, render: (t: RasTicket) => esc(t.cveIds ?? '') },
       { id: 'businessCompany', label: '事業会社', width: 180, render: (t: RasTicket) => esc(t.businessCompany) },
       { id: 'managementCompany', label: '管理会社', width: 180, render: (t: RasTicket) => esc(t.managementCompany) },
       { id: 'ip', label: 'IP', mono: true, width: 140, render: (t: RasTicket) => esc(t.ip) },
@@ -1131,7 +1133,7 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   if (!tickets?.length) return { assets: assets.length, tickets: 0 };
   const idByIp: Record<string, string> = {};
   for (const h of hosts) { const ip = h.scalar.IP; if (ip && !(ip in idByIp)) idByIp[ip] = h.key; }
-  const rt = deriveRasTickets(tickets, assets, idByIp);
+  const rt = deriveRasTickets(tickets, assets, idByIp, await loadCveSet());
   const t = await repo.syncRasTickets(rt);
   if (t.added || t.updated) recordOp('RASチケットの同期', `追加 ${t.added} / 更新 ${t.updated}`);
   return { assets: assets.length, tickets: rt.length };
@@ -1301,6 +1303,10 @@ async function runDailyUpdate(
 
     // SharePoint のリストは、ここでだけ書き換える。
     if (doSpo) {
+      // ★種別の判定は Excel の CVE 一覧が要る。検索リスト更新は後段なので、ここで先に読む
+      //   （同じ実行内では使い回すので、ダウンロードは1回だけ）。
+      setProg('CVE対応策一覧を読み込み中…', true);
+      await refreshCveList(cfg, summary);
       setProg('独自RASを更新中…', true);
       const prevTickets = await repo.readRasTickets();
       await syncRasFromLatest(lastTickets ?? (await latestStoredTickets()));
@@ -1350,6 +1356,45 @@ const dailyOpDetail = (s: DailyRunSummary): string =>
   + `${s.searchLists.length ? ` / 検索リスト ${s.searchLists.filter((x) => x.updated).length}件更新` : ''}`
   + `${s.reports.length ? ` / レポート ${s.reports.filter((x) => x.path).length}件` : ''}`;
 
+// CVE対応策一覧（Excel）に載っている CVE 番号。脆弱性種別の判定にも使うので、
+// 読んだ結果は保管先に置いて、Qualys を取り直さないときにも参照できるようにする。
+const RAS_CVE_KEY = 'ras:cve-list';
+
+/** 保存済みの CVE 一覧。日次更新を回していなければ空になる。 */
+async function loadCveSet(): Promise<Set<string>> {
+  const v = await repo.readSharedJson<string[] | null>(RAS_CVE_KEY, null);
+  return new Set(Array.isArray(v) ? v.map((x) => String(x).trim().toUpperCase()).filter(Boolean) : []);
+}
+
+/**
+ * Excel を読み直して CVE 一覧を保存する。読めない理由は summary に残す（黙って空にしない）。
+ * ★1回の日次更新で2回ダウンロードしないよう、同じ summary の間は結果を使い回す。
+ */
+async function refreshCveList(cfg: RelayConfig, summary: DailyRunSummary): Promise<string[]> {
+  if (summary.cveList) return summary.cveList;
+  const path = (cfg.cveXlsxPath || '').trim();
+  if (!path) { summary.notes.push('CVE対応策一覧の Excel パスが未設定です（設定 → 共通設定 → 日次更新 で登録してください）'); return []; }
+  let buf: ArrayBuffer | null;
+  if (isAbsoluteUrl(path)) {
+    // 別サイトに置かれている場合。同じテナントなら同一オリジンなので、サインイン情報で読める。
+    const ref = parseSpFileUrl(path); // 解決できない形（sourcedoc 等）はここで理由付きに失敗する
+    const r = await fetch(spFileValueUrl(ref), { credentials: 'include' });
+    if (r.status === 404) { summary.notes.push(`Excel が見つかりません: ${path}`); return []; }
+    if (!r.ok) { summary.notes.push(`Excel を読めません (HTTP ${r.status}): ${path}`); return []; }
+    buf = await r.arrayBuffer();
+  } else {
+    if (!backend.readBinary) { summary.notes.push('この保管先では Excel を読めません'); return []; }
+    buf = await backend.readBinary(path);
+  }
+  if (!buf) { summary.notes.push(`Excel が見つかりません: ${path}`); return []; }
+  const sheet = await readXlsxSheet(buf, 'CVE対応策一覧');
+  const want = parseCveList(columnUntilBlankRow(sheet.rows, 'A', 3).join(','));
+  if (!want.length) { summary.notes.push('Excel の A3 以下に CVE 番号がありませんでした'); return []; }
+  await repo.writeSharedJson(RAS_CVE_KEY, want);
+  summary.cveList = want;
+  return want;
+}
+
 // Excel の CVE 一覧に合わせて動的検索リストを更新する。
 async function runSearchListUpdate(
   creds: QualysCreds, cfg: RelayConfig, summary: DailyRunSummary, setProg: (m: string, b: boolean) => void,
@@ -1357,26 +1402,9 @@ async function runSearchListUpdate(
 ): Promise<void> {
   const ids = parseSearchListIds(cfg.searchListIds || '');
   if (!ids.length) { summary.notes.push('検索リストIDが未設定です（設定 → 共通設定 → 日次更新 で登録してください）'); return; }
-  const path = (cfg.cveXlsxPath || '').trim();
-  if (!path) { summary.notes.push('CVE対応策一覧の Excel パスが未設定です（設定 → 共通設定 → 日次更新 で登録してください）'); return; }
-
   setProg('CVE対応策一覧を読み込み中…', true);
-  let buf: ArrayBuffer | null;
-  if (isAbsoluteUrl(path)) {
-    // 別サイトに置かれている場合。同じテナントなら同一オリジンなので、サインイン情報で読める。
-    const ref = parseSpFileUrl(path); // 解決できない形（sourcedoc 等）はここで理由付きに失敗する
-    const r = await fetch(spFileValueUrl(ref), { credentials: 'include' });
-    if (r.status === 404) { summary.notes.push(`Excel が見つかりません: ${path}`); return; }
-    if (!r.ok) { summary.notes.push(`Excel を読めません (HTTP ${r.status}): ${path}`); return; }
-    buf = await r.arrayBuffer();
-  } else {
-    if (!backend.readBinary) { summary.notes.push('この保管先では Excel を読めません'); return; }
-    buf = await backend.readBinary(path);
-  }
-  if (!buf) { summary.notes.push(`Excel が見つかりません: ${path}`); return; }
-  const sheet = await readXlsxSheet(buf, 'CVE対応策一覧');
-  const want = parseCveList(columnUntilBlankRow(sheet.rows, 'A', 3).join(','));
-  if (!want.length) { summary.notes.push('Excel の A3 以下に CVE 番号がありませんでした'); return; }
+  const want = await refreshCveList(cfg, summary);
+  if (!want.length) return;
 
   setProg(`検索リストを確認中…（CVE ${want.length} 件）`, true);
   const lists = parseDynamicLists(await fetchSearchLists(creds, ids));
@@ -1660,7 +1688,7 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
       if (!tickets?.length) { toast('チケットの取込がありません', 'error'); return; }
       const idByIp: Record<string, string> = {};
       for (const h of hosts) { const ip = h.scalar.IP; if (ip && !(ip in idByIp)) idByIp[ip] = h.key; }
-      const picked = deriveRasTickets(tickets, derived.assets, idByIp).filter((t) => keys.includes(t.number));
+      const picked = deriveRasTickets(tickets, derived.assets, idByIp, await loadCveSet()).filter((t) => keys.includes(t.number));
       if (!picked.length) { toast('同期できるチケットがありません', 'info'); return; }
       const r = await repo.syncRasTickets(picked);
       recordOp('RAS選択同期(チケット)', `${picked.length} 件（追加 ${r.added} / 更新 ${r.updated}）`);

@@ -51,6 +51,11 @@ export function parseTicketXml(xml: string): QamTicket[] {
     const det = t.getElementsByTagName('DETECTION')[0] ?? null;
     // STATS に初回/最終の検知日時が入る（無い契約もあるので空を許す）。
     const stats = t.getElementsByTagName('STATS')[0] ?? null;
+    // VULNINFO > CVE_ID_LIST > CVE_ID+（show_vuln_details=1 のときだけ返る）。
+    // ★CVE_ID は (ID, URL) の親要素。textContent を取ると URL まで繋がる（実際に踏んだ）。
+    const cves = Array.from(t.getElementsByTagName('CVE_ID'))
+      .map((n) => (n.getElementsByTagName('ID')[0]?.textContent ?? n.textContent ?? '').trim().toUpperCase())
+      .filter(Boolean);
     const num = text(t, 'NUMBER');
     if (!num) continue;
     out.push({
@@ -62,6 +67,7 @@ export function parseTicketXml(xml: string): QamTicket[] {
       created: text(t, 'CREATION_DATETIME'),
       firstFound: text(stats, 'FIRST_FOUND_DATETIME'),
       lastFound: text(stats, 'LAST_FOUND_DATETIME'),
+      cves: [...new Set(cves)],
     });
   }
   return out;

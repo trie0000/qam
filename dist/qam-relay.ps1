@@ -199,7 +199,8 @@ function Invoke-QualysFetch { param($Body)
             }
             'ticket' {
                 $states = if ($Body.states) { [string]$Body.states } else { 'OPEN,RESOLVED,CLOSED,IGNORED' }
-                $url = "$base/msp/ticket_list.php?states=$states&show_host_id=1"
+                # show_vuln_details=1 が無いと VULNINFO（CVE番号）が返らない。
+                $url = "$base/msp/ticket_list.php?states=$states&show_host_id=1&show_vuln_details=1"
                 if ($Body.since) { $url += "&modified_since_datetime=$([Uri]::EscapeDataString([string]$Body.since))" }
             }
             default  { throw "未知 kind: $($Body.kind)" }

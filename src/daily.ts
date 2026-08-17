@@ -76,5 +76,6 @@ export interface DailyRunSummary {
   /** 検索リストの補足（作り直しを行った等）。実行しなかったものとは区別する。 */
   searchNote?: string;
   reports: { ip: string; lang: 'ja' | 'en'; kind: 'scan' | 'ticket'; path?: string; error?: string }[];
-  notes: string[];           // 実行しなかった理由など（黙って飛ばさない）
+  notes: string[];
+  cveList?: string[]; // その実行で読んだ CVE対応策一覧（2度読みしないため）           // 実行しなかった理由など（黙って飛ばさない）
 }

@@ -73,6 +73,7 @@ export interface QamTicket {
   created: string;    // チケットオープン日時（CREATION_DATETIME・UTC）
   firstFound: string; // 初回検知日時（STATS/FIRST_FOUND_DATETIME・UTC）
   lastFound: string;  // 最終検知日時（STATS/LAST_FOUND_DATETIME・UTC）
+  cves?: string[];    // VULNINFO の CVE 番号（show_vuln_details=1 のときだけ入る。旧スナップショットには無い）
 }
 
 // チケット一覧のスナップショット（取込 1 回分）。

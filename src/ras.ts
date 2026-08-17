@@ -30,6 +30,30 @@ export const RAS_NOT_ALIVE = 'host not alive';
 // not alive と区別して出す（同じ扱いにすると「応答が無い」と誤解される）。
 export const RAS_NOT_SCANNED = 'Scan未実施';
 
+// 脆弱性種別。CVE対応策一覧（Excel）に載っている CVE を含むものが CSIRT 牽制分。
+export const VULN_CSIRT = 'CSIRT牽制分';
+export const VULN_OS_MW = 'OS・ミドルウェア検査牽制分';
+
+export interface VulnKind { kind: string; cveIds: string }
+
+/**
+ * チケットの CVE と CVE対応策一覧を突き合わせて種別を決める。
+ * - CSIRT牽制分: 一覧に載っていた CVE だけを並べる（チケットが持つ CVE 全部ではない）。
+ * - OS・ミドルウェア検査牽制分: チケットの CVE を書くが、複数あるときは「先頭 他」に畳む。
+ */
+export function classifyVuln(ticketCves: string[], sheetCves: Set<string>): VulnKind {
+  const all = [...new Set((ticketCves ?? []).map((c) => (c ?? '').trim().toUpperCase()).filter(Boolean))].sort();
+  const hit = all.filter((c) => sheetCves.has(c));
+  if (hit.length) return { kind: VULN_CSIRT, cveIds: hit.join(', ') };
+  return { kind: VULN_OS_MW, cveIds: abbrevCves(all) };
+}
+
+/** 「CVE-2024-0001 他」。1件ならそのまま、0件なら空欄。 */
+export function abbrevCves(cves: string[]): string {
+  if (!cves.length) return '';
+  return cves.length === 1 ? cves[0] : cves[0] + ' 他';
+}
+
 export interface RasAsset {
   /** 行のキー。host list 由来はホストID、AssetGroup 由来だけの資産は 'ip:<IP>'。 */
   key: string;
@@ -115,6 +139,8 @@ export interface RasTicket {
   lastFound: string;   // 最終検知日（同上）
   note?: string;       // メモ（複数行・ツール側だけで表示）
   // 日次更新で付ける情報。取得しただけの同期では触らない。
+  vulnKind: string;   // CSIRT牽制分 / OS・ミドルウェア検査牽制分
+  cveIds: string;     // 該当した CVE 番号（CSIRT牽制分のときだけ入る）
   change?: string;    // '' | new | closed | reopened
   changedAt?: string; // 変化を検知した日時
   reportJa?: string;       // SCANレポート(日本語)の SharePoint URL
@@ -254,7 +280,9 @@ export function deriveRasAssets(
 
 // チケットを独自RAS資産の分だけに絞る。事業会社は資産側の登録値を写す
 // （チケットのリストだけでアクセス権を組めるようにするため）。
-export function deriveRasTickets(tickets: QamTicket[], assets: RasAsset[], idByIp: Record<string, string>): RasTicket[] {
+export function deriveRasTickets(
+  tickets: QamTicket[], assets: RasAsset[], idByIp: Record<string, string>, sheetCves: Set<string> = new Set(),
+): RasTicket[] {
   // host not alive の行は hostId が空。空同士で当たらないよう、キーのある行だけを索引化する。
   const byHost = new Map(assets.filter((a) => a.hostId).map((a) => [a.hostId, a]));
   const out: RasTicket[] = [];
@@ -264,6 +292,7 @@ export function deriveRasTickets(tickets: QamTicket[], assets: RasAsset[], idByI
     if (!hostId) continue;
     const a = byHost.get(hostId);
     if (!a) continue;
+    const { kind, cveIds } = classifyVuln(t.cves ?? [], sheetCves);
     out.push({
       number: t.number, state: t.state, hostId,
       ip: t.ip || a.ip, fqdn: t.fqdn || a.fqdn, settenId: a.settenId,
@@ -272,6 +301,7 @@ export function deriveRasTickets(tickets: QamTicket[], assets: RasAsset[], idByI
       // 初回検知日が無い契約もあるので、その時は起票日時で代替する（空欄にしない）。
       firstFound: toJst(t.firstFound || t.created),
       lastFound: toJst(t.lastFound),
+      vulnKind: kind, cveIds,
     });
   }
   return out.sort((x, y) => Number(y.number) - Number(x.number));

@@ -21,7 +21,7 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 10: Ticket(Remediation)レポートのリンク列を追加
 // 11: レポート更新日(ReportUpdatedAt)を追加
 // 12: 4種をまとめた ZIP(ReportZip)を追加し、SPO の一覧はそれ1本にする
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -121,6 +121,8 @@ export const rasTicketFields: FieldSpec[] = [
   { name: 'ManagementCompany', type: 'Text' },
   { name: 'FirstFound', type: 'Text' }, // 初回検知日（JST 表記）
   { name: 'LastFound', type: 'Text' },  // 最終検知日（JST 表記）
+  { name: 'VulnKind', type: 'Text', indexed: true }, // CSIRT牽制分 / OS・ミドルウェア検査牽制分
+  { name: 'CveIds', type: 'Text' },     // CSIRT牽制分は該当した CVE、それ以外はチケットの CVE（複数なら「先頭 他」）
   { name: 'ChangeKind', type: 'Text' }, // '' | new | closed | reopened（日次更新で付ける）
   { name: 'ChangedAt', type: 'Text' },
   { name: 'ReportJa', type: 'Text' },   // SCANレポート(日本語)の SharePoint URL
@@ -158,7 +160,7 @@ export const ALL_LISTS: {
     title: LIST_RAS_TICKETS, fields: rasTicketFields, uniqueTitle: true, formFormatter: rasTicketFormFormatter,
     dropFields: ['TicketNumber', 'DedupKey', 'OpenedAt'],
     titleLabel: 'Ticket No',
-    viewFields: ['Title', 'State', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound', 'ReportZip', 'ReportUpdatedAt'],
+    viewFields: ['Title', 'State', 'VulnKind', 'CveIds', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound', 'ReportZip', 'ReportUpdatedAt'],
     fieldFormatters: {
       ReportZip: reportLinkColumnFormat('ReportZip', 'レポート一式(ZIP)'),
     },
@@ -243,6 +245,7 @@ export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
 export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
   ({ Title: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
      SettenId: t.settenId, BusinessCompany: t.businessCompany, ManagementCompany: t.managementCompany,
+     VulnKind: t.vulnKind, CveIds: t.cveIds,
      FirstFound: t.firstFound, LastFound: t.lastFound,
      ChangeKind: t.change ?? '', ChangedAt: t.changedAt ?? '', ReportJa: t.reportJa ?? '', ReportEn: t.reportEn ?? '',
      TicketReportJa: t.ticketReportJa ?? '', TicketReportEn: t.ticketReportEn ?? '',
@@ -250,6 +253,7 @@ export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
 export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
   ({ number: str(r.Title), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
      settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany),
+     vulnKind: str(r.VulnKind), cveIds: str(r.CveIds),
      created: str(r.FirstFound), firstFound: str(r.FirstFound), lastFound: str(r.LastFound),
      change: str(r.ChangeKind), changedAt: str(r.ChangedAt), reportJa: str(r.ReportJa), reportEn: str(r.ReportEn),
      ticketReportJa: str(r.TicketReportJa), ticketReportEn: str(r.TicketReportEn),

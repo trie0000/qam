@@ -3,6 +3,7 @@ import {
   isRasSetten, deriveRasAssets, deriveRasTickets, normalizeRasPerms, registeredCompanies,
   groupIdsFor, canApplyPerms, parseCompanyList, mergeCompanies, pickRoles, buildItemPermPlan,
   companiesWithoutGroups, assetsWithoutCompany, expandAgIps, rasKeyForIp, rasKeyForDns, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
+  classifyVuln, VULN_CSIRT, VULN_OS_MW,
   aliasesFor, parseAliases, buildAliasIndex, planRasCsvImport, contactNameFor, greetingFor,
   type RasAsset,
 } from '../src/ras';
@@ -380,5 +381,51 @@ describe('体制表との対応付けと宛名', () => {
 
   it('会社を再登録しても対応付けは消えない', () => {
     expect(mergeCompanies(p, ['A事業会社', 'C事業会社']).contactNameByCompany['A事業会社']).toBe('A社（体制表の表記）');
+  });
+});
+
+describe('脆弱性種別の判定', () => {
+  const sheet = new Set(['CVE-2024-1111', 'CVE-2024-2222']);
+
+  it('CVE対応策一覧に載っている CVE を含むなら CSIRT牽制分', () => {
+    expect(classifyVuln(['CVE-2024-1111'], sheet)).toEqual({ kind: VULN_CSIRT, cveIds: 'CVE-2024-1111' });
+  });
+
+  it('CSIRT牽制分の CVE ID は「該当した分」だけ（チケットが持つ他の CVE は書かない）', () => {
+    // ★チケットの CVE を全部書くと、対応策一覧に無いものまで CSIRT の対象に見える。
+    expect(classifyVuln(['CVE-2024-9999', 'CVE-2024-1111'], sheet).cveIds).toBe('CVE-2024-1111');
+  });
+
+  it('該当が複数あれば並べる', () => {
+    expect(classifyVuln(['CVE-2024-2222', 'CVE-2024-1111'], sheet).cveIds).toBe('CVE-2024-1111, CVE-2024-2222');
+  });
+
+  it('一覧に無ければ OS・ミドルウェア検査牽制分。CVE はチケットのものを書く', () => {
+    expect(classifyVuln(['CVE-2024-9999'], sheet)).toEqual({ kind: VULN_OS_MW, cveIds: 'CVE-2024-9999' });
+  });
+
+  it('OS・ミドルウェア側で CVE が複数あるときは「先頭 他」に畳む', () => {
+    expect(classifyVuln(['CVE-2024-8888', 'CVE-2024-9999'], sheet).cveIds).toBe('CVE-2024-8888 他');
+  });
+
+  it('CVE を持たないチケットは OS・ミドルウェアで CVE ID は空欄', () => {
+    expect(classifyVuln([], sheet)).toEqual({ kind: VULN_OS_MW, cveIds: '' });
+  });
+
+  it('大小や前後の空白が違っても突き合わせる', () => {
+    expect(classifyVuln([' cve-2024-1111 '], sheet).kind).toBe(VULN_CSIRT);
+  });
+
+  it('CVE一覧を読めていない（空）ときは全部 OS・ミドルウェアになる', () => {
+    // ★Excel が読めなかった回に全件 CSIRT 扱いになるより、こちらに倒す。
+    expect(classifyVuln(['CVE-2024-1111'], new Set()).kind).toBe(VULN_OS_MW);
+  });
+
+  it('チケット一覧の組み立てで種別が入る', () => {
+    const assets = [{ hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100', businessCompany: 'A社',
+                      managementCompany: '', aliveStatus: '', registeredAt: '', lastScan: '', trackingMethod: '' }];
+    const tk = [{ number: '1', state: 'OPEN', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a',
+                  created: '', firstFound: '', lastFound: '', cves: ['CVE-2024-1111'] }];
+    expect(deriveRasTickets(tk, assets, {}, sheet)[0].vulnKind).toBe(VULN_CSIRT);
   });
 });
