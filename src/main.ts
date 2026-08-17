@@ -45,6 +45,10 @@ import {
   type RasAsset, type RasPerms, type RasTicket,
 } from './ras';
 import type { SiteGroup } from './api/sp/perms';
+import {
+  toBundle, applyBundle, normalizeBundle, unresolvedGroupIds, sameOrigin, sameSite,
+  bundleFileName, PART_LABEL, TRANSFERABLE_CONFIG_KEYS, type EnvBundle, type TransferPart,
+} from './env-transfer';
 import { parseHistoryCsv, HIST_HEADER_HINT, parseCsv, decodeCsv } from './ingest/history-csv';
 import {
   getSnapshotStamps, resolveAsof, readSnapshot, readHistory, ingestSnapshot, deleteSnapshot, dateOfStamp, importHistory, removeHistoryEvents, resetData, getTicketStamps, readTickets, writeTickets, type QamManualInspection, getInspectionDates, readInspectionAt, readInspectionLegacy, writeInspection, type QamOp,
@@ -3086,6 +3090,253 @@ interface SettingMajor { key: string; title: string; subtitle: string; accent: s
 const setHead = (title: string, desc: string): HTMLElement =>
   el('div', { class: 'qam-set-head' }, [el('h3', {}, [title]), el('p', {}, [desc])]);
 
+// ---- 環境の移行（開発 ↔ 本番）----
+// ★SharePoint グループの ID はサイトごとに違う。名前で運んで移送先で引き直す
+//   （詳しくは env-transfer.ts の先頭）。
+const LS_DEV_SITE = 'qam.env.devSite';
+const LS_PROD_SITE = 'qam.env.prodSite';
+const lsGet = (k: string): string => { try { return localStorage.getItem(k) ?? ''; } catch { return ''; } };
+const lsSet = (k: string, v: string): void => { try { localStorage.setItem(k, v); } catch { /* 保存できなくても動かす */ } };
+
+/** 任意のサイトを読み書きするための一時的な接続。今開いている保管先は変えない。 */
+const repoAt = (siteUrl: string): ReturnType<typeof createSpRepo> =>
+  createSpRepo({ siteUrl: siteUrl.trim(), http: createSpHttp({ siteUrl: siteUrl.trim() }) });
+
+/** サイト1つぶんの移行対象（マスタ・メールテンプレ）を読む。 */
+async function readSiteParts(r: ReturnType<typeof createSpRepo>): Promise<{ perms: RasPerms; mail: unknown; groups: SiteGroup[] }> {
+  const [perms, mail, groups] = await Promise.all([
+    r.readSharedJson<unknown>(RAS_PERMS_KEY, null).then(normalizeRasPerms),
+    r.readSharedJson<unknown>(RAS_MAIL_KEY, null),
+    r.listSiteGroups(),
+  ]);
+  return { perms, mail, groups };
+}
+
+function renderEnvTransfer(cfg: RelayConfig): SettingPanel {
+  let dir: 'dev2prod' | 'prod2dev' = 'dev2prod';
+  const parts = new Set<TransferPart>(['master', 'common']);
+
+  const devIn = el('input', { class: 'in', value: lsGet(LS_DEV_SITE), placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/開発サイト' }) as HTMLInputElement;
+  const prodIn = el('input', { class: 'in', value: lsGet(LS_PROD_SITE), placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/本番サイト' }) as HTMLInputElement;
+  const note = el('div', { style: 'margin-top:var(--s-3)' });
+  const result = el('div', { style: 'margin-top:var(--s-4)' });
+
+  const from = (): string => (dir === 'dev2prod' ? devIn.value : prodIn.value).trim();
+  const to = (): string => (dir === 'dev2prod' ? prodIn.value : devIn.value).trim();
+  const fromLabel = (): string => (dir === 'dev2prod' ? '開発' : '本番');
+  const toLabel = (): string => (dir === 'dev2prod' ? '本番' : '開発');
+  const chosen = (): TransferPart[] => (['master', 'common'] as TransferPart[]).filter((p) => parts.has(p));
+  const canDirect = (): boolean => !!from() && !!to() && sameOrigin(from(), to()) && !sameSite(from(), to());
+
+  const err = (...lines: (string | HTMLElement)[]): HTMLElement =>
+    el('div', { class: 'qam-card', style: 'border-color:var(--danger);margin-top:var(--s-3)' }, lines);
+
+  function paintNote(): void {
+    clear(note);
+    lsSet(LS_DEV_SITE, devIn.value.trim()); lsSet(LS_PROD_SITE, prodIn.value.trim());
+    if (!from() || !to()) { note.append(callout('開発サイトと本番サイトの URL を両方入れてください。')); return; }
+    if (sameSite(from(), to())) { note.append(err('開発サイトと本番サイトが同じ URL です。別のサイトを指定してください。')); return; }
+    if (!sameOrigin(from(), to())) {
+      note.append(err(
+        '2つのサイトのテナント（ドメイン）が違うため、ブラウザから直接コピーできません。',
+        el('br'),
+        `下の「ファイルに書き出す」で ${fromLabel()} 側の設定を保存し、${toLabel()} 側で QAM を開いて「ファイルから取り込む」を実行してください。`,
+      ));
+      return;
+    }
+    note.append(callout(`同じテナント内なので直接コピーできます: ${fromLabel()} → ${toLabel()}`));
+  }
+
+  const dirSel = el('select', { class: 'in' }, [
+    el('option', { value: 'dev2prod' }, ['開発 → 本番']),
+    el('option', { value: 'prod2dev' }, ['本番 → 開発']),
+  ]) as HTMLSelectElement;
+  dirSel.addEventListener('change', () => { dir = dirSel.value as typeof dir; clear(result); paintNote(); });
+
+  const partCheck = (p: TransferPart, desc: string): HTMLElement => {
+    const cb = el('input', { type: 'checkbox', checked: 'checked' }) as HTMLInputElement;
+    cb.addEventListener('change', () => { if (cb.checked) parts.add(p); else parts.delete(p); clear(result); });
+    // qam-pick は inline-flex なので、指定しないとチェックボックスが横に並ぶ。
+    return el('label', { class: 'qam-pick', style: 'display:flex;align-items:flex-start;margin-bottom:var(--s-2)' }, [cb, el('span', {}, [
+      el('div', {}, [PART_LABEL[p]]),
+      el('div', { class: 'qam-hint', style: 'margin-top:2px' }, [desc]),
+    ])]);
+  };
+
+  /** 差分を見せる。ここで気づけないと、入れてから直すことになる。 */
+  function paintPreview(bundle: EnvBundle, applied: ReturnType<typeof applyBundle>, target: string): void {
+    clear(result);
+    result.append(el('div', { class: 'qam-card' }, [
+      el('div', { class: 'qam-card-title' }, ['コピーの向き']),
+      el('div', { style: 'user-select:text;word-break:break-all' }, [`元: ${bundle.sourceSite || '(不明)'}`]),
+      el('div', { style: 'user-select:text;word-break:break-all' }, [`先: ${target}`]),
+    ]));
+    if (!applied.changes.length) {
+      result.append(callout('変更はありません（コピー先は既に同じ内容です）。'));
+      return;
+    }
+    // ★データ表の .qam-table は table-layout:fixed かつ nowrap なので、ここでは使わない
+    //   （設定キー名や値が切れて、何が変わるのか読めなくなる）。
+    result.append(el('div', { class: 'qam-card', style: 'margin-top:var(--s-3)' }, [
+      el('div', { class: 'qam-card-title' }, [`変わる項目（${applied.changes.length} 件）`]),
+      ...applied.changes.map((c) => el('div', { style: 'display:flex;gap:var(--s-3);padding:2px 0;flex-wrap:wrap' }, [
+        el('span', { class: 'qam-hint', style: 'min-width:200px' }, [c.field]),
+        el('span', { style: 'user-select:text;word-break:break-all' }, [`${c.before} → ${c.after}`]),
+      ])),
+    ]));
+    if (applied.missingGroups.length) {
+      result.append(err(
+        `コピー先に無い SharePoint グループが ${applied.missingGroups.length} 件あります: ${applied.missingGroups.join(' / ')}`,
+        el('br'), 'このまま実行すると、その割当は空になります（誰にも参照権限が付きません）。',
+        el('br'), 'コピー先のサイトで同じ名前のグループを作ってから、もう一度実行してください。',
+      ));
+    }
+  }
+
+  // ---- 直接コピー（同一テナント）----
+  const previewBtn = el('button', { class: 'btn btn--sm' }, ['差分を確認']);
+  const runBtn = el('button', { class: 'btn btn--sm btn--primary', disabled: 'true' }, ['コピーする']) as HTMLButtonElement;
+  let pending: { target: string; applied: ReturnType<typeof applyBundle> } | null = null;
+
+  previewBtn.addEventListener('click', () => void (async () => {
+    pending = null; runBtn.disabled = true;
+    if (!chosen().length) { toast('コピーするものを選んでください', 'error'); return; }
+    if (!canDirect()) { toast('直接コピーできません。ファイル経由で受け渡してください', 'error'); return; }
+    clear(result); result.append(callout('読み込み中…'));
+    try {
+      const [src, dst] = await Promise.all([readSiteParts(repoAt(from())), readSiteParts(repoAt(to()))]);
+      // ★中継サーバの設定は端末側にあるので、サイト間の直接コピーでは運べない。
+      //   ここでは SharePoint にあるもの（マスタ・メールテンプレ）だけを写す。
+      const bundle = toBundle({ perms: src.perms, mail: src.mail, config: {} }, src.groups, chosen(), from(), new Date().toISOString());
+      const applied = applyBundle({ perms: dst.perms, mail: dst.mail, config: {} }, bundle, dst.groups, chosen());
+      paintPreview(bundle, applied, to());
+      const lost = unresolvedGroupIds(src.perms, src.groups);
+      if (lost.length && parts.has('master')) {
+        result.append(err(
+          `コピー元で名前を引けないグループ ID があります: ${lost.join(' / ')}`,
+          el('br'), '削除済みのグループが割当に残っている可能性があります。この分は運べません。',
+        ));
+      }
+      if (parts.has('common')) {
+        result.append(callout('直接コピーで運ぶ「共通設定」はメールのテンプレートだけです。中継サーバの設定（Qualys 接続先・検索リストID・レポートのテンプレートID など）はこの端末にあるので、別の端末へ移すときは下の「ファイルに書き出す」を使ってください。'));
+      }
+      if (applied.changes.length) { pending = { target: to(), applied }; runBtn.disabled = false; }
+    } catch (e) {
+      clear(result); result.append(err(`読み込みに失敗しました: ${(e as Error).message}`));
+    }
+  })());
+
+  runBtn.addEventListener('click', () => void (async () => {
+    if (!pending) return;
+    const { target, applied } = pending;
+    const names = chosen().map((p) => PART_LABEL[p]).join('・');
+    if (!(await confirmModal('環境へコピー', `コピー先: ${target}\n\nコピー先の「${names}」はこの内容で置き換わります。元に戻せません。`, 'コピーする'))) return;
+    runBtn.disabled = true;
+    try {
+      const r = repoAt(target);
+      await r.ensureLists(); // 移送先がまだ空のサイトでも書けるようにする
+      if (parts.has('master')) await r.writeSharedJson(RAS_PERMS_KEY, applied.perms);
+      if (parts.has('common') && applied.mail !== null && applied.mail !== undefined) await r.writeSharedJson(RAS_MAIL_KEY, applied.mail);
+      recordOp('環境の移行', `${fromLabel()} → ${toLabel()}（${names}）`);
+      pending = null; clear(result); result.append(callout(`コピーしました: ${target}`));
+      toast(`${toLabel()}環境へコピーしました`, 'ok');
+    } catch (e) { toast('コピーに失敗しました: ' + (e as Error).message, 'error'); }
+  })());
+
+  // ---- ファイル経由（別テナント / 別の端末 / 控えを残す）----
+  const exportBtn = el('button', { class: 'btn btn--sm', html: `${icon('download', 14)}<span>ファイルに書き出す</span>` });
+  exportBtn.addEventListener('click', () => void (async () => {
+    if (!chosen().length) { toast('書き出すものを選んでください', 'error'); return; }
+    try {
+      // URL が入っていればその環境を、無ければ今つないでいる環境を書き出す。
+      const site = from() || (cfg.spSiteUrl || '').trim();
+      if (!site) { toast('書き出し元のサイト URL を入れてください', 'error'); return; }
+      const src = await readSiteParts(repoAt(site));
+      const now = new Date().toISOString();
+      const bundle = toBundle({ perms: src.perms, mail: src.mail, config: cfg as unknown as Record<string, unknown> },
+        src.groups, chosen(), site, now);
+      const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' })),
+        download: bundleFileName(chosen(), now), style: 'display:none' }) as HTMLAnchorElement;
+      document.body.append(a); a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+      toast('設定を書き出しました', 'ok');
+    } catch (e) { toast('書き出しに失敗しました: ' + (e as Error).message, 'error'); }
+  })());
+
+  const fileIn = el('input', { type: 'file', accept: '.json', style: 'display:none' }) as HTMLInputElement;
+  const importBtn = el('button', { class: 'btn btn--sm' }, ['ファイルから取り込む']);
+  importBtn.addEventListener('click', () => fileIn.click());
+  fileIn.addEventListener('change', () => void (async () => {
+    const f = fileIn.files?.[0];
+    fileIn.value = '';
+    if (!f) return;
+    clear(result);
+    if (!chosen().length) { toast('取り込むものを選んでください', 'error'); return; }
+    try {
+      const bundle = normalizeBundle(JSON.parse(await f.text()));
+      if (!bundle) { result.append(err('QAM の設定ファイルではありません（形式が違います）。')); return; }
+      // ★取り込み先は「今つないでいる環境」に固定する。URL の取り違えで本番を潰さないため。
+      const site = (cfg.spSiteUrl || '').trim();
+      if (!site) { result.append(err('保管先の SharePoint サイトが未設定です（設定 → 共通設定 → SharePoint）。')); return; }
+      const dst = await readSiteParts(repoAt(site));
+      const applied = applyBundle({ perms: dst.perms, mail: dst.mail, config: cfg as unknown as Record<string, unknown> },
+        bundle, dst.groups, chosen());
+      paintPreview(bundle, applied, `${site}（いま使っている環境）`);
+      if (Object.keys(applied.config).length) {
+        result.append(callout(`中継サーバの設定 ${Object.keys(applied.config).length} 件もこの端末に反映します（保管先の SharePoint サイト・ライブラリは運ばないので、いまの環境のままです）。`));
+      }
+      if (!applied.changes.length) return;
+      const ok = el('button', { class: 'btn btn--sm btn--primary', style: 'margin-top:var(--s-4)' }, ['この内容で取り込む']);
+      ok.addEventListener('click', () => void (async () => {
+        const names = chosen().map((p) => PART_LABEL[p]).join('・');
+        if (!(await confirmModal('設定の取り込み', `取り込み先: ${site}\n\nいまの環境の「${names}」はこの内容で置き換わります。元に戻せません。`, '取り込む'))) return;
+        ok.setAttribute('disabled', 'true');
+        try {
+          const r = repoAt(site);
+          await r.ensureLists();
+          if (parts.has('master')) await r.writeSharedJson(RAS_PERMS_KEY, applied.perms);
+          if (parts.has('common')) {
+            if (applied.mail !== null && applied.mail !== undefined) await r.writeSharedJson(RAS_MAIL_KEY, applied.mail);
+            if (Object.keys(applied.config).length) await setConfig(applied.config as Partial<RelayConfig>);
+          }
+          recordOp('環境の移行', `ファイルから取り込み（${names}）`);
+          clear(result); result.append(callout('取り込みました。設定画面を開き直すと新しい値が出ます。'));
+          toast('設定を取り込みました', 'ok');
+        } catch (e) { toast('取り込みに失敗しました: ' + (e as Error).message, 'error'); }
+      })());
+      result.append(ok);
+    } catch (e) { result.append(err(`読み込みに失敗しました: ${(e as Error).message}`)); }
+  })());
+
+  devIn.addEventListener('input', () => { clear(result); paintNote(); });
+  prodIn.addEventListener('input', () => { clear(result); paintNote(); });
+
+  const body = el('div', {}, [
+    setHead('環境の移行（開発 ↔ 本番）',
+      '開発環境で決めた設定を本番環境へ（またはその逆へ）持っていきます。運ぶのは設定だけで、'
+      + '取り込んだ資産データ・チケット・変更履歴は動かしません（Qualys から取り直せるため）。'),
+    el('ul', { class: 'qam-hint', style: 'margin:0 0 var(--s-5);padding-left:1.2em;line-height:1.8' }, [
+      el('li', {}, ['SharePoint グループはサイトごとに ID が違うため、グループ名で引き直します。コピー先に同じ名前のグループが無いと権限が付きません（実行前に名指しで出します）。']),
+      el('li', {}, ['実行前に必ず「差分を確認」で、何が変わるかを見てください。']),
+      el('li', {}, ['Qualys のパスワード・イントラのパスワードは運びません（この端末でしか復号できない形で保存しているため）。移送先で入れ直してください。']),
+      el('li', {}, ['保管先の SharePoint サイト URL・ライブラリ名は運びません（運ぶと移送先が元の環境を向いてしまうため）。']),
+    ]),
+    el('div', { class: 'qam-field' }, [el('label', {}, ['開発サイト URL']), devIn]),
+    el('div', { class: 'qam-field' }, [el('label', {}, ['本番サイト URL']), prodIn]),
+    callout('この2つはこの端末に保存します（SharePoint 側には保存しません）。'),
+    el('div', { class: 'qam-field' }, [el('label', {}, ['向き']), dirSel]),
+    el('div', { class: 'qam-field' }, [el('label', {}, ['運ぶもの']),
+      partCheck('master', '事業会社・事業会社ごとの参照グループ・管理者グループ・略称・体制表の会社名'),
+      partCheck('common', 'メールのテンプレート（SharePoint 側）と、中継サーバの設定（Qualys 接続先・検索リストID・レポートのテンプレートID・体制表の取得元など。ファイル経由でのみ運びます）'),
+    ]),
+    note,
+    el('div', { class: 'qam-chip-row', style: 'margin-top:var(--s-4)' }, [previewBtn, runBtn, exportBtn, importBtn, fileIn]),
+    result,
+  ]);
+  paintNote();
+  return { body };
+}
+
 async function openSettings(): Promise<void> {
   const cfg = await getConfig();
   const field = (label: string, input: HTMLElement, hint?: string): HTMLElement =>
@@ -3447,6 +3698,7 @@ async function openSettings(): Promise<void> {
             deployBtn,
           ]),
         }) }] },
+        { title: '環境', items: [{ key: 'envTransfer', label: '環境の移行', render: () => renderEnvTransfer(cfg) }] },
         { title: '情報', items: [{ key: 'build', label: 'ビルド情報', render: () => ({
           body: el('div', {}, [
             setHead('ビルド情報', 'いま動いているアプリ本体の版です。'),
@@ -3593,6 +3845,7 @@ function openHelp(): void {
     <ul>
       <li><b>個人設定</b>：記入者名（操作履歴・メモの作業者）、Qualys アカウント／パスワード、テーマ、文字サイズ。</li>
       <li><b>共通設定</b>：Qualys 接続先 POD、プロキシ URL、保存期間（日）、ライセンス上限、四半期検査の年度開始月・対象の接続点ID パターン、検査登録の既定値（SCAN／MAP のオプションプロファイル・スキャナー・タイムゾーン）。</li>
+      <li><b>その他 → 環境の移行</b>：開発環境と本番環境（別の SharePoint サイト）の間で、マスタ情報と共通設定を持ち運びます。SharePoint グループはサイトごとに ID が違うのでグループ名で引き直します。実行前に差分を確認できます。</li>
       <li><b>開発者</b>：データのリセット（資産/履歴/メモを種類選択）、登録情報のリセット、ビルド情報。</li>
     </ul>
     <p>※ Qualys 認証情報・記入者名は各自のブラウザに保存され共有されません。更新作業の直前に記入者名が未設定なら入力を促します。</p>
