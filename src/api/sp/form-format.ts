@@ -68,6 +68,44 @@ function card(caption: string, left: Node[], right: Node[]): Node {
   };
 }
 
+/** リンク1本。値が空なら出さない（空リンクを押させない）。 */
+function link(label: string, field: string): Node {
+  return {
+    elmType: 'div',
+    style: { 'padding-bottom': '10px', display: '=if([$' + field + "] == '', 'none', 'block')" },
+    children: [
+      { elmType: 'div', txtContent: label, style: LABEL_STYLE },
+      {
+        elmType: 'a',
+        attributes: { href: `[$${field}]`, target: '_blank' },
+        txtContent: 'ダウンロード',
+        style: { ...VALUE_STYLE, color: '#0078d4', 'text-decoration': 'underline' },
+      },
+    ],
+  };
+}
+
+/** レポートのダウンロード。両方空なら枠ごと出さない。 */
+const reportCard = (): Node => ({
+  elmType: 'div',
+  style: {
+    display: "=if([$ReportJa] == '' && [$ReportEn] == '', 'none', 'flex')",
+    'flex-direction': 'column', 'align-items': 'stretch', 'text-align': 'left',
+    width: '100%', 'box-sizing': 'border-box', padding: '14px 18px', 'margin-bottom': '10px',
+    'border-radius': '8px', border: '1px solid #edebe9', 'background-color': '#faf9f8',
+  },
+  children: [
+    {
+      elmType: 'div', txtContent: 'SCANレポート',
+      style: {
+        'font-size': '13px', 'font-weight': '600', color: '#201f1e',
+        'padding-bottom': '8px', 'margin-bottom': '12px', 'border-bottom': '1px solid #edebe9',
+      },
+    },
+    twoColumns([link('日本語', 'ReportJa')], [link('英語', 'ReportEn')]),
+  ],
+});
+
 const root = (children: Node[]): Node => ({
   $schema: COLUMN_FORMAT_SCHEMA,
   elmType: 'div',
@@ -78,19 +116,25 @@ const root = (children: Node[]): Node => ({
   children,
 });
 
-// 独自RAS 資産マスター。見出しは Title（IP か FQDN）。
+// ★本文の入力欄は出さない。連携用リストは参照専用で、値はツールが書く。
+//   フォームに入力欄が並ぶと「ここで直せる」と誤解され、次の同期で消える編集が生まれる。
+const READONLY_BODY = { bodyJSONFormatter: { sections: [] } };
+
+// 独自RAS 資産マスター。見出しは Title（＝Host ID）。
 export const rasAssetFormFormatter = (): string => JSON.stringify({
-  headerJSONFormatter: root([card('資産  ',
-    [item('接続点ID', 'SettenId'), item('IP', 'Ip'), item('FQDN', 'Fqdn')],
-    [item('ステータス', 'AliveStatus'), item('事業会社', 'BusinessCompany'), item('管理会社', 'ManagementCompany')],
+  headerJSONFormatter: root([card('Host ID ',
+    [item('ステータス', 'AliveStatus'), item('事業会社', 'BusinessCompany'), item('管理会社', 'ManagementCompany'), item('接続点ID', 'SettenId')],
+    [item('IP', 'Ip'), item('FQDN', 'Fqdn'), item('登録日', 'RegisteredAt'), item('最終検査日', 'LastScan')],
   )]),
+  ...READONLY_BODY,
 });
 
 // 独自RAS チケット。見出しは Title（＝チケット番号）。
 // ホストIDは載せない（担当者は IP / FQDN で資産を特定するため）。
 export const rasTicketFormFormatter = (): string => JSON.stringify({
-  headerJSONFormatter: root([card('チケット #',
-    [item('ステータス', 'State'), item('接続点ID', 'SettenId'), item('事業会社', 'BusinessCompany')],
-    [item('IP', 'Ip'), item('FQDN', 'Fqdn'), item('オープン日時', 'OpenedAt')],
-  )]),
+  headerJSONFormatter: root([card('Ticket No ',
+    [item('ステータス', 'State'), item('事業会社', 'BusinessCompany'), item('管理会社', 'ManagementCompany')],
+    [item('IP', 'Ip'), item('FQDN', 'Fqdn'), item('初回検知日', 'FirstFound'), item('最終検知日', 'LastFound')],
+  ), reportCard()]),
+  ...READONLY_BODY,
 });

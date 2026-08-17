@@ -23,8 +23,13 @@ describe('連携用リストのフォーム書式', () => {
 
   it.each(cases)('$name: キーは headerJSONFormatter（header では読まれない）', ({ json }) => {
     const o = JSON.parse(json);
-    expect(Object.keys(o)).toEqual(['headerJSONFormatter']);
+    expect(Object.keys(o).sort()).toEqual(['bodyJSONFormatter', 'headerJSONFormatter']);
     expect(o.headerJSONFormatter.elmType).toBe('div');
+  });
+
+  it.each(cases)('$name: 本文の入力欄は出さない（参照専用）', ({ json }) => {
+    // ★入力欄が並ぶと「ここで直せる」と誤解され、次の同期で消える編集が生まれる。
+    expect(JSON.parse(json).bodyJSONFormatter).toEqual({ sections: [] });
   });
 
   it.each(cases)('$name: ルートで縦積み・左寄せを明示する（指定しないとカードが横に並ぶ）', ({ json }) => {

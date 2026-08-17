@@ -49,6 +49,8 @@ export function parseTicketXml(xml: string): QamTicket[] {
   const out: QamTicket[] = [];
   for (const t of Array.from(doc.getElementsByTagName('TICKET'))) {
     const det = t.getElementsByTagName('DETECTION')[0] ?? null;
+    // STATS に初回/最終の検知日時が入る（無い契約もあるので空を許す）。
+    const stats = t.getElementsByTagName('STATS')[0] ?? null;
     const num = text(t, 'NUMBER');
     if (!num) continue;
     out.push({
@@ -58,6 +60,8 @@ export function parseTicketXml(xml: string): QamTicket[] {
       ip: text(det, 'IP'),
       fqdn: text(det, 'FQDN') || text(det, 'DNSNAME'),
       created: text(t, 'CREATION_DATETIME'),
+      firstFound: text(stats, 'FIRST_FOUND_DATETIME'),
+      lastFound: text(stats, 'LAST_FOUND_DATETIME'),
     });
   }
   return out;

@@ -888,6 +888,7 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
         sortVal: (a: RasAsset) => a.status,
       },
       { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (a: RasAsset) => esc(a.hostId) },
+      { id: 'trackingMethod', label: 'Tracking Method', width: 130, render: (a: RasAsset) => esc(a.trackingMethod) },
       {
         id: 'businessCompany', label: '事業会社', width: 180,
         render: (a: RasAsset) => selectCell(a.businessCompany, companies, async (v) => {
@@ -904,6 +905,15 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
           a.managementCompany = v;
         }),
         sortVal: (a: RasAsset) => a.managementCompany,
+      },
+      // メモは一覧の最後。SharePoint 側の一覧には出さない（ツールで見るためのもの）。
+      {
+        id: 'note', label: 'メモ', width: 220,
+        render: (a: RasAsset) => editableCell(a.note, '（クリックで入力）', async (v) => {
+          await repo.setRasAssetNote(a.key, v);
+          a.note = v;
+        }),
+        sortVal: (a: RasAsset) => a.note,
       },
     ];
     host.append(renderTable({
@@ -942,16 +952,39 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
         ].filter(Boolean).join(' / '),
         sortVal: (t: RasTicket) => (t.reportJa || t.reportEn ? '1' : '0'),
       },
-      { id: 'settenId', label: '接続点ID', mono: true, width: 120, render: (t: RasTicket) => esc(t.settenId) },
-      { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (t: RasTicket) => esc(t.hostId) },
+      { id: 'businessCompany', label: '事業会社', width: 180, render: (t: RasTicket) => esc(t.businessCompany) },
+      { id: 'managementCompany', label: '管理会社', width: 180, render: (t: RasTicket) => esc(t.managementCompany) },
       { id: 'ip', label: 'IP', mono: true, width: 140, render: (t: RasTicket) => esc(t.ip) },
       { id: 'fqdn', label: 'FQDN', render: (t: RasTicket) => esc(t.fqdn) },
-      { id: 'businessCompany', label: '事業会社', width: 180, render: (t: RasTicket) => esc(t.businessCompany) },
-      { id: 'created', label: 'チケットオープン日時', mono: true, width: 170, render: (t: RasTicket) => esc(fmtJst(t.created)), sortVal: (t: RasTicket) => t.created },
+      // 保存時に JST 表記にしてあるので、ここでは変換しない（二重変換になる）。
+      { id: 'firstFound', label: '初回検知日', mono: true, width: 160, render: (t: RasTicket) => esc(t.firstFound) },
+      { id: 'lastFound', label: '最終検知日', mono: true, width: 160, render: (t: RasTicket) => esc(t.lastFound) },
+      { id: 'settenId', label: '接続点ID', mono: true, width: 120, render: (t: RasTicket) => esc(t.settenId) },
+      { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (t: RasTicket) => esc(t.hostId) },
+      {
+        id: 'note', label: 'メモ', width: 220,
+        render: (t: RasTicket) => editableCell(t.note ?? '', '（クリックで入力）', async (v) => {
+          await repo.setRasTicketMarks([{ number: t.number, note: v }]);
+          t.note = v;
+        }),
+        sortVal: (t: RasTicket) => t.note ?? '',
+      },
     ];
+    // 選択したチケットのレポートを開く。選択が無いときは出さない（押せないボタンを置かない）。
+    const dlReports = (lang: 'ja' | 'en') => async (keys: string[]): Promise<void> => {
+      const urls = keys.map((k) => tickets.find((t) => t.number === k))
+        .map((t) => (lang === 'ja' ? t?.reportJa : t?.reportEn)).filter((u): u is string => !!u);
+      if (!urls.length) { toast(`選択したチケットに${lang === 'ja' ? '日本語' : '英語'}のレポートがありません`, 'info'); return; }
+      for (const u of urls) window.open(u, '_blank', 'noopener');
+    };
     host.append(renderTable({
       viewId: 'ras.tickets', columns: cols, rows, getKey: (t: RasTicket) => t.number,
       selected: state.selected, exportRef, filterRef, columnRef,
+      bulkActions: (keys) => (['ja', 'en'] as const).map((lang) => {
+        const b = el('button', { class: 'btn btn--sm' }, [`レポート(${lang === 'ja' ? '日本語' : '英語'})を開く`]);
+        b.addEventListener('click', () => { void dlReports(lang)(keys); });
+        return b;
+      }),
     }));
     addExportButtons(toolbar, '独自RASチケット一覧', exportRef, columnRef);
   }

@@ -15,7 +15,9 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 4: RAS資産に AliveStatus 列を追加（host not alive の表示）
 // 5: RASチケットは Title をチケット番号（一意キー）にし、TicketNumber/DedupKey 列を廃止
 // 6: RASチケットに変化ラベル(ChangeKind/ChangedAt)とレポートリンク(ReportJa/ReportEn)を追加
-export const SCHEMA_VERSION = 6;
+// 7: 初回/最終検知日・登録日/最終検査日・管理会社を追加。Title の表示名と一覧の列順を設定
+// 8: メモ(Note)と TrackingMethod を追加（メモは SPO の一覧には出さない）
+export const SCHEMA_VERSION = 8;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -93,8 +95,12 @@ export const rasAssetFields: FieldSpec[] = [
   { name: 'Fqdn', type: 'Text' },
   // 'Status' は他のリストテンプレート由来の同名列と紛らわしいので避ける（Created で一度踏んだ）。
   { name: 'AliveStatus', type: 'Text' }, // '' | 'host not alive'
+  { name: 'TrackingMethod', type: 'Text' }, // IP / DNS / NETBIOS 等
+  { name: 'RegisteredAt', type: 'Text' }, // 登録日（JST 表記）
+  { name: 'LastScan', type: 'Text' },     // 最終検査日（JST 表記）
   { name: 'BusinessCompany', type: 'Text', indexed: true },
   { name: 'ManagementCompany', type: 'Text' },
+  { name: 'Note', type: 'Note' }, // メモ（複数行）。SPO の一覧には出さない
   { name: 'DedupKey', type: 'Text', indexed: true, enforceUnique: true },
 ];
 
@@ -108,25 +114,42 @@ export const rasTicketFields: FieldSpec[] = [
   { name: 'Fqdn', type: 'Text' },
   { name: 'SettenId', type: 'Text' },
   { name: 'BusinessCompany', type: 'Text', indexed: true },
-  { name: 'OpenedAt', type: 'Text' }, // Created は SP 組み込み列(DateTime)と衝突するので使えない
+  { name: 'ManagementCompany', type: 'Text' },
+  { name: 'FirstFound', type: 'Text' }, // 初回検知日（JST 表記）
+  { name: 'LastFound', type: 'Text' },  // 最終検知日（JST 表記）
   { name: 'ChangeKind', type: 'Text' }, // '' | new | closed | reopened（日次更新で付ける）
   { name: 'ChangedAt', type: 'Text' },
   { name: 'ReportJa', type: 'Text' },   // SCANレポート(日本語)の SharePoint URL
   { name: 'ReportEn', type: 'Text' },
+  { name: 'Note', type: 'Note' },       // メモ（複数行）。SPO の一覧には出さない
 ];
 
 // uniqueTitle: 組み込みの Title 列に一意制約を張る（Title を一意キーに使うリスト）。
 // formFormatter: フォームを読み取り専用の2段組カードにする JSON。
-export const ALL_LISTS: { title: string; fields: FieldSpec[]; uniqueTitle?: boolean; formFormatter?: () => string; dropFields?: string[] }[] = [
+// titleLabel: 組み込み Title 列の表示名（内部名は Title のまま）。
+// viewFields: 既定ビューに出す列と、その順番。
+export const ALL_LISTS: {
+  title: string; fields: FieldSpec[]; uniqueTitle?: boolean; formFormatter?: () => string;
+  dropFields?: string[]; titleLabel?: string; viewFields?: string[];
+}[] = [
   { title: LIST_COMMENTS, fields: commentFields },
   { title: LIST_ANNOTATIONS, fields: annotationFields },
   { title: LIST_OPS, fields: opFields },
   { title: LIST_INSPECTIONS, fields: inspectionFields },
   { title: LIST_LICENSES, fields: licenseFields },
   { title: LIST_SETTINGS, fields: settingsFields },
-  { title: LIST_RAS_ASSETS, fields: rasAssetFields, formFormatter: rasAssetFormFormatter },
+  {
+    title: LIST_RAS_ASSETS, fields: rasAssetFields, formFormatter: rasAssetFormFormatter,
+    titleLabel: 'Host ID',
+    viewFields: ['Title', 'AliveStatus', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'RegisteredAt', 'LastScan'],
+  },
   // TicketNumber は Title と同じ値、DedupKey は Title で代替。旧環境から消す。
-  { title: LIST_RAS_TICKETS, fields: rasTicketFields, uniqueTitle: true, formFormatter: rasTicketFormFormatter, dropFields: ['TicketNumber', 'DedupKey'] },
+  {
+    title: LIST_RAS_TICKETS, fields: rasTicketFields, uniqueTitle: true, formFormatter: rasTicketFormFormatter,
+    dropFields: ['TicketNumber', 'DedupKey', 'OpenedAt'],
+    titleLabel: 'Ticket No',
+    viewFields: ['Title', 'State', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound'],
+  },
 ];
 
 /** 取込の排他クレーム行のキー。 */
@@ -192,20 +215,27 @@ export const rowToLicense = (r: Record<string, unknown>): QamLicenseSample =>
 // --- 独自RAS ---
 // DedupKey は行キー（host list 由来はホストID、AssetGroup だけの資産は 'ip:<IP>'）。
 // ホストIDだけにすると、host list に居ない資産（host not alive）が一意に持てない。
+// Title は Host ID（一覧の見出し列）。host list に居ない資産はホストIDが無いので IP/FQDN で代用する。
 export const rasAssetToRow = (a: RasAsset): Record<string, unknown> =>
-  ({ Title: a.ip || a.fqdn || a.hostId, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn, AliveStatus: a.status,
+  ({ Title: a.hostId || a.ip || a.fqdn, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn, AliveStatus: a.status,
+     RegisteredAt: a.registeredAt, LastScan: a.lastScan, TrackingMethod: a.trackingMethod, Note: a.note,
      BusinessCompany: a.businessCompany, ManagementCompany: a.managementCompany, DedupKey: a.key });
 export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
   ({ key: str(r.DedupKey) || str(r.HostId), hostId: str(r.HostId), settenId: str(r.SettenId),
      ip: str(r.Ip), fqdn: str(r.Fqdn), status: str(r.AliveStatus),
+     registeredAt: str(r.RegisteredAt), lastScan: str(r.LastScan), trackingMethod: str(r.TrackingMethod), note: str(r.Note),
      businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany) });
 
 // チケット番号は Title。一意制約も Title に張る（uniqueTitle）。
 export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
   ({ Title: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
-     SettenId: t.settenId, BusinessCompany: t.businessCompany, OpenedAt: t.created,
-     ChangeKind: t.change ?? '', ChangedAt: t.changedAt ?? '', ReportJa: t.reportJa ?? '', ReportEn: t.reportEn ?? '' });
+     SettenId: t.settenId, BusinessCompany: t.businessCompany, ManagementCompany: t.managementCompany,
+     FirstFound: t.firstFound, LastFound: t.lastFound,
+     ChangeKind: t.change ?? '', ChangedAt: t.changedAt ?? '', ReportJa: t.reportJa ?? '', ReportEn: t.reportEn ?? '',
+     Note: t.note ?? '' });
 export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
   ({ number: str(r.Title), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
-     settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), created: str(r.OpenedAt),
-     change: str(r.ChangeKind), changedAt: str(r.ChangedAt), reportJa: str(r.ReportJa), reportEn: str(r.ReportEn) });
+     settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany),
+     created: str(r.FirstFound), firstFound: str(r.FirstFound), lastFound: str(r.LastFound),
+     change: str(r.ChangeKind), changedAt: str(r.ChangedAt), reportJa: str(r.ReportJa), reportEn: str(r.ReportEn),
+     note: str(r.Note) });

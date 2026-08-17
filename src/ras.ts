@@ -38,8 +38,28 @@ export interface RasAsset {
   ip: string;
   fqdn: string;
   status: string;            // '' | RAS_NOT_ALIVE
+  trackingMethod: string;    // IP / DNS / NETBIOS 等（Qualys の追跡方式）
+  registeredAt: string;      // 登録日（host の FIRST_FOUND_DATE・JST 表記）
+  lastScan: string;          // 最終検査日（LAST_VULN_SCAN_DATETIME・JST 表記）
   businessCompany: string;   // マスター登録した事業会社（アクセス権の割当キー）
   managementCompany: string; // 自由入力
+  note: string;              // メモ（複数行・ツール側だけで表示）
+}
+
+/**
+ * 日時を JST 表記（YYYY-MM-DD HH:mm:ss）にする。
+ * ★SharePoint の一覧は保存した文字列をそのまま出す（表示時にタイムゾーン変換できない）ので、
+ *   保存する時点で JST にしておく。辞書順＝時刻順なので並べ替えもそのまま効く。
+ */
+export function toJst(iso: string): string {
+  const v = (iso ?? '').trim();
+  if (!v) return '';
+  const d = new Date(v);
+  if (isNaN(d.getTime())) return v; // 解釈できない表記はそのまま残す（黙って消さない）
+  const j = new Date(d.getTime() + 9 * 60 * 60_000);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  return `${j.getUTCFullYear()}-${p(j.getUTCMonth() + 1)}-${p(j.getUTCDate())} `
+    + `${p(j.getUTCHours())}:${p(j.getUTCMinutes())}:${p(j.getUTCSeconds())}`;
 }
 
 /** host list に無い資産の行キー。IP しか手掛かりが無いのでそれを使う。 */
@@ -88,8 +108,12 @@ export interface RasTicket {
   ip: string;
   fqdn: string;
   settenId: string;
-  businessCompany: string; // 権限判定のために資産から写しておく（リスト単体で権限を組めるように）
+  businessCompany: string;   // 権限判定のために資産から写しておく（リスト単体で権限を組めるように）
+  managementCompany: string; // 同上（担当者が一覧だけで連絡先を判断できるように）
   created: string;
+  firstFound: string;  // 初回検知日（JST 表記で保存する）
+  lastFound: string;   // 最終検知日（同上）
+  note?: string;       // メモ（複数行・ツール側だけで表示）
   // 日次更新で付ける情報。取得しただけの同期では触らない。
   change?: string;    // '' | new | closed | reopened
   changedAt?: string; // 変化を検知した日時
@@ -150,8 +174,12 @@ export function deriveRasAssets(
       ip,
       fqdn: h.scalar.FQDN || h.scalar.DNS || '',
       status: '', // host list に居る＝生きている
+      trackingMethod: h.scalar.TRACKING_METHOD ?? '',
+      registeredAt: toJst(h.info.FIRST_FOUND_DATE ?? ''),
+      lastScan: toJst(h.info.LAST_VULN_SCAN_DATETIME ?? ''),
       businessCompany: prev?.businessCompany ?? '',
       managementCompany: prev?.managementCompany ?? '',
+      note: prev?.note ?? '',
     });
   }
 
@@ -181,8 +209,10 @@ export function deriveRasAssets(
       const prev = registered.get(key);
       const row: RasAsset = {
         key, hostId: '', settenId: sid, ip, fqdn: '', status: notScanned ? RAS_NOT_SCANNED : RAS_NOT_ALIVE,
+        trackingMethod: '', registeredAt: '', lastScan: '', // host list に居ないので取れない
         businessCompany: prev?.businessCompany ?? '',
         managementCompany: prev?.managementCompany ?? '',
+        note: prev?.note ?? '',
       };
       byIp.set(ip, row);
       out.push(row);
@@ -202,8 +232,10 @@ export function deriveRasAssets(
       const prev = registered.get(key);
       const row: RasAsset = {
         key, hostId: '', settenId: sid, ip: '', fqdn, status: notScanned ? RAS_NOT_SCANNED : RAS_NOT_ALIVE,
+        trackingMethod: '', registeredAt: '', lastScan: '',
         businessCompany: prev?.businessCompany ?? '',
         managementCompany: prev?.managementCompany ?? '',
+        note: prev?.note ?? '',
       };
       byDns.set(lower, row);
       out.push(row);
@@ -231,7 +263,11 @@ export function deriveRasTickets(tickets: QamTicket[], assets: RasAsset[], idByI
     out.push({
       number: t.number, state: t.state, hostId,
       ip: t.ip || a.ip, fqdn: t.fqdn || a.fqdn, settenId: a.settenId,
-      businessCompany: a.businessCompany, created: t.created,
+      businessCompany: a.businessCompany, managementCompany: a.managementCompany,
+      created: t.created,
+      // 初回検知日が無い契約もあるので、その時は起票日時で代替する（空欄にしない）。
+      firstFound: toJst(t.firstFound || t.created),
+      lastFound: toJst(t.lastFound),
     });
   }
   return out.sort((x, y) => Number(y.number) - Number(x.number));

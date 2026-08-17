@@ -12,7 +12,7 @@ const host = (key: string, ip: string, fqdn = '', dns = ''): QamRecord =>
   ({ key, name: fqdn || dns || ip, scalar: { IP: ip, FQDN: fqdn, DNS: dns }, set: {}, info: {}, hash: '' });
 
 const ticket = (number: string, hostId: string, ip: string, state = 'OPEN'): QamTicket =>
-  ({ number, state, hostId, ip, fqdn: '', created: '2026-08-01T09:30:00Z' });
+  ({ number, state, hostId, ip, fqdn: '', created: '2026-08-01T09:30:00Z', firstFound: '', lastFound: '' });
 
 describe('独自RASの判定', () => {
   it('接続点IDが R で始まるものだけが対象', () => {
@@ -56,7 +56,7 @@ describe('RAS資産の組み立て', () => {
 
   it('登録済みの事業会社・管理会社は取込で消えない', () => {
     // ★ここが消えると、取込のたびに手入力が飛ぶ。
-    const prev = new Map<string, RasAsset>([['1', { key: '1', hostId: '1', settenId: 'R100', ip: 'x', fqdn: 'x', status: '', businessCompany: 'A社', managementCompany: 'B保守' }]]);
+    const prev = new Map<string, RasAsset>([['1', { key: '1', hostId: '1', settenId: 'R100', ip: 'x', fqdn: 'x', status: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: 'A社', managementCompany: 'B保守' }]]);
     const r = derive(hosts, [], prev).assets.find((x) => x.hostId === '1')!;
     expect(r.businessCompany).toBe('A社');
     expect(r.managementCompany).toBe('B保守');
@@ -148,7 +148,7 @@ describe('host not alive の拾い上げ', () => {
   it('not alive の資産にも事業会社を登録でき、取込で消えない', () => {
     const g = [group('g1', 'R100 拠点', ['10.0.0.5'], '2026-08-10T00:00:00Z')];
     const prev = new Map<string, RasAsset>([[rasKeyForIp('10.0.0.5'),
-      { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, businessCompany: 'A社', managementCompany: '' }]]);
+      { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: 'A社', managementCompany: '' }]]);
     expect(derive(g, BASE, prev).assets.find((x) => x.ip === '10.0.0.5')!.businessCompany).toBe('A社');
   });
 });
@@ -171,9 +171,9 @@ describe('AssetGroup の IP 表記の展開', () => {
 
 describe('RASチケットの絞り込み', () => {
   const assets: RasAsset[] = [
-    { key: '1', hostId: '1', settenId: 'R100', ip: '10.0.0.1', fqdn: 'a.example', status: '', businessCompany: 'A社', managementCompany: '' },
+    { key: '1', hostId: '1', settenId: 'R100', ip: '10.0.0.1', fqdn: 'a.example', status: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: 'A社', managementCompany: '' },
     // host not alive の行（hostId が空）。ここにチケットが誤って当たらないことも確かめる。
-    { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, businessCompany: 'A社', managementCompany: '' },
+    { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: 'A社', managementCompany: '' },
   ];
 
   it('RAS資産のチケットだけを残し、事業会社を写す', () => {
@@ -249,8 +249,8 @@ describe('付与内容の組み立て', () => {
 
   it('事業会社が未設定のRAS資産を数えられる', () => {
     const assets: RasAsset[] = [
-      { key: '1', hostId: '1', settenId: 'R1', ip: '', fqdn: '', status: '', businessCompany: 'A社', managementCompany: '' },
-      { key: '2', hostId: '2', settenId: 'R2', ip: '', fqdn: '', status: '', businessCompany: '  ', managementCompany: '' },
+      { key: '1', hostId: '1', settenId: 'R1', ip: '', fqdn: '', status: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: 'A社', managementCompany: '' },
+      { key: '2', hostId: '2', settenId: 'R2', ip: '', fqdn: '', status: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: '  ', managementCompany: '' },
     ];
     expect(assetsWithoutCompany(assets).map((a) => a.hostId)).toEqual(['2']);
   });
@@ -285,8 +285,8 @@ describe('略称マスター', () => {
 
 describe('管理CSV の取込', () => {
   const assets: RasAsset[] = [
-    { key: '1', hostId: '1', settenId: 'R100', ip: '10.0.0.1', fqdn: 'a.example', status: '', businessCompany: '', managementCompany: '' },
-    { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, businessCompany: '', managementCompany: '' },
+    { key: '1', hostId: '1', settenId: 'R100', ip: '10.0.0.1', fqdn: 'a.example', status: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: '', managementCompany: '' },
+    { key: rasKeyForIp('10.0.0.5'), hostId: '', settenId: 'R100', ip: '10.0.0.5', fqdn: '', status: RAS_NOT_ALIVE, trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: '', managementCompany: '' },
   ];
   const perms = normalizeRasPerms({
     byBusinessCompany: { 'A事業会社': [7], 'B事業会社': [] },

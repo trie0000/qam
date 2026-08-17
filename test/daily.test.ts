@@ -5,7 +5,8 @@ import {
 import type { RasTicket } from '../src/ras';
 
 const t = (number: string, state: string, ip = '10.0.0.1', hostId = 'h1'): RasTicket =>
-  ({ number, state, hostId, ip, fqdn: 'a.example', settenId: 'R100', businessCompany: 'A社', created: '2026-08-01T00:00:00Z' });
+  ({ number, state, hostId, ip, fqdn: 'a.example', settenId: 'R100', businessCompany: 'A社', managementCompany: 'X保守',
+     created: '2026-08-01T00:00:00Z', firstFound: '2026-08-01 09:00:00', lastFound: '2026-08-10 09:00:00' });
 
 describe('チケットの状態', () => {
   it('OPEN だけが「開いている」。RESOLVED/CLOSED/IGNORED は閉じている扱い', () => {

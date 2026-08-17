@@ -281,7 +281,7 @@ describe('取込ロック（重複取込の抑止）', () => {
 
 describe('独自RAS のリスト同期', () => {
   const asset = (hostId: string, ip: string, company = '') =>
-    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '', businessCompany: company, managementCompany: '' });
+    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: company, managementCompany: '' });
 
   it('資産は追加・更新・削除される', async () => {
     const lists = fakeLists();
@@ -322,7 +322,8 @@ describe('独自RAS のリスト同期', () => {
     const lists = fakeLists();
     const repo = repoOf(lists);
     const t = (n: string, state = 'OPEN') =>
-      ({ number: n, state, hostId: '1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100', businessCompany: 'A社', created: '2026-08-01T00:00:00Z' });
+      ({ number: n, state, hostId: '1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100', businessCompany: 'A社', managementCompany: '',
+         created: '', firstFound: '2026-08-01 00:00:00', lastFound: '' });
     await repo.syncRasTickets([t('11'), t('12')]);
     const r = await repo.syncRasTickets([t('11', 'CLOSED')]);
     expect(r).toEqual({ added: 0, updated: 1, removed: 0 });

@@ -84,7 +84,10 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
   return {
     async ensureLists() {
-      for (const l of ALL_LISTS) await lists.ensureList(l.title, l.fields, { uniqueTitle: l.uniqueTitle, formFormatter: l.formFormatter?.(), dropFields: l.dropFields });
+      for (const l of ALL_LISTS) await lists.ensureList(l.title, l.fields, {
+        uniqueTitle: l.uniqueTitle, formFormatter: l.formFormatter?.(), dropFields: l.dropFields,
+        titleLabel: l.titleLabel, viewFields: l.viewFields,
+      });
     },
 
     async readComments(e, id) {
@@ -202,12 +205,12 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
     // --- 独自RAS ---
     async readRasAssets() {
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'TrackingMethod', 'RegisteredAt', 'LastScan', 'BusinessCompany', 'ManagementCompany', 'Note', 'DedupKey']);
       return rows.map(rowToRasAsset);
     },
 
     async syncRasAssets(assets) {
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'BusinessCompany', 'ManagementCompany', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'TrackingMethod', 'RegisteredAt', 'LastScan', 'BusinessCompany', 'ManagementCompany', 'Note', 'DedupKey']);
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
       for (const a of assets) {
@@ -217,6 +220,8 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
         // 変化が無いなら書かない（毎回の取込で全行を更新すると SP の版数が無駄に増える）。
         const same = rowToRasAsset(cur);
         if (same.settenId === a.settenId && same.ip === a.ip && same.fqdn === a.fqdn && same.status === a.status
+          && same.registeredAt === a.registeredAt && same.lastScan === a.lastScan
+          && same.trackingMethod === a.trackingMethod && same.note === a.note
           && same.businessCompany === a.businessCompany && same.managementCompany === a.managementCompany) continue;
         if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) updated++;
       }
@@ -248,13 +253,23 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       return n;
     },
 
+    async setRasAssetNote(key, note) {
+      for (let i = 0; i <= MAX_RETRY; i++) {
+        const rows = await lists.all(LIST_RAS_ASSETS, ['DedupKey']);
+        const cur = rows.find((x) => String(x.DedupKey ?? '') === key);
+        if (!cur) throw new Error(`RAS資産が見つかりません (${key})`);
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, { Note: note }, cur.__etag)) return;
+      }
+      throw new Error('他の利用者が同じ資産を更新しています。画面を更新してからやり直してください');
+    },
+
     async readRasTickets() {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn']);
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'Note']);
       return rows.map(rowToRasTicket);
     },
 
     async syncRasTickets(tickets) {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'OpenedAt', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn']);
+      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'Note']);
       // チケット番号は Title（このリストの一意キー）。
       const byKey = new Map(rows.map((r) => [String(r.Title ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
@@ -269,8 +284,10 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
           ...t,
           change: t.change ?? same.change, changedAt: t.changedAt ?? same.changedAt,
           reportJa: t.reportJa ?? same.reportJa, reportEn: t.reportEn ?? same.reportEn,
+          note: t.note ?? same.note, // メモは同期で消さない
         };
         if (same.state === merged.state && same.businessCompany === merged.businessCompany
+          && same.managementCompany === merged.managementCompany && same.lastFound === merged.lastFound
           && same.ip === merged.ip && same.fqdn === merged.fqdn && same.settenId === merged.settenId
           && same.change === merged.change && same.reportJa === merged.reportJa && same.reportEn === merged.reportEn) continue;
         if (await lists.update(LIST_RAS_TICKETS, cur.Id, rasTicketToRow(merged), cur.__etag)) updated++;
@@ -300,6 +317,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
         if (!cur) continue; // 同期のタイミングで消えた
         const patch: Record<string, unknown> = {};
         if (m.change !== undefined) { patch.ChangeKind = m.change; patch.ChangedAt = m.changedAt ?? ''; }
+        if (m.note !== undefined) patch.Note = m.note;
         if (m.reportJa !== undefined) patch.ReportJa = m.reportJa;
         if (m.reportEn !== undefined) patch.ReportEn = m.reportEn;
         if (!Object.keys(patch).length) continue;

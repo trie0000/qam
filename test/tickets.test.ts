@@ -21,7 +21,7 @@ describe('チケット応答の解析', () => {
     const t = parseTicketXml(page(ticket('101', 'OPEN', '10.0.0.1', '9001', 'host1.example')))[0];
     expect(t).toEqual({
       number: '101', state: 'OPEN', hostId: '9001', ip: '10.0.0.1',
-      fqdn: 'host1.example', created: '2026-08-01T09:30:00Z',
+      fqdn: 'host1.example', created: '2026-08-01T09:30:00Z', firstFound: '', lastFound: '',
     });
   });
 

@@ -70,7 +70,9 @@ export interface QamTicket {
   hostId: string;   // ホストID（DETECTION/HOST_ID。show_host_id=1 のときだけ入る）
   ip: string;       // DETECTION/IP
   fqdn: string;     // DETECTION/FQDN（無ければ DNSNAME）
-  created: string;  // チケットオープン日時（CREATION_DATETIME・UTC）
+  created: string;    // チケットオープン日時（CREATION_DATETIME・UTC）
+  firstFound: string; // 初回検知日時（STATS/FIRST_FOUND_DATETIME・UTC）
+  lastFound: string;  // 最終検知日時（STATS/LAST_FOUND_DATETIME・UTC）
 }
 
 // チケット一覧のスナップショット（取込 1 回分）。

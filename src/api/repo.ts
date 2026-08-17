@@ -67,11 +67,13 @@ export interface RecordRepo {
   setRasCompany(key: string, businessCompany: string, managementCompany: string): Promise<void>;
   /** CSV取込用の一括更新。1件ずつ setRasCompany を呼ぶと毎回全件読み直しになるため分ける。 */
   setRasCompaniesBulk(updates: { key: string; businessCompany: string; managementCompany: string }[]): Promise<number>;
+  /** RAS資産のメモ（複数行）。 */
+  setRasAssetNote(key: string, note: string): Promise<void>;
 
   readRasTickets(): Promise<RasTicket[]>;
   syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
   /** 日次更新の結果（変化ラベル・レポートリンク）を書き戻す。 */
-  setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string }[]): Promise<number>;
+  setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string; note?: string }[]): Promise<number>;
 
   /** 独自RASの2リストを SharePoint で開くURL。取れなければ空文字。 */
   rasListUrls(): Promise<{ assets: string; tickets: string }>;
@@ -89,7 +91,7 @@ let impl: RecordRepo = {
   readComments: notReady, addComment: notReady, editComment: notReady,
   readAnnotations: notReady, setAnnotation: notReady, setAnnotationsBulk: notReady,
   readSharedJson: notReady, writeSharedJson: notReady,
-  readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady,
+  readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady, setRasAssetNote: notReady,
   readRasTickets: notReady, syncRasTickets: notReady, setRasTicketMarks: notReady,
   rasListUrls: notReady, listSiteGroups: notReady, applyRasPerms: notReady,
   readOps: notReady, logOp: notReady,
@@ -109,6 +111,7 @@ export const repo: RecordRepo = {
   syncRasAssets: (a) => impl.syncRasAssets(a),
   setRasCompany: (k, b, m) => impl.setRasCompany(k, b, m),
   setRasCompaniesBulk: (u) => impl.setRasCompaniesBulk(u),
+  setRasAssetNote: (k, n) => impl.setRasAssetNote(k, n),
   readRasTickets: () => impl.readRasTickets(),
   syncRasTickets: (t) => impl.syncRasTickets(t),
   setRasTicketMarks: (m) => impl.setRasTicketMarks(m),

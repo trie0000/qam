@@ -29,6 +29,10 @@ export interface EnsureListOptions {
   formFormatter?: string;
   /** 使わなくなった列。残すと空欄のまま並んで紛らわしいので消す（組み込み列は消さない）。 */
   dropFields?: string[];
+  /** 組み込み Title 列の表示名（内部名は Title のまま）。 */
+  titleLabel?: string;
+  /** 既定ビューに出す列と、その順番。 */
+  viewFields?: string[];
 }
 
 export interface SpListClient {
@@ -113,6 +117,34 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
     }
   }
 
+  // Title 列の表示名だけを変える（内部名 Title はそのまま。書式や参照は内部名で動く）。
+  async function setTitleLabel(title: string, label: string): Promise<void> {
+    const r = await http.get(`${listApi(title)}/fields/getbyinternalnameortitle('Title')?$select=Title`);
+    if (!r.ok) return;
+    if (String((await http.json(r)).Title ?? '') === label) return;
+    const upd = await http.post(`${listApi(title)}/fields/getbyinternalnameortitle('Title')`, {
+      headers: { 'Content-Type': V, 'X-HTTP-Method': 'MERGE', 'If-Match': '*' },
+      body: JSON.stringify({ __metadata: { type: 'SP.Field' }, Title: label }),
+    });
+    if (!upd.ok) console.warn(`[qam/sp] ${title}.Title の表示名を変更できませんでした（続行）:`, upd.status);
+  }
+
+  // 既定ビューの列と並び順を揃える。★一度全部外してから順に足す。
+  // 足すだけだと、既にある列が前に残って指定した順にならない。
+  async function setViewFields(title: string, fields: string[]): Promise<void> {
+    const viewApi = `${listApi(title)}/DefaultView`;
+    const cur = await http.get(`${viewApi}/ViewFields`);
+    if (!cur.ok) return;
+    const have = (((await http.json(cur)).Items as { results?: unknown[] } | undefined)?.results ?? []).map(String);
+    if (have.length === fields.length && have.every((v, i) => v === fields[i])) return; // 既に同じ
+    const rm = await http.post(`${viewApi}/ViewFields/removeallviewfields`);
+    if (!rm.ok) { console.warn(`[qam/sp] ${title} の既定ビューを更新できませんでした（続行）:`, rm.status); return; }
+    for (const f of fields) {
+      const add = await http.post(`${viewApi}/ViewFields/addviewfield('${q(f)}')`);
+      if (!add.ok) console.warn(`[qam/sp] ${title} のビューに ${f} を追加できませんでした（続行）:`, add.status);
+    }
+  }
+
   // Title は SP 組み込み列なので ensureFields のガード（組み込み列は弾く）を通せない。
   // 作成はせず、一意制約だけを立てる。
   async function ensureUniqueTitle(title: string): Promise<void> {
@@ -164,6 +196,8 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
       await ensureFields(title, fields);
       if (opts?.dropFields?.length) await dropFields(title, opts.dropFields);
       if (opts?.uniqueTitle) await ensureUniqueTitle(title);
+      if (opts?.titleLabel) await setTitleLabel(title, opts.titleLabel);
+      if (opts?.viewFields?.length) await setViewFields(title, opts.viewFields);
       if (opts?.formFormatter) await applyFormFormatter(title, opts.formFormatter);
     }
 
