@@ -1233,6 +1233,32 @@ function openDailyUpdate(): void {
   const cbRebuild = el('input', { type: 'checkbox' }) as HTMLInputElement;
   cbRebuild.addEventListener('change', () => { if (cbRebuild.checked) cbSearch.checked = true; });
   cbSearch.addEventListener('change', () => { if (!cbSearch.checked) cbRebuild.checked = false; });
+
+  // チケットの取得範囲。取込モーダルと同じ2択にする（初回のロックも同じ扱い）。
+  const tDelta = el('input', { type: 'radio', name: 'qam-daily-tmode', value: 'delta' }) as HTMLInputElement;
+  const tOpen = el('input', { type: 'radio', name: 'qam-daily-tmode', value: 'open' }) as HTMLInputElement;
+  tDelta.checked = true;
+  const tNote = el('div', { class: 'qam-hint' }, [
+    '「変化分」でも、動きの無いオープン中チケットは毎回取り直します（最終検知日を最新にするため）。'
+    + '「オープン中を全件」だけにすると速くなりますが、この1ヶ月にクローズされた分は反映されません。',
+  ]);
+  const tRow = el('div', { class: 'qam-chip-row', style: 'margin-top:var(--s-2)' }, [
+    el('label', { class: 'qam-pick' }, [tDelta, '直近1ヶ月の変化分（起票・状態変更）']),
+    el('label', { class: 'qam-pick' }, [tOpen, '現時点でオープン中を全件']),
+  ]);
+  const syncTicket = (): void => {
+    for (const r of [tDelta, tOpen]) r.disabled = !cbQualys.checked || (r === tDelta && tDelta.dataset.locked === '1');
+  };
+  cbQualys.addEventListener('change', syncTicket);
+  // ★取込実績が無いうちは「変化分」を選ばせない。変化分だけだと、その期間に動きの
+  //   無かった既存のオープンチケットが丸ごと欠ける（取込モーダルと同じ理由）。
+  void getTicketStamps(backend).then((st) => {
+    if (st.length) return;
+    tDelta.dataset.locked = '1'; tDelta.checked = false; tOpen.checked = true;
+    clear(tNote);
+    tNote.append('チケットの取込実績がないため、初回は「オープン中を全件」のみ選べます。');
+    syncTicket();
+  }).catch(() => undefined);
   const prog = el('div', { class: 'qam-progress', style: 'display:none' });
   const setProg = (msg: string, busy: boolean): void => {
     clear(prog); prog.style.display = 'flex';
@@ -1249,17 +1275,20 @@ function openDailyUpdate(): void {
         el('label', { class: 'qam-pick' }, [cbRebuild, 'Search List を作り直す']),
       ]),
     ]),
+    el('div', { class: 'qam-field' }, [el('label', {}, ['チケットの取得範囲']), tRow, tNote]),
     callout(`Qualys情報の更新は、取込と同じ内容（資産・チケット・検査）を取り直して独自RASに反映します。`
       + `Search List の更新は、SharePoint 上の Excel の CVE 一覧に合わせて Qualys の動的検索リストを更新します`
       + `（1リストあたり ${CVE_PER_LIST} 件。通常は差分のあるリストだけを更新します）。`
       + `「作り直す」を選ぶと既存の割り当てを無視して Excel の順に詰め直すため、複数のリストが一度に書き換わります。`),
     prog,
   ]);
+  syncTicket(); // 開いた時点の状態を反映しておく（Qualys更新を外していれば選べない）
   openModal({
     title: '日次更新', body, primaryLabel: 'OK', wide: true, dismissBackdrop: false,
     onPrimary: async () => {
       if (!cbQualys.checked && !cbSearch.checked) { toast('実行する内容を選んでください', 'error'); return false; }
-      const r = await runDailyUpdate(cbQualys.checked, cbSpo.checked, cbMail.checked, cbSearch.checked, cbRebuild.checked, setProg);
+      const r = await runDailyUpdate(cbQualys.checked, cbSpo.checked, cbMail.checked, cbSearch.checked, cbRebuild.checked,
+        tDelta.checked ? 'delta' : 'open', setProg);
       if (r) { showDailyResult(r); return true; }
       return false;
     },
@@ -1269,6 +1298,7 @@ function openDailyUpdate(): void {
 // 日次更新の本体。失敗しても途中まで残す（全部やり直しにしない）。
 async function runDailyUpdate(
   doQualys: boolean, doSpo: boolean, doMail: boolean, doSearch: boolean, rebuild: boolean,
+  ticketMode: 'delta' | 'open',
   setProg: (msg: string, busy: boolean) => void,
 ): Promise<DailyRunSummary | null> {
   const cfg = await getConfig();
@@ -1290,7 +1320,8 @@ async function runDailyUpdate(
       setProg('Qualys から取得中…', true);
       const kinds = ENTITIES.map((e) => e.key);
       const hasTickets = (await getTicketStamps(backend)).length > 0;
-      const tq = ticketQuery(resolveTicketMode('delta', hasTickets));
+      const mode = resolveTicketMode(ticketMode, hasTickets);
+      const tq = ticketQuery(mode);
       const q = quarterOf(new Date(), cfg.fiscalStartMonth || 4);
       const { results, failures, ips, tickets, inspection } = await downloadEntitiesParallel(
         kinds, creds, (m) => setProg(m, true), true, tq, qualysDateTimeUtc(q.start));
@@ -1305,8 +1336,9 @@ async function runDailyUpdate(
       //   1件も返らず、最終検知日が古いまま固まる。オープン中は毎回取り直して混ぜる。
       //   Qualys の「modified」に再検知が含まれるかは API 仕様に書かれていないので、
       //   delta に頼らず明示的に取る。
+      //   「オープン中を全件」を選んだときは既に取れているので、二度取りしない。
       let merged = tickets;
-      if (tickets) {
+      if (tickets && mode === 'delta') {
         setProg('オープン中のチケットを取得中…', true);
         const openQ = ticketQuery('open');
         const openRes = await downloadEntitiesParallel([], creds, (m) => setProg(m, true), false, openQ);
