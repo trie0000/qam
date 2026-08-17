@@ -61,6 +61,10 @@ async function makeZip(files: { name: string; text: string }[]): Promise<ArrayBu
 // 共有文字列表。セルは t="s" で添字を持つ（Excel が実際に使う形）。
 const SHARED = ['CVE対応策一覧', 'CVE番号', '対応策', 'CVE-2024-0001', 'パッチ適用', 'CVE-2024-0002',
   '設定変更', '対象列だけ空', 'CVE-2024-0003', '回避策', 'CVE-9999-9999', '無関係'];
+// ★Excel は氏名等に「ふりがな」を持つ。<rPh> の中にも <t> があるので、除かないと
+//   「山田 太郎ヤマダ タロウ」のように漢字の後ろにカタカナが付く（実際に踏んだ）。
+const SHARED_XML = SHARED.map((s) => `<si><t>${s}</t></si>`).join('')
+  + '<si><t>山田 太郎</t><rPh sb="0" eb="2"><t>ヤマダ</t></rPh><rPh sb="3" eb="5"><t>タロウ</t></rPh><phoneticPr fontId="1"/></si>';
 const c = (ref: string, i: number): string => `<c r="${ref}" t="s"><v>${i}</v></c>`;
 const SHEET = `<?xml version="1.0"?><worksheet><sheetData>
   <row r="1">${c('A1', 0)}</row>
@@ -70,6 +74,7 @@ const SHEET = `<?xml version="1.0"?><worksheet><sheetData>
   <row r="5">${c('B5', 7)}</row>
   <row r="6">${c('A6', 8)}${c('B6', 9)}</row>
   <row r="8">${c('A8', 10)}</row>
+  <row r="9">${c('A9', SHARED.length)}</row>
 </sheetData></worksheet>`;
 
 const build = (): Promise<ArrayBuffer> => makeZip([
@@ -80,7 +85,7 @@ const build = (): Promise<ArrayBuffer> => makeZip([
       + '<Relationship Id="rId1" Target="worksheets/sheet1.xml"/>'
       + '<Relationship Id="rId2" Target="worksheets/sheet2.xml"/></Relationships>' },
   { name: 'xl/sharedStrings.xml', text: '<?xml version="1.0"?><sst>'
-      + SHARED.map((s) => `<si><t>${s}</t></si>`).join('') + '</sst>' },
+      + SHARED_XML + '</sst>' },
   { name: 'xl/worksheets/sheet1.xml', text: `<?xml version="1.0"?><worksheet><sheetData><row r="1">${c('A1', 11)}</row></sheetData></worksheet>` },
   { name: 'xl/worksheets/sheet2.xml', text: SHEET },
 ]);
@@ -117,5 +122,13 @@ describe('xlsx の読み取り', () => {
   it('xlsx でないものは読めないと分かる形で失敗させる', async () => {
     await expect(readXlsxSheet(new TextEncoder().encode('not a zip').buffer as ArrayBuffer, 'x'))
       .rejects.toThrow(/xlsx として読めません/);
+  });
+});
+
+describe('ふりがな（<rPh>）の扱い', () => {
+  it('氏名の後ろにふりがなを連結しない', async () => {
+    const s = await readXlsxSheet(await build(), 'CVE対応策一覧');
+    // 9行目には「山田 太郎」＋ふりがな付きのセルを置いてある。
+    expect(s.rows.find((r) => r.row === 9)!.cells.A).toBe('山田 太郎');
   });
 });

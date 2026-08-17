@@ -70,11 +70,16 @@ const unescapeXml = (s: string): string =>
     .replace(/&#(\d+);/g, (_, d: string) => String.fromCodePoint(Number(d)))
     .replace(/&amp;/g, '&'); // &amp; は最後（先に戻すと二重解釈になる）
 
-/** sharedStrings.xml → 添字順の文字列。<si> 内の <t> を連結する（書式付きは複数 <r><t>）。 */
+/**
+ * sharedStrings.xml → 添字順の文字列。<si> 内の <t> を連結する（書式付きは複数 <r><t>）。
+ * ★<rPh> は**ふりがな**。中に <t> を持つので、除かずに拾うと「山田 太郎ヤマダ タロウ」の
+ *   ように漢字の後ろにカタカナが付く（実際に踏んだ）。先に落としてから <t> を集める。
+ */
 function parseSharedStrings(xml: string): string[] {
   const out: string[] = [];
   for (const m of xml.matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/g)) {
-    const parts = [...m[1].matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((x) => unescapeXml(x[1]));
+    const body = m[1].replace(/<rPh\b[^>]*>[\s\S]*?<\/rPh>/g, '').replace(/<rPh\b[^>]*\/>/g, '');
+    const parts = [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((x) => unescapeXml(x[1]));
     out.push(parts.join(''));
   }
   return out;
@@ -101,7 +106,9 @@ export function parseSheet(xml: string, shared: string[]): SheetRow[] {
       const type = /\bt="([^"]+)"/.exec(attrs)?.[1] ?? '';
       let v = '';
       if (type === 'inlineStr') {
-        v = [...inner.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((x) => unescapeXml(x[1])).join('');
+        // 共有文字列と同じく、ふりがな(<rPh>)は本文ではないので落とす。
+        const body = inner.replace(/<rPh\b[^>]*>[\s\S]*?<\/rPh>/g, '').replace(/<rPh\b[^>]*\/>/g, '');
+        v = [...body.matchAll(/<t\b[^>]*>([\s\S]*?)<\/t>/g)].map((x) => unescapeXml(x[1])).join('');
       } else {
         const raw = /<v\b[^>]*>([\s\S]*?)<\/v>/.exec(inner)?.[1] ?? '';
         // ★t="s" の <v> は共有文字列表の添字。そのまま使うと数字が並ぶ。
