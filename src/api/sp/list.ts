@@ -33,6 +33,8 @@ export interface EnsureListOptions {
   titleLabel?: string;
   /** 既定ビューに出す列と、その順番。 */
   viewFields?: string[];
+  /** 列ごとの表示書式（内部名 → JSON）。 */
+  fieldFormatters?: Record<string, string>;
 }
 
 export interface SpListClient {
@@ -117,6 +119,20 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
     }
   }
 
+  // 列の表示書式（一覧のセルの見せ方）。CustomFormatter に JSON を入れる。
+  async function setFieldFormatters(title: string, formatters: Record<string, string>): Promise<void> {
+    for (const [name, json] of Object.entries(formatters)) {
+      const r = await http.get(`${listApi(title)}/fields/getbyinternalnameortitle('${q(name)}')?$select=CustomFormatter`);
+      if (!r.ok) continue;
+      if (String((await http.json(r)).CustomFormatter ?? '') === json) continue;
+      const upd = await http.post(`${listApi(title)}/fields/getbyinternalnameortitle('${q(name)}')`, {
+        headers: { 'Content-Type': V, 'X-HTTP-Method': 'MERGE', 'If-Match': '*' },
+        body: JSON.stringify({ __metadata: { type: 'SP.Field' }, CustomFormatter: json }),
+      });
+      if (!upd.ok) console.warn(`[qam/sp] ${title}.${name} の列書式を設定できませんでした（続行）:`, upd.status);
+    }
+  }
+
   // Title 列の表示名だけを変える（内部名 Title はそのまま。書式や参照は内部名で動く）。
   async function setTitleLabel(title: string, label: string): Promise<void> {
     const r = await http.get(`${listApi(title)}/fields/getbyinternalnameortitle('Title')?$select=Title`);
@@ -198,6 +214,7 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
       if (opts?.uniqueTitle) await ensureUniqueTitle(title);
       if (opts?.titleLabel) await setTitleLabel(title, opts.titleLabel);
       if (opts?.viewFields?.length) await setViewFields(title, opts.viewFields);
+      if (opts?.fieldFormatters) await setFieldFormatters(title, opts.fieldFormatters);
       if (opts?.formFormatter) await applyFormFormatter(title, opts.formFormatter);
     }
 

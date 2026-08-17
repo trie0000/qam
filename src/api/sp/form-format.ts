@@ -138,3 +138,16 @@ export const rasTicketFormFormatter = (): string => JSON.stringify({
   ), reportCard()]),
   ...READONLY_BODY,
 });
+
+
+/**
+ * 一覧のセルをリンクにする列書式。URL をそのまま出すと横に長くて読めないので、
+ * 短いラベルにする。値が空の行はリンクを出さない（空リンクを押させない）。
+ */
+export const reportLinkColumnFormat = (field: string, label: string): string => JSON.stringify({
+  $schema: COLUMN_FORMAT_SCHEMA,
+  elmType: 'a',
+  txtContent: label,
+  attributes: { href: `[$${field}]`, target: '_blank' },
+  style: { display: `=if([$${field}] == '', 'none', 'inline')`, 'text-decoration': 'underline' },
+});

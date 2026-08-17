@@ -6,7 +6,7 @@
 import type { FieldSpec } from './list';
 import type { QamComment, QamEntity } from '../../types';
 import type { RasAsset, RasTicket } from '../../ras';
-import { rasAssetFormFormatter, rasTicketFormFormatter } from './form-format';
+import { rasAssetFormFormatter, rasTicketFormFormatter, reportLinkColumnFormat } from './form-format';
 import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 
 // 2: Author 列を RecordedBy へ改名（Author は SharePoint 組み込みの User 型列と衝突し、
@@ -17,7 +17,8 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 6: RASチケットに変化ラベル(ChangeKind/ChangedAt)とレポートリンク(ReportJa/ReportEn)を追加
 // 7: 初回/最終検知日・登録日/最終検査日・管理会社を追加。Title の表示名と一覧の列順を設定
 // 8: メモ(Note)と TrackingMethod を追加（メモは SPO の一覧には出さない）
-export const SCHEMA_VERSION = 8;
+// 9: チケット一覧にレポートのリンク列を表示
+export const SCHEMA_VERSION = 9;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -131,6 +132,8 @@ export const rasTicketFields: FieldSpec[] = [
 export const ALL_LISTS: {
   title: string; fields: FieldSpec[]; uniqueTitle?: boolean; formFormatter?: () => string;
   dropFields?: string[]; titleLabel?: string; viewFields?: string[];
+  /** 列ごとの表示書式（内部名 → JSON）。一覧のセルの見せ方を変える。 */
+  fieldFormatters?: Record<string, string>;
 }[] = [
   { title: LIST_COMMENTS, fields: commentFields },
   { title: LIST_ANNOTATIONS, fields: annotationFields },
@@ -148,7 +151,11 @@ export const ALL_LISTS: {
     title: LIST_RAS_TICKETS, fields: rasTicketFields, uniqueTitle: true, formFormatter: rasTicketFormFormatter,
     dropFields: ['TicketNumber', 'DedupKey', 'OpenedAt'],
     titleLabel: 'Ticket No',
-    viewFields: ['Title', 'State', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound'],
+    viewFields: ['Title', 'State', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound', 'ReportJa', 'ReportEn'],
+    fieldFormatters: {
+      ReportJa: reportLinkColumnFormat('ReportJa', '日本語'),
+      ReportEn: reportLinkColumnFormat('ReportEn', '英語'),
+    },
   },
 ];
 

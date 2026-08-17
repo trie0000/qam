@@ -86,7 +86,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     async ensureLists() {
       for (const l of ALL_LISTS) await lists.ensureList(l.title, l.fields, {
         uniqueTitle: l.uniqueTitle, formFormatter: l.formFormatter?.(), dropFields: l.dropFields,
-        titleLabel: l.titleLabel, viewFields: l.viewFields,
+        titleLabel: l.titleLabel, viewFields: l.viewFields, fieldFormatters: l.fieldFormatters,
       });
     },
 
