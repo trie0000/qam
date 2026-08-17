@@ -106,6 +106,8 @@ const reportCard = (): Node => ({
       [link('SCAN / JP（日本語）', 'ReportJa'), link('SCAN / EN（英語）', 'ReportEn')],
       [link('Ticket / JP（日本語）', 'TicketReportJa'), link('Ticket / EN（英語）', 'TicketReportEn')],
     ),
+    // いつ時点の内容かが分からないと、古いレポートを最新と思って配ってしまう。
+    item('レポート更新日', 'ReportUpdatedAt'),
   ],
 });
 

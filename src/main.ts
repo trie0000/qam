@@ -35,7 +35,7 @@ import { classifyTickets, reportTargets, reportPath, reportTitle, TICKET_CHANGE_
 import { readXlsxSheet, columnUntilBlankRow } from './xlsx-read';
 import { isAbsoluteUrl, parseSpFileUrl, spFileValueUrl } from './sp-url';
 import {
-  RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
+  RAS_PREFIX, toJst, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
   companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
   aliasesFor, parseAliases, planRasCsvImport, type RasCsvPlan,
   type RasAsset, type RasPerms, type RasTicket,
@@ -945,6 +945,11 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       },
       { id: 'state', label: 'ステータス', width: 110, render: (t: RasTicket) => esc(t.state) },
       {
+        id: 'reportedAt', label: 'レポート更新日', mono: true, width: 160,
+        render: (t: RasTicket) => esc(t.reportedAt ?? ''),
+        sortVal: (t: RasTicket) => t.reportedAt ?? '',
+      },
+      {
         id: 'ticketReport', label: 'Ticketレポート', width: 130,
         render: (t: RasTicket) => (['JP', 'EN'] as const).map((tag) => {
           const url = tag === 'JP' ? t.ticketReportJa : t.ticketReportEn;
@@ -1408,8 +1413,10 @@ async function buildScanReports(
     }
   }
 
+  // いつ時点の内容かが分かるよう、作った日時を残す（4種のうち1本でも出来たら記録する）。
+  const reportedAt = toJst(new Date().toISOString());
   const marks: Record<string, unknown>[] = [];
-  for (const [t, link] of links) for (const no of t.tickets) marks.push({ number: no, ...link });
+  for (const [t, link] of links) for (const no of t.tickets) marks.push({ number: no, ...link, reportedAt });
   if (marks.length) await repo.setRasTicketMarks(marks as Parameters<typeof repo.setRasTicketMarks>[0]);
 }
 

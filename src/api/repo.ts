@@ -73,7 +73,7 @@ export interface RecordRepo {
   readRasTickets(): Promise<RasTicket[]>;
   syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
   /** 日次更新の結果（変化ラベル・レポートリンク）を書き戻す。 */
-  setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string; ticketReportJa?: string; ticketReportEn?: string; note?: string }[]): Promise<number>;
+  setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string; ticketReportJa?: string; ticketReportEn?: string; reportedAt?: string; note?: string }[]): Promise<number>;
 
   /** 独自RASの2リストを SharePoint で開くURL。取れなければ空文字。 */
   rasListUrls(): Promise<{ assets: string; tickets: string }>;

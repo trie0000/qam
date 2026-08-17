@@ -232,3 +232,17 @@ describe('レポートの状態を一括で読む', () => {
     expect(parseReportStates('').size).toBe(0);
   });
 });
+
+describe('JST 表記への変換', () => {
+  it('UTC を +9 時間して YYYY-MM-DD HH:mm:ss にする', async () => {
+    const { toJst } = await import('../src/ras');
+    expect(toJst('2026-08-17T01:30:00Z')).toBe('2026-08-17 10:30:00');
+    expect(toJst('2026-08-16T20:00:00Z')).toBe('2026-08-17 05:00:00'); // 日付をまたぐ
+  });
+
+  it('空は空、解釈できない表記はそのまま残す（黙って消さない）', async () => {
+    const { toJst } = await import('../src/ras');
+    expect(toJst('')).toBe('');
+    expect(toJst('不明')).toBe('不明');
+  });
+});

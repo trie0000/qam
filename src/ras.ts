@@ -121,6 +121,7 @@ export interface RasTicket {
   reportEn?: string;
   ticketReportJa?: string; // Ticket(Remediation)レポート(日本語)
   ticketReportEn?: string;
+  reportedAt?: string;     // レポートを作った日時（JST 表記）。いつ時点の内容かを示す
 }
 
 // 独自RAS資産を組み立てる。元は3つ:
