@@ -1377,6 +1377,9 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
 // レポートの完成待ち。Qualys 側の生成は数分かかることがある。
 async function waitReport(creds: QualysCreds, id: string, onWait: (msg: string) => void): Promise<string> {
   const started = Date.now();
+  // ★依頼した直後は必ず生成中。すぐ聞きに行っても Running が返るだけなので、
+  //   最初の1回ぶんの呼び出しを省く（API 呼び出しは少ないほどよい）。
+  await new Promise((res) => setTimeout(res, 10_000));
   for (let i = 0; ; i++) {
     const state = await reportState(creds, id);
     if (state && state !== 'Running' && state !== 'Submitted') return state;

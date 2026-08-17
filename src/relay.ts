@@ -18,11 +18,16 @@ async function postJson(path: string, body: unknown): Promise<any> {
 const notReady = (): never => { throw new Error('保管先が未初期化です（SharePoint への接続に失敗しています）'); };
 let impl: FileBackend = { read: notReady, write: notReady, list: notReady, remove: notReady };
 export const setBackend = (b: FileBackend): void => { impl = b; };
+// ★任意メソッド（readBinary / writeBinary）も必ず転送する。ここに書き忘れると
+//   実装側にあっても呼び出し側からは undefined に見え、「この保管先には保存できません」
+//   と出て原因が分からない（実際に踏んだ）。
 export const backend: FileBackend = {
   read: (p) => impl.read(p),
   write: (p, c, a) => impl.write(p, c, a),
   list: (d) => impl.list(d),
   remove: (p) => impl.remove(p),
+  readBinary: (p) => (impl.readBinary ? impl.readBinary(p) : notReady()),
+  writeBinary: (p, b64) => (impl.writeBinary ? impl.writeBinary(p, b64) : notReady()),
 };
 
 export interface FetchResult { ok: boolean; status: number; nextUrl: string | null; xml: string; error?: string }

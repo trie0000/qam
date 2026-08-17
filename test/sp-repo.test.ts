@@ -413,3 +413,22 @@ describe('資産で設定した会社をチケットへ写す', () => {
     expect(rows.find((r) => r.Title === '21')!.ManagementCompany).toBe('Y保守');
   });
 });
+
+describe('保管先の委譲', () => {
+  it('backend は任意メソッド（バイナリ読み書き）も転送する', async () => {
+    // ★転送を書き忘れると、実装側にあっても呼び出し側からは undefined に見え、
+    //   「この保管先には保存できません」と出て原因が分からない（実際に踏んだ）。
+    const { backend, setBackend } = await import('../src/relay');
+    const calls: string[] = [];
+    setBackend({
+      read: async () => null, write: async () => undefined, list: async () => [], remove: async () => undefined,
+      readBinary: async (p) => { calls.push(`read:${p}`); return new ArrayBuffer(4); },
+      writeBinary: async (p) => { calls.push(`write:${p}`); },
+    });
+    expect(typeof backend.readBinary).toBe('function');
+    expect(typeof backend.writeBinary).toBe('function');
+    await backend.readBinary!('a.xlsx');
+    await backend.writeBinary!('b.pdf', 'AAAA');
+    expect(calls).toEqual(['read:a.xlsx', 'write:b.pdf']);
+  });
+});
