@@ -91,3 +91,15 @@ export function parseTicketPages(pages: string[]): QamTicket[] {
   // チケットIDは数値。新しい順（大きい順）に並べる。
   return [...byNo.values()].sort((a, b) => Number(b.number) - Number(a.number));
 }
+
+/**
+ * 2回ぶんの取得結果を1本にまとめる（チケット番号で重複排除）。
+ * ★日次更新は delta（modified_since_datetime）だけでは足りない。動きの無いオープン中
+ *   チケットが1件も返らず、最終検知日が古いままになる。states=OPEN の取得と混ぜる。
+ *   同じ番号があとから来たら上書きする（どちらも同時点の取得なので中身は同じ）。
+ */
+export function mergeTicketSets(...sets: (QamTicket[] | undefined)[]): QamTicket[] {
+  const byNo = new Map<string, QamTicket>();
+  for (const list of sets) for (const t of list ?? []) byNo.set(t.number, t);
+  return [...byNo.values()];
+}

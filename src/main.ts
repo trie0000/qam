@@ -25,7 +25,7 @@ import type { ScheduleInput } from './schedule';
 import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, buildAssetGroupEditParams, buildDomainParams, buildDomainEditParams, mergeNetblocks, DEFAULT_REGIONS, type ProvisionInput } from './provision';
 import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type AssetRegistry, type RegistrySource } from './precheck';
 import { parseQualysXml } from './ingest/parse';
-import { ticketQuery, resolveTicketMode } from './tickets';
+import { ticketQuery, resolveTicketMode, mergeTicketSets } from './tickets';
 import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
 import {
   parseSearchListIds, parseCveList, parseDynamicLists, diffCves, cveUpdateFields, searchListSummary,
@@ -1298,11 +1298,27 @@ async function runDailyUpdate(
       const today = dateOfStamp(stampNow());
       if (ips) { ipCount = ips.count; if (ips.xml) await backend.write(`raw/${today}/ips-${stampNow()}.xml`, ips.xml).catch(() => undefined); }
       for (const dl of results) { setProg(`${dl.kind}: 保存中…`, true); await commitOne(dl.snapshot, dl.raw, { decided: true, proceed: true }, ipCount); summary.ingested.push(dl.kind); }
-      if (tickets) await commitTickets(tickets);
       if (inspection?.raw && (inspection.raw.scans || inspection.raw.maps)) await storeInspection(inspection, q.label);
       for (const f of failures) summary.notes.push(`${f.kind} の取得に失敗: ${f.error}`);
 
-      lastTickets = tickets?.tickets;
+      // ★delta（modified_since_datetime）だけでは、動きの無いオープン中チケットが
+      //   1件も返らず、最終検知日が古いまま固まる。オープン中は毎回取り直して混ぜる。
+      //   Qualys の「modified」に再検知が含まれるかは API 仕様に書かれていないので、
+      //   delta に頼らず明示的に取る。
+      let merged = tickets;
+      if (tickets) {
+        setProg('オープン中のチケットを取得中…', true);
+        const openQ = ticketQuery('open');
+        const openRes = await downloadEntitiesParallel([], creds, (m) => setProg(m, true), false, openQ);
+        const openFail = openRes.failures.find((f) => f.kind === 'ticket');
+        if (openFail) summary.notes.push(`オープン中チケットの取得に失敗: ${openFail.error}（変化分のみで更新しました）`);
+        else if (openRes.tickets) {
+          merged = { ...tickets, tickets: mergeTicketSets(tickets.tickets, openRes.tickets.tickets) };
+        }
+      }
+      if (merged) await commitTickets(merged);
+
+      lastTickets = merged?.tickets;
     }
 
     // SharePoint のリストは、ここでだけ書き換える。

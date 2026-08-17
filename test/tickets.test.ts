@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { parseTicketXml, parseTicketPages, ticketSince, ticketQuery, resolveTicketMode } from '../src/tickets';
+import { parseTicketXml, parseTicketPages, ticketSince, ticketQuery, resolveTicketMode, mergeTicketSets } from '../src/tickets';
+import type { QamTicket } from '../src/types';
 
 // ticket_list_output.dtd に沿った最小の応答。
 const page = (tickets: string, truncLast?: string): string =>
@@ -109,5 +110,29 @@ describe('取得範囲の決定', () => {
     const q = ticketQuery('delta', new Date('2026-08-16T00:00:00Z'));
     expect(q.states).toBe('OPEN,RESOLVED,CLOSED,IGNORED');
     expect(q.since).toBe('2026-07-16T00:00:00Z');
+  });
+});
+
+describe('delta とオープン中の取得をまとめる', () => {
+  const t = (n: string, state: string, lastFound = ''): QamTicket =>
+    ({ number: n, state, hostId: '', ip: '10.0.0.1', fqdn: '', created: '', firstFound: '', lastFound, cves: [] });
+
+  it('★動きの無いオープン中チケットを拾う（delta だけでは1件も返らない）', () => {
+    // modified_since_datetime は「変更のあったチケット」しか返さないので、
+    // 再検知しかしていないオープン中チケットは最終検知日が古いまま固まる。
+    const delta = [t('1', 'CLOSED', '2026-08-01 00:00:00')];
+    const open = [t('2', 'OPEN', '2026-08-17 00:00:00')];
+    expect(mergeTicketSets(delta, open).map((x) => x.number)).toEqual(['1', '2']);
+  });
+
+  it('両方に出てくるチケットは1件にする', () => {
+    const merged = mergeTicketSets([t('1', 'OPEN', '古い')], [t('1', 'OPEN', '新しい')]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].lastFound).toBe('新しい'); // あとから渡した方が残る
+  });
+
+  it('片方が取れなくても落ちない（変化分だけで更新できる）', () => {
+    expect(mergeTicketSets([t('1', 'OPEN')], undefined).map((x) => x.number)).toEqual(['1']);
+    expect(mergeTicketSets(undefined, undefined)).toEqual([]);
   });
 });

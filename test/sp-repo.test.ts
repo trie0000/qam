@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { createSpRepo } from '../src/api/sp-repo';
+import { createSpRepo, TICKET_FIELDS, ASSET_FIELDS } from '../src/api/sp-repo';
 import { createSpListClient, type SpItem, type SpListClient } from '../src/api/sp/list';
-import { ALL_LISTS, LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, LIST_SETTINGS, LOCK_INGEST, LIST_RAS_ASSETS, LIST_RAS_TICKETS, annotKey } from '../src/api/sp/schema';
+import { ALL_LISTS, LIST_ANNOTATIONS, LIST_COMMENTS, LIST_LICENSES, LIST_SETTINGS, LOCK_INGEST, LIST_RAS_ASSETS, LIST_RAS_TICKETS, annotKey, rasTicketToRow, rasAssetToRow } from '../src/api/sp/schema';
+import type { RasAsset, RasTicket } from '../src/ras';
 
 // リストを模した最小の実装。行の追加/更新/削除がそのまま観測できる。
 function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: Record<string, SpItem[]>; ensured: string[] } {
@@ -432,5 +433,54 @@ describe('保管先の委譲', () => {
     await backend.readBinary!('a.xlsx');
     await backend.writeBinary!('b.pdf', 'AAAA');
     expect(calls).toEqual(['read:a.xlsx', 'write:b.pdf']);
+  });
+});
+
+describe('列を足したときの取りこぼし', () => {
+  const t = (n: string, over: Partial<RasTicket> = {}): RasTicket =>
+    ({ number: n, state: 'OPEN', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
+       businessCompany: 'A社', managementCompany: '', vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
+       created: '', firstFound: '', lastFound: '', ...over });
+
+  it('★書き込む列は全部読み出す（読み忘れた列は永久に空のままになる）', () => {
+    // VulnKind / CveIds を足したとき $select に入れ忘れ、値が入らなかった。
+    const written = Object.keys(rasTicketToRow(t('1')));
+    const read = TICKET_FIELDS;
+    expect(written.filter((k) => !read.includes(k))).toEqual([]);
+  });
+
+  it('★資産側も同じ', () => {
+    const a: RasAsset = { key: 'k', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
+      businessCompany: '', managementCompany: '', status: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' };
+    expect(Object.keys(rasAssetToRow(a)).filter((k) => !ASSET_FIELDS.includes(k))).toEqual([]);
+  });
+
+  it('★初回検知日だけが埋まった行も更新する', async () => {
+    // 状態も最終検知日も変わらないと「変化なし」で飛ばしていたため、
+    // 初回検知日が空のまま固まっていた。
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasTickets([t('11')]);
+    const r = await repo.syncRasTickets([t('11', { firstFound: '2026-08-01 09:00:00' })]);
+    expect(r.updated).toBe(1);
+    expect((await repo.readRasTickets())[0].firstFound).toBe('2026-08-01 09:00:00');
+  });
+
+  it('★脆弱性種別と CVE ID だけが埋まった行も更新する', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasTickets([t('12')]);
+    const r = await repo.syncRasTickets([t('12', { vulnKind: 'CSIRT牽制分', cveIds: 'CVE-2024-1111' })]);
+    expect(r.updated).toBe(1);
+    const got = (await repo.readRasTickets())[0];
+    expect(got.vulnKind).toBe('CSIRT牽制分');
+    expect(got.cveIds).toBe('CVE-2024-1111');
+  });
+
+  it('本当に同じ内容なら書かない（版数を無駄に増やさない）', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasTickets([t('13')]);
+    expect((await repo.syncRasTickets([t('13')])).updated).toBe(0);
   });
 });

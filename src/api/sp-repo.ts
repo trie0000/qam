@@ -10,7 +10,7 @@ import {
   LIST_SETTINGS, LOCK_INGEST, LIST_RAS_ASSETS, LIST_RAS_TICKETS,
   annotKey, annotToRow, commentToRow, inspectionToRow, licenseToRow, opToRow,
   rowToComment, rowToInspection, rowToLicense, rowToOp,
-  rasAssetToRow, rowToRasAsset, rasTicketToRow, rowToRasTicket,
+  rasAssetToRow, rowToRasAsset, rasTicketToRow, rowToRasTicket, rasAssetFields, rasTicketFields,
 } from './sp/schema';
 import { createSpPermsClient, type SiteGroup, type SpPermsClient } from './sp/perms';
 import { buildItemPermPlan, canApplyPerms, pickRoles, type RasAsset, type RasPerms, type RasTicket } from '../ras';
@@ -25,6 +25,15 @@ export interface SpRepoOptions extends SpHttpOptions {
   listClient?: SpListClient; // テスト用の差し替え
   permsClient?: SpPermsClient; // テスト用の差し替え
 }
+
+// ★読み出す列を手で並べると、列を足したときにここを直し忘れて **その列が永久に空** になる
+//   （VulnKind / CveIds で実際に踏んだ）。スキーマから引く。
+export const TICKET_FIELDS = ['Title', ...rasTicketFields.map((f) => f.name)];
+export const ASSET_FIELDS = ['Title', ...rasAssetFields.map((f) => f.name)];
+
+/** 書き込む内容が同じか。★比較する列を手で選ぶと、選び忘れた列は更新されない。 */
+const sameRow = (a: Record<string, unknown>, b: Record<string, unknown>): boolean =>
+  JSON.stringify(a) === JSON.stringify(b);
 
 export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Promise<void> } {
   const http = o.http ?? createSpHttp(o);
@@ -224,12 +233,12 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
     // --- 独自RAS ---
     async readRasAssets() {
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'TrackingMethod', 'RegisteredAt', 'LastScan', 'BusinessCompany', 'ManagementCompany', 'Note', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ASSET_FIELDS);
       return rows.map(rowToRasAsset);
     },
 
     async syncRasAssets(assets) {
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'TrackingMethod', 'RegisteredAt', 'LastScan', 'BusinessCompany', 'ManagementCompany', 'Note', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ASSET_FIELDS);
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
       for (const a of assets) {
@@ -237,11 +246,9 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
         if (!cur) { await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a)); added++; continue; }
         byKey.delete(a.key);
         // 変化が無いなら書かない（毎回の取込で全行を更新すると SP の版数が無駄に増える）。
+        // ★チケット側と同じ理由で、比較する列は手で選ばない。
         const same = rowToRasAsset(cur);
-        if (same.settenId === a.settenId && same.ip === a.ip && same.fqdn === a.fqdn && same.status === a.status
-          && same.registeredAt === a.registeredAt && same.lastScan === a.lastScan
-          && same.trackingMethod === a.trackingMethod && same.note === a.note
-          && same.businessCompany === a.businessCompany && same.managementCompany === a.managementCompany) continue;
+        if (sameRow(rasAssetToRow(same), rasAssetToRow(a))) continue;
         if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) updated++;
       }
       // Qualys から消えた資産は行も消す（一覧に幽霊が残らないように）。
@@ -251,7 +258,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
     async syncRasAssetsPartial(assets) {
       // 選択同期。★載っていない行は消さない（選ばなかった資産まで消えてしまう）。
-      const rows = await lists.all(LIST_RAS_ASSETS, ['HostId', 'SettenId', 'Ip', 'Fqdn', 'AliveStatus', 'TrackingMethod', 'RegisteredAt', 'LastScan', 'BusinessCompany', 'ManagementCompany', 'Note', 'DedupKey']);
+      const rows = await lists.all(LIST_RAS_ASSETS, ASSET_FIELDS);
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0;
       for (const a of assets) {
@@ -307,12 +314,12 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     },
 
     async readRasTickets() {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn', 'ReportZip', 'ReportUpdatedAt', 'Note']);
+      const rows = await lists.all(LIST_RAS_TICKETS, TICKET_FIELDS);
       return rows.map(rowToRasTicket);
     },
 
     async syncRasTickets(tickets) {
-      const rows = await lists.all(LIST_RAS_TICKETS, ['Title', 'State', 'HostId', 'Ip', 'Fqdn', 'SettenId', 'BusinessCompany', 'ManagementCompany', 'FirstFound', 'LastFound', 'ChangeKind', 'ChangedAt', 'ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn', 'ReportZip', 'ReportUpdatedAt', 'Note']);
+      const rows = await lists.all(LIST_RAS_TICKETS, TICKET_FIELDS);
       // チケット番号は Title（このリストの一意キー）。
       const byKey = new Map(rows.map((r) => [String(r.Title ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
@@ -331,10 +338,10 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
           reportZip: t.reportZip ?? same.reportZip, reportedAt: t.reportedAt ?? same.reportedAt,
           note: t.note ?? same.note, // メモは同期で消さない
         };
-        if (same.state === merged.state && same.businessCompany === merged.businessCompany
-          && same.managementCompany === merged.managementCompany && same.lastFound === merged.lastFound
-          && same.ip === merged.ip && same.fqdn === merged.fqdn && same.settenId === merged.settenId
-          && same.change === merged.change && same.reportJa === merged.reportJa && same.reportEn === merged.reportEn) continue;
+        // ★比較する列を手で選んでいたため、初回検知日・脆弱性種別・CVE ID だけが
+        //   変わった行が「変化なし」と判定されて永久に更新されなかった。
+        //   実際に書き込む内容どうしを比べる。
+        if (sameRow(rasTicketToRow(same), rasTicketToRow(merged))) continue;
         if (await lists.update(LIST_RAS_TICKETS, cur.Id, rasTicketToRow(merged), cur.__etag)) updated++;
       }
       // ★取得は「直近1ヶ月の変化分」のことがあるので、載っていないチケットは消さない。
