@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseDynamicLists, parseCveList, diffCves, cveUpdateFields, parseSearchListIds,
-  normalizeCve, searchListSummary,
+  normalizeCve, searchListSummary, planSearchListUpdates, chunkCves, CVE_PER_LIST,
+  type DynamicList,
 } from '../src/searchlist';
 
 // dynamic_list_output.dtd に沿った最小の応答。
@@ -95,5 +96,90 @@ describe('結果のサマリ', () => {
     expect(searchListSummary({ id: '1', title: 'A', added: [], removed: [], updated: false, error: '権限なし' })).toMatch(/失敗/);
     expect(searchListSummary({ id: '1', title: 'A', added: [], removed: [], updated: false })).toMatch(/差分なし/);
     expect(searchListSummary({ id: '1', title: 'A', added: ['CVE-1'], removed: [], updated: true })).toMatch(/追加 1 \/ 削除 0/);
+  });
+});
+
+describe('複数リストへの割り当て', () => {
+  const L = (id: string, title: string, cves: string[]): DynamicList => ({ id, title, cves });
+  const cve = (n: number): string => `CVE-2024-${String(n).padStart(4, '0')}`;
+  const many = (n: number): string[] => Array.from({ length: n }, (_, i) => cve(i + 1));
+
+  it('1リスト150件で切り、あふれたら次のリストへ', () => {
+    expect(CVE_PER_LIST).toBe(150);
+    expect(chunkCves(many(310)).map((c) => c.length)).toEqual([150, 150, 10]);
+  });
+
+  it('空のリストへ上から順に詰める', () => {
+    const p = planSearchListUpdates(many(200), ['1', '2'], [L('1', 'A', []), L('2', 'B', [])]);
+    expect(p.assignments.map((a) => a.cves.length)).toEqual([150, 50]);
+    expect(p.overflow).toEqual([]);
+  });
+
+  it('CVE を1件足しても、更新するのは1本だけ（既存の割り当てを動かさない）', () => {
+    // ★位置で詰め直すと、Excel の先頭に1件足しただけで全リストの中身がずれ、
+    //   毎回すべてのリストを更新することになる。
+    const cur = [L('1', 'A', many(150)), L('2', 'B', [cve(151), cve(152)])];
+    const p = planSearchListUpdates(['CVE-NEW', ...many(152)], ['1', '2'], cur);
+    expect(p.assignments[0].changed).toBe(false);                 // 満杯の1本目は触らない
+    expect(p.assignments[0].cves).toEqual(many(150));             // 中身もそのまま
+    expect(p.assignments[1].added).toEqual(['CVE-NEW']);          // 空きのある2本目へ
+    expect(p.assignments.filter((a) => a.changed)).toHaveLength(1);
+  });
+
+  it('Excel から消えた CVE は、入っていたリストから外す', () => {
+    const cur = [L('1', 'A', ['CVE-1', 'CVE-2']), L('2', 'B', ['CVE-3'])];
+    const p = planSearchListUpdates(['CVE-1', 'CVE-3'], ['1', '2'], cur);
+    expect(p.assignments[0].removed).toEqual(['CVE-2']);
+    expect(p.assignments[0].cves).toEqual(['CVE-1']);
+    expect(p.assignments[1].changed).toBe(false);
+  });
+
+  it('新しい CVE は空きのあるリストへ入る（1本目が満杯なら2本目）', () => {
+    const cur = [L('1', 'A', many(150)), L('2', 'B', [])];
+    const p = planSearchListUpdates([...many(150), 'CVE-NEW'], ['1', '2'], cur);
+    expect(p.assignments[0].changed).toBe(false);
+    expect(p.assignments[1].added).toEqual(['CVE-NEW']);
+  });
+
+  it('リストが足りなければ、あふれた分と必要数を返す（黙って捨てない）', () => {
+    const p = planSearchListUpdates(many(400), ['1'], [L('1', 'A', [])]);
+    expect(p.assignments[0].cves).toHaveLength(150);
+    expect(p.overflow).toHaveLength(250);
+    expect(p.needMoreLists).toBeGreaterThanOrEqual(2);
+  });
+
+  it('満杯のリストが減っても、後ろのリストから繰り上げない', () => {
+    // ★「詰め直す」と、消えた1件のために2本目以降が全部ずれて全リスト更新になる。
+    //   既存の CVE はリスト間で動かさない。空いたままで良い。
+    const cur = [L('1', 'A', many(150)), L('2', 'B', [cve(151), cve(152)])];
+    const want = [...many(150).filter((c) => c !== cve(5)), cve(151), cve(152)]; // 1本目から1件消える
+    const p = planSearchListUpdates(want, ['1', '2'], cur);
+    expect(p.assignments[0].cves).toHaveLength(149);          // 空いたまま
+    expect(p.assignments[0].removed).toEqual([cve(5)]);
+    expect(p.assignments[1].changed).toBe(false);             // 2本目は動かさない
+    expect(p.assignments[1].cves).toEqual([cve(151), cve(152)]);
+  });
+
+  it('作り直しでは既存の割り当てを無視して Excel の順に詰め直す', () => {
+    // 1本目が満杯・2本目に2件、の状態で先頭に1件足すと、通常は2本目だけが動く。
+    // 作り直しでは全体が1件ずつずれるので、両方が更新対象になる。
+    const cur = [L('1', 'A', many(150)), L('2', 'B', [cve(151), cve(152)])];
+    const want = ['CVE-NEW', ...many(152)];
+    const normal = planSearchListUpdates(want, ['1', '2'], cur);
+    const rebuilt = planSearchListUpdates(want, ['1', '2'], cur, CVE_PER_LIST, true);
+    expect(normal.assignments.filter((a) => a.changed)).toHaveLength(1);
+    expect(rebuilt.assignments[0].cves[0]).toBe('CVE-NEW');       // 先頭から詰め直す
+    expect(rebuilt.assignments.filter((a) => a.changed)).toHaveLength(2);
+  });
+
+  it('作り直しでも中身が同じリストは更新しない', () => {
+    const cur = [L('1', 'A', many(150)), L('2', 'B', [])];
+    const r = planSearchListUpdates(many(150), ['1', '2'], cur, CVE_PER_LIST, true);
+    expect(r.assignments.every((a) => !a.changed)).toBe(true);
+  });
+
+  it('中身が同じなら changed=false（無駄な更新をしない）', () => {
+    const cur = [L('1', 'A', ['CVE-1', 'CVE-2'])];
+    expect(planSearchListUpdates(['cve-2', ' CVE-1 '], ['1'], cur).assignments[0].changed).toBe(false);
   });
 });

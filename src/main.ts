@@ -29,6 +29,7 @@ import { ticketQuery, resolveTicketMode } from './tickets';
 import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
 import {
   parseSearchListIds, parseCveList, parseDynamicLists, diffCves, cveUpdateFields, searchListSummary,
+  planSearchListUpdates, CVE_PER_LIST,
 } from './searchlist';
 import { classifyTickets, reportTargets, reportPath, reportTitle, TICKET_CHANGE_LABEL, type DailyRunSummary, type ReportTarget } from './daily';
 import { readXlsxSheet, columnUntilBlankRow } from './xlsx-read';
@@ -1068,6 +1069,10 @@ async function openRasCsvImport(): Promise<void> {
 function openDailyUpdate(): void {
   const cbQualys = el('input', { type: 'checkbox' }) as HTMLInputElement; cbQualys.checked = true;
   const cbSearch = el('input', { type: 'checkbox' }) as HTMLInputElement; cbSearch.checked = true;
+  // 作り直しは既定 OFF。ONだと割り当てが崩れて全リストが更新され得る。
+  const cbRebuild = el('input', { type: 'checkbox' }) as HTMLInputElement;
+  const syncRebuild = (): void => { cbRebuild.disabled = !cbSearch.checked; };
+  cbSearch.addEventListener('change', syncRebuild);
   const prog = el('div', { class: 'qam-progress', style: 'display:none' });
   const setProg = (msg: string, busy: boolean): void => {
     clear(prog); prog.style.display = 'flex';
@@ -1079,16 +1084,20 @@ function openDailyUpdate(): void {
       el('div', { class: 'qam-chip-row' }, [
         el('label', { class: 'qam-pick' }, [cbQualys, 'Qualys情報を更新する']),
         el('label', { class: 'qam-pick' }, [cbSearch, 'Search Listを更新する']),
+        el('label', { class: 'qam-pick' }, [cbRebuild, 'Search List を作り直す']),
       ]),
     ]),
-    callout('Qualys情報の更新は、取込と同じ内容（資産・チケット・検査）を取り直して独自RASに反映します。Search List の更新は、SharePoint 上の Excel の CVE 一覧に合わせて Qualys の動的検索リストを更新します。'),
+    callout(`Qualys情報の更新は、取込と同じ内容（資産・チケット・検査）を取り直して独自RASに反映します。`
+      + `Search List の更新は、SharePoint 上の Excel の CVE 一覧に合わせて Qualys の動的検索リストを更新します`
+      + `（1リストあたり ${CVE_PER_LIST} 件。通常は差分のあるリストだけを更新します）。`
+      + `「作り直す」を選ぶと既存の割り当てを無視して Excel の順に詰め直すため、複数のリストが一度に書き換わります。`),
     prog,
   ]);
   openModal({
     title: '日次更新', body, primaryLabel: 'OK', wide: true, dismissBackdrop: false,
     onPrimary: async () => {
       if (!cbQualys.checked && !cbSearch.checked) { toast('実行する内容を選んでください', 'error'); return false; }
-      const r = await runDailyUpdate(cbQualys.checked, cbSearch.checked, setProg);
+      const r = await runDailyUpdate(cbQualys.checked, cbSearch.checked, cbRebuild.checked && cbSearch.checked, setProg);
       if (r) { showDailyResult(r); return true; }
       return false;
     },
@@ -1097,7 +1106,7 @@ function openDailyUpdate(): void {
 
 // 日次更新の本体。失敗しても途中まで残す（全部やり直しにしない）。
 async function runDailyUpdate(
-  doQualys: boolean, doSearch: boolean, setProg: (msg: string, busy: boolean) => void,
+  doQualys: boolean, doSearch: boolean, rebuild: boolean, setProg: (msg: string, busy: boolean) => void,
 ): Promise<DailyRunSummary | null> {
   const cfg = await getConfig();
   const creds = await resolveQualysCreds();
@@ -1149,7 +1158,7 @@ async function runDailyUpdate(
 
     if (doSearch) {
       setProg('検索リストを更新中…', true);
-      await runSearchListUpdate(creds, cfg, summary, setProg);
+      await runSearchListUpdate(creds, cfg, summary, setProg, rebuild);
     }
     setProg('完了しました', false);
     recordOp('日次更新', dailyOpDetail(summary));
@@ -1173,6 +1182,7 @@ const dailyOpDetail = (s: DailyRunSummary): string =>
 // Excel の CVE 一覧に合わせて動的検索リストを更新する。
 async function runSearchListUpdate(
   creds: QualysCreds, cfg: RelayConfig, summary: DailyRunSummary, setProg: (m: string, b: boolean) => void,
+  rebuild = false,
 ): Promise<void> {
   const ids = parseSearchListIds(cfg.searchListIds || '');
   if (!ids.length) { summary.notes.push('検索リストIDが未設定です（設定 → 共通設定 → 日次更新 で登録してください）'); return; }
@@ -1200,17 +1210,29 @@ async function runSearchListUpdate(
   setProg(`検索リストを確認中…（CVE ${want.length} 件）`, true);
   const lists = parseDynamicLists(await fetchSearchLists(creds, ids));
   const author = localStorage.getItem(LS.author) || '';
-  for (const id of ids) {
-    const cur = lists.find((l) => l.id === id);
-    if (!cur) { summary.searchLists.push({ id, title: '', added: [], removed: [], updated: false, error: '検索リストが見つかりません（IDと権限を確認してください）' }); continue; }
-    const d = diffCves(want, cur.cves);
-    if (!d.changed) { summary.searchLists.push({ id, title: cur.title, added: [], removed: [], updated: false }); continue; }
+  // 設定に並べた順に CVE_PER_LIST 件ずつ詰める。あふれた分は入れる先が無い。
+  // 今どのリストに何が入っているか（Qualys の現状）を土台に割り当てる。
+  // 位置で詰め直すと、Excel に1件足しただけで全リストがずれて全部更新になる。
+  const plan = planSearchListUpdates(want, ids, lists, CVE_PER_LIST, rebuild);
+  if (rebuild) summary.notes.push('「作り直す」が指定されたため、既存の割り当てを無視して Excel の順に詰め直しました');
+  if (plan.overflow.length) {
+    // ★黙って捨てない。リストが足りないことと、あと何個要るかを出す。
+    summary.notes.push(`CVE が ${want.length} 件あり、検索リスト ${ids.length} 個（1個あたり ${CVE_PER_LIST} 件）に収まりません。`
+      + `${plan.overflow.length} 件が未登録です（あと ${plan.needMoreLists} 個の検索リストを作って設定に追加してください）`);
+  }
+  for (const a of plan.assignments) {
+    if (!lists.some((l) => l.id === a.id)) {
+      summary.searchLists.push({ id: a.id, title: '', added: [], removed: [], updated: false, error: '検索リストが見つかりません（IDと権限を確認してください）' });
+      continue;
+    }
+    // 中身が動いていないリストは触らない（更新履歴を無駄に汚さない）。
+    if (!a.changed) { summary.searchLists.push({ id: a.id, title: a.title, added: [], removed: [], updated: false }); continue; }
     try {
-      setProg(`検索リスト ${cur.title || id} を更新中…`, true);
-      await updateSearchList(creds, author, cveUpdateFields(id, want));
-      summary.searchLists.push({ id, title: cur.title, added: d.added, removed: d.removed, updated: true });
+      setProg(`検索リスト ${a.title || a.id} を更新中…（${a.cves.length} 件）`, true);
+      await updateSearchList(creds, author, cveUpdateFields(a.id, a.cves));
+      summary.searchLists.push({ id: a.id, title: a.title, added: a.added, removed: a.removed, updated: true });
     } catch (e) {
-      summary.searchLists.push({ id, title: cur.title, added: d.added, removed: d.removed, updated: false, error: (e as Error).message });
+      summary.searchLists.push({ id: a.id, title: a.title, added: a.added, removed: a.removed, updated: false, error: (e as Error).message });
     }
   }
 }
@@ -2675,7 +2697,7 @@ async function openSettings(): Promise<void> {
           { key: 'searchList', label: '検索リストと CVE 一覧', render: () => ({
             body: el('div', {}, [
               setHead('検索リストと CVE 一覧', 'Excel の CVE 一覧に合わせて Qualys の動的検索リストを更新します。'),
-              field('更新する検索リストID', slIds, '1行1件（カンマ区切りも可）。数字だけを受け付けます。Qualys の「検索リスト」画面の ID です。未設定だと日次更新の Search List 更新は実行できません。'),
+              field('更新する検索リストID', slIds, `1行1件（カンマ区切りも可）。数字だけを受け付けます。Qualys の「検索リスト」画面の ID です。CVE は上から順に1リストあたり ${CVE_PER_LIST} 件ずつ詰め、あふれたら次のIDへ入れます。足りない場合はその旨を日次更新の結果に出します。`),
               field('CVE対応策一覧の Excel', cvePath,
                 `別サイトに置いてある場合は https:// から始まる URL を貼ってください（ファイルを右クリック →「パスのコピー」）。保管先（${cfg.spLibrary || 'QamData'}）に置く場合は相対パスでも指定できます。どちらもシート「CVE対応策一覧」の A3 以下を CVE 番号として読みます。`),
             ]),

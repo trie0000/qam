@@ -78,6 +78,107 @@ export function parseSearchListIds(text: string): string[] {
   return out;
 }
 
+// 1 つの検索リストに入れる CVE の上限。運用で決めた値。
+// 超えた分は次の検索リストへこぼす（Qualys 側の入力上限を避けるための分割）。
+export const CVE_PER_LIST = 150;
+
+/** 上限ごとに切り分ける。 */
+export function chunkCves(cves: string[], size = CVE_PER_LIST): string[][] {
+  const out: string[][] = [];
+  for (let i = 0; i < cves.length; i += size) out.push(cves.slice(i, i + size));
+  return out;
+}
+
+export interface SearchListAssignment {
+  id: string;
+  title: string;
+  /** 更新後にこのリストへ入れる CVE。 */
+  cves: string[];
+  /** このリストから外れる CVE。 */
+  removed: string[];
+  /** このリストへ新しく入る CVE。 */
+  added: string[];
+  /** 実際に Qualys を更新する必要があるか。 */
+  changed: boolean;
+}
+
+export interface SearchListPlan {
+  assignments: SearchListAssignment[];
+  /** どのリストにも入れられなかった CVE。★黙って捨てない。 */
+  overflow: string[];
+  /** あと何個リストがあれば収まるか。 */
+  needMoreLists: number;
+}
+
+/**
+ * 「今どのリストに何が入っているか」を土台に、動いた分だけを割り当てる。
+ *
+ * ★位置で機械的に詰め直さない。Excel の先頭に 1 件足しただけで全リストの中身が
+ *   ずれ、毎回すべてのリストを更新することになる（Qualys 側の更新履歴も汚れる）。
+ * 手順:
+ *   1. 各リストに今ある CVE のうち、Excel にも在るものはそのまま残す
+ *   2. Excel から消えたものは、入っていたリストから外す
+ *   3. Excel にしか無いものを、空きのあるリストへ設定順に入れる
+ *   4. 中身が変わったリストだけ changed=true
+ *
+ * current は Qualys から読んだ現状。どのCVEがどのリストに居るかの管理はこれ自体が
+ * 台帳なので、別に対応表を持たない（別に持つと Qualys の実態とずれる）。
+ */
+export function planSearchListUpdates(
+  want: string[], ids: string[], current: DynamicList[], size = CVE_PER_LIST, rebuild = false,
+): SearchListPlan {
+  const wantSet = new Set(want.map(normalizeCve).filter(Boolean));
+  const byId = new Map(current.map((l) => [l.id, l]));
+
+  // 作り直し: 既存の割り当てを無視し、Excel の順に size 件ずつ詰め直す。
+  // 割り当てが崩れて全リストが更新され得るので、明示的に選んだときだけ行う。
+  if (rebuild) {
+    const chunks = chunkCves(want.map(normalizeCve).filter(Boolean), size);
+    const assignments = ids.map((id, i) => {
+      const cur = byId.get(id);
+      const curCves = (cur?.cves ?? []).map(normalizeCve);
+      const cves = chunks[i] ?? [];
+      const d = diffCves(cves, curCves);
+      return { id, title: cur?.title ?? '', cves, added: d.added, removed: d.removed, changed: d.changed };
+    });
+    const overflow = chunks.slice(ids.length).flat();
+    return { assignments, overflow, needMoreLists: overflow.length ? chunks.length - ids.length : 0 };
+  }
+
+  // 1〜2: 既存の割り当てを維持しつつ、Excel から消えたものを外す。
+  const kept = ids.map((id) => {
+    const cur = byId.get(id);
+    const curCves = (cur?.cves ?? []).map(normalizeCve);
+    return {
+      id, title: cur?.title ?? '', curCves,
+      keep: curCves.filter((c) => wantSet.has(c)),
+      removed: curCves.filter((c) => !wantSet.has(c)),
+    };
+  });
+
+  // 3: どのリストにも無い CVE を、空きのあるリストへ設定順に入れる。
+  const placed = new Set(kept.flatMap((k) => k.keep));
+  const fresh = want.map(normalizeCve).filter((c) => c && !placed.has(c));
+  const added: string[][] = ids.map(() => []);
+  let i = 0;
+  for (const c of fresh) {
+    while (i < kept.length && kept[i].keep.length + added[i].length >= size) i++;
+    if (i >= kept.length) break; // 空きが無い＝あふれ
+    added[i].push(c);
+  }
+  const overflow = fresh.slice(added.reduce((n, a) => n + a.length, 0));
+
+  const assignments: SearchListAssignment[] = kept.map((k, n) => {
+    const cves = [...k.keep, ...added[n]];
+    return {
+      id: k.id, title: k.title, cves, added: added[n], removed: k.removed,
+      changed: added[n].length > 0 || k.removed.length > 0,
+    };
+  });
+  const free = assignments.reduce((n, a) => n + Math.max(0, size - a.cves.length), 0);
+  return { assignments, overflow, needMoreLists: overflow.length ? Math.ceil((overflow.length - free) / size) || 1 : 0 };
+}
+
 /** 1 リストぶんの更新結果（画面と操作履歴で共有する）。 */
 export interface SearchListResult {
   id: string;
