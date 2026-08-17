@@ -229,6 +229,15 @@ export function qualysErrorText(xml: string): string {
  *   失敗かどうかは <CODE> の有無で見る。
  */
 export function qualysActionError(xml: string): string {
+  // ★<RETURN status="FAILED"> の形もある（<CODE> を持たない）。これを拾わないと
+  //   「理由の分からない失敗」になる。実際にレポート作成で踏んだ。
+  const ret = /<RETURN\b[^>]*status\s*=\s*"FAILED"[^>]*>([\s\S]*?)<\/RETURN>/i.exec(xml);
+  if (ret) {
+    const num = /number\s*=\s*"([^"]+)"/i.exec(ret[0])?.[1] ?? '';
+    const msg = (/<MESSAGE>([\s\S]*?)<\/MESSAGE>/i.exec(ret[1])?.[1] ?? ret[1])
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() || 'Qualys がエラーを返しました';
+    return num ? `${msg}（コード ${num}）` : msg;
+  }
   if (/<(SIMPLE|GENERIC)_RETURN/i.test(xml)) {
     if (!/<CODE>/i.test(xml)) return '';
     const code = xml.match(/<CODE>([\s\S]*?)<\/CODE>/i)?.[1]?.trim() ?? '';
@@ -238,6 +247,14 @@ export function qualysActionError(xml: string): string {
   }
   const e = xml.match(/<ERROR[^>]*>([\s\S]*?)<\/ERROR>/i);
   return e ? e[1].replace(/\s+/g, ' ').trim() : '';
+}
+
+/** 応答をそのまま出すための短縮（原因が分からないときに中身を見せる）。 */
+export function responseSnippet(xml: string, max = 300): string {
+  const s = (xml ?? '').replace(/<\?xml[^>]*\?>/gi, '').replace(/<!DOCTYPE[^>]*>/gi, '')
+    .replace(/\s+/g, ' ').trim();
+  if (!s) return '(応答が空でした)';
+  return s.length > max ? s.slice(0, max) + ' …' : s;
 }
 
 // 四半期検査の取得。実体は並列プール（downloadEntitiesParallel）に載せる。
@@ -478,7 +495,9 @@ export async function launchScanReport(
   if (err) throw new Error(err);
   // SIMPLE_RETURN の ITEM_LIST に KEY=ID / VALUE=<id> で返る。
   const id = /<KEY>\s*ID\s*<\/KEY>\s*<VALUE>\s*(\d+)\s*<\/VALUE>/i.exec(xml)?.[1] ?? '';
-  if (!id) throw new Error('レポートIDを取得できませんでした');
+  // ★ここで応答を捨てると「レポートIDを取得できませんでした」しか残らず、
+  //   何が起きたのか分からなくなる（実際に大量に出て原因を追えなかった）。中身を載せる。
+  if (!id) throw new Error(`レポートIDを取得できませんでした (HTTP ${res.status}) — 応答: ${responseSnippet(xml)}`);
   return id;
 }
 

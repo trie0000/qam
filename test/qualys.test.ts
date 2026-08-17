@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { countSubscriptionIps } from '../src/qualys';
+import { countSubscriptionIps, qualysActionError, responseSnippet } from '../src/qualys';
 
 const wrap = (inner: string): string => `<IP_LIST_OUTPUT><RESPONSE><IP_SET>${inner}</IP_SET></RESPONSE></IP_LIST_OUTPUT>`;
 
@@ -107,5 +107,38 @@ describe('extractIpTokens（単体/レンジ抽出）', () => {
     const t = extractIpTokens(wrapIp('<IP>10.0.0.1</IP><IP network_id="3">10.0.0.2</IP><IP_RANGE>10.0.0.10-10.0.0.12</IP_RANGE><IP>bad</IP>'));
     expect(t.singles).toEqual(['10.0.0.1', '10.0.0.2']);
     expect(t.ranges).toEqual(['10.0.0.10-10.0.0.12']);
+  });
+});
+
+describe('Qualys のエラー応答の読み取り', () => {
+  it('★<RETURN status="FAILED"> も拾う（<CODE> を持たない形）', () => {
+    // これを拾えず「レポートIDを取得できませんでした」だけが並んで原因を追えなかった。
+    const xml = '<?xml version="1.0"?><!DOCTYPE GENERIC_RETURN SYSTEM "x.dtd"><GENERIC_RETURN>'
+      + '<API name="index.php"><RETURN status="FAILED" number="1960">'
+      + '<MESSAGE>You have reached the maximum number of allowed concurrent running reports.</MESSAGE>'
+      + '</RETURN></API></GENERIC_RETURN>';
+    expect(qualysActionError(xml)).toBe('You have reached the maximum number of allowed concurrent running reports.（コード 1960）');
+  });
+
+  it('MESSAGE が無くても本文を出す', () => {
+    expect(qualysActionError('<GENERIC_RETURN><RETURN status="FAILED" number="999">Internal error</RETURN></GENERIC_RETURN>'))
+      .toBe('Internal error（コード 999）');
+  });
+
+  it('成功応答をエラーにしない', () => {
+    const ok = '<SIMPLE_RETURN><RESPONSE><TEXT>New report launched</TEXT>'
+      + '<ITEM_LIST><ITEM><KEY>ID</KEY><VALUE>12345</VALUE></ITEM></ITEM_LIST></RESPONSE></SIMPLE_RETURN>';
+    expect(qualysActionError(ok)).toBe('');
+  });
+
+  it('<CODE> を持つ従来の形も引き続き読む', () => {
+    expect(qualysActionError('<SIMPLE_RETURN><RESPONSE><CODE>1905</CODE><TEXT>Bad template</TEXT></RESPONSE></SIMPLE_RETURN>'))
+      .toBe('Bad template（コード 1905）');
+  });
+
+  it('中身を見せるための短縮（空なら空と分かるように）', () => {
+    expect(responseSnippet('')).toBe('(応答が空でした)');
+    expect(responseSnippet('<?xml version="1.0"?><A>  x   y </A>')).toBe('<A> x y </A>');
+    expect(responseSnippet('y'.repeat(400)).endsWith(' …')).toBe(true);
   });
 });
