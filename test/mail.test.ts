@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fillTemplate, unresolvedKeys, buildDraft, escapeHtml, nl2br } from '../src/mail';
+import { fillTemplate, unresolvedKeys, buildDraft } from '../src/mail';
 
 describe('メールテンプレートの差し込み', () => {
   it('{{キー}} を差し替える', () => {
@@ -12,19 +12,10 @@ describe('メールテンプレートの差し込み', () => {
     expect(unresolvedKeys('{{a}}/{{b}}', { a: 'x' })).toEqual(['b']);
   });
 
-  it('値に含まれる HTML は無害化する（本文は HTML として送るため）', () => {
-    expect(escapeHtml('A&B <script>')).toBe('A&amp;B &lt;script&gt;');
-    const d = buildDraft(['x@example.com'], { subject: 's', body: '{{n}}' }, { n: '<b>悪意</b>' });
-    expect(d.bodyHtml).toBe('&lt;b&gt;悪意&lt;/b&gt;');
-  });
-
-  it('リンクなど HTML のまま入れたい値は rawVars で渡す', () => {
-    const d = buildDraft(['x@example.com'], { subject: 's', body: '{{link}}' }, {}, { link: '<a href="u">一覧</a>' });
-    expect(d.bodyHtml).toContain('<a href="u">');
-  });
-
-  it('本文の改行は <br> にする（設定は複数行で入力する）', () => {
-    expect(nl2br('1行目\n2行目')).toBe('1行目<br>\n2行目');
+  it('本文はテキストのまま（HTML に変換しない）', () => {
+    // ★HTML にすると受け手の環境で見え方が変わり、引用や転送でも崩れる。
+    const d = buildDraft(['x@example.com'], { subject: 's', body: '1行目\n2行目 {{n}}' }, { n: 'A&B <x>' });
+    expect(d.body).toBe('1行目\n2行目 A&B <x>');
   });
 
   it('宛先は ; 区切り、空は落とす', () => {

@@ -102,9 +102,9 @@ function Invoke-OutlookDraft { param($Body, [scriptblock]$Log = $null)
         $mail.Subject = [string]$Body.subject
         if ($Body.cc) { $mail.CC = [string]$Body.cc }
         if ($Body.replyTo) { $mail.ReplyRecipientNames = [string]$Body.replyTo }
-        # 和文フォントを明示しないと Outlook が HTML 既定の Times New Roman で描画する。
-        $mail.HTMLBody = '<div style="font-family:''游ゴシック'',''Yu Gothic'',''Meiryo UI'',sans-serif;font-size:11pt;color:#000;">' +
-            [string]$Body.bodyHtml + '</div>'
+        # ★テキストメールで作る。HTML にすると受け手の環境で見え方が変わり、
+        #   引用や転送のときにも崩れる。Body に入れれば Outlook はテキスト形式で開く。
+        $mail.Body = [string]$Body.body
         # ★ここで .Send() は絶対に呼ばない。下書きを開くだけ。
         $insp = $mail.GetInspector
         $insp.Display()

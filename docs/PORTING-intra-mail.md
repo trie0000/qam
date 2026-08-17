@@ -41,6 +41,7 @@ $res = Invoke-OutlookDraft $Body { param($t) 自前のログ $t }
 
 ## 守ること
 
+- **メールはテキスト形式で作る。** `MailItem.Body` に入れる（`HTMLBody` は使わない）。
 - **メールは絶対に自動送信しない。** `Invoke-OutlookDraft` は下書きを表示するところまで。
   `build.js` に「中継サーバへ `.Send()` が混入していないか」を検査するガードがあるので、
   移植先にも同じ検査を入れること。

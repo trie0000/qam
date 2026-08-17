@@ -17,7 +17,7 @@ export const RELAY = relayOverride() || 'http://127.0.0.1:18090';
 // このアプリ本体が必要とする中継サーバの版。中継サーバ側の $QAM_RELAY_CONTRACT と揃える。
 // ★アプリ本体は更新ボタンで新しくなるが、中継サーバは起動し直すまで古いまま。
 //   古い中継サーバは新しい設定キーを知らないので、保存したつもりが黙って捨てられる。
-export const RELAY_CONTRACT_REQUIRED = 2;
+export const RELAY_CONTRACT_REQUIRED = 4;
 
 export const LS = {
   theme: 'qam.theme',
@@ -28,6 +28,8 @@ export const LS = {
   author: 'qam.author',          // メモ(コメント)/操作履歴の記入者名
   // 英語レポート用の Qualys アカウント。レポートの言語はアカウントに紐づくので、
   // 既存アカウント（日本語）とは別にもう1組だけ持つ。
+  intraUser: 'qam.intra.user',      // 社内イントラの Global ID
+  intraSecret: 'qam.intra.secret',  // 同・パスワード（暗号文。平文は持たない）
   qualysUserEn: 'qam.qualys.user.en',
   qualysSecretEn: 'qam.qualys.secret.en',
   bundlePrev: 'qam.bundle.prev', // 本体を差し替える直前の版（更新後に「更新しました」を出すため）

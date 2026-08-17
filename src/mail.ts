@@ -9,7 +9,7 @@ export type MailVars = Record<string, string>;
 
 export interface MailTemplate {
   subject: string;
-  /** 本文（HTML）。{{名前}} を差し替える。 */
+  /** 本文（プレーンテキスト）。{{名前}} を差し替える。 */
   body: string;
   cc?: string;
   replyTo?: string;
@@ -18,7 +18,8 @@ export interface MailTemplate {
 export interface MailDraft {
   to: string;
   subject: string;
-  bodyHtml: string;
+  /** 本文（プレーンテキスト）。★HTML では送らない。 */
+  body: string;
   cc?: string;
   replyTo?: string;
 }
@@ -39,28 +40,16 @@ export function unresolvedKeys(text: string, vars: MailVars): string[] {
   return [...out];
 }
 
-/** HTML に混ぜる値のエスケープ（本文はそのまま HTML として送るため）。 */
-export const escapeHtml = (s: string): string =>
-  String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
-/** 改行を <br> にする（設定画面で複数行入力されたテンプレート用）。 */
-export const nl2br = (s: string): string => String(s ?? '').replace(/\r?\n/g, '<br>\n');
-
 /**
  * 下書き 1 通を組み立てる。
- * vars の値は HTML エスケープしてから差し込む（会社名等に & や < が混ざっても壊れない）。
- * リンクなど HTML のまま入れたい値は rawVars に置く。
+ * ★本文はプレーンテキスト。HTML では送らないので、エスケープも <br> 変換も要らない
+ *   （値に < や & が入っても、そのままの文字として届く）。
  */
-export function buildDraft(
-  to: string[], tpl: MailTemplate, vars: MailVars, rawVars: MailVars = {},
-): MailDraft {
-  const escaped: MailVars = {};
-  for (const [k, v] of Object.entries(vars)) escaped[k] = escapeHtml(v);
-  const all = { ...escaped, ...rawVars };
+export function buildDraft(to: string[], tpl: MailTemplate, vars: MailVars): MailDraft {
   return {
     to: to.filter(Boolean).join('; '),
-    subject: fillTemplate(tpl.subject, { ...vars, ...rawVars }), // 件名は素のまま
-    bodyHtml: fillTemplate(nl2br(tpl.body), all),
+    subject: fillTemplate(tpl.subject, vars),
+    body: fillTemplate(tpl.body, vars),
     cc: tpl.cc?.trim() || undefined,
     replyTo: tpl.replyTo?.trim() || undefined,
   };

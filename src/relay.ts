@@ -109,6 +109,9 @@ export interface RelayConfig { qualysBase: string; qualysUser: string; proxy: st
   reportTemplateEn: string; // 同（英語アカウント用）
   ticketTemplateJa: string; // チケット(Remediation)レポートのテンプレートID（日本語）
   ticketTemplateEn: string; // 同（英語）
+  intraLoginUrl: string;    // 体制表を置いている社内イントラのログインURL
+  intraPageUrl: string;     // 体制表へのリンクがあるページ
+  intraFilePattern: string; // ダウンロードするファイル名のパターン
   // ↓ qam.env でのみ設定する（画面は表示のみ。POST では受け付けない）
   bundleSource: string; bundleLocalBase: string; logDir: string;
   /** 中継サーバの取り決めの版（古い中継サーバでは undefined）。 */

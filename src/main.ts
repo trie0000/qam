@@ -31,6 +31,10 @@ import {
   parseSearchListIds, parseCveList, parseDynamicLists, diffCves, cveUpdateFields, searchListSummary,
   planSearchListUpdates, CVE_PER_LIST,
 } from './searchlist';
+import { normalizeTemplates, EMPTY_TEMPLATES, buildCompanyMails, openTickets, ticketsWithoutCompany } from './ras-mail';
+import { parseContacts, contactsByScope, type Contact } from './contacts';
+import { readXlsxSheetLike } from './xlsx-read';
+import { fetchIntraFile, openMailDraft } from './api/intra-mail';
 import { classifyTickets, reportTargets, reportPath, reportTitle, TICKET_CHANGE_LABEL, type DailyRunSummary, type ReportTarget } from './daily';
 import { readXlsxSheet, columnUntilBlankRow } from './xlsx-read';
 import { isAbsoluteUrl, parseSpFileUrl, spFileValueUrl } from './sp-url';
@@ -829,6 +833,7 @@ async function renderTickets(subbar: HTMLElement, count: HTMLElement, toolbar: H
 // データは SharePoint のリスト（QamRasAssets / QamRasTickets）。スナップショットではなく
 // リストなのは、事業会社ごとにアイテム単位で参照権限を分けるため。
 const RAS_PERMS_KEY = 'ras:perms';
+const RAS_MAIL_KEY = 'ras:mail';
 const loadRasPerms = async (): Promise<RasPerms> => normalizeRasPerms(await repo.readSharedJson(RAS_PERMS_KEY, null));
 
 async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
@@ -840,7 +845,13 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
   } else {
     const dailyBtn = el('button', { class: 'btn btn--sm btn--primary', title: 'Qualys の取り直しと検索リストの更新をまとめて行います' }, ['日次更新']);
     dailyBtn.addEventListener('click', () => { openDailyUpdate(); });
-    toolbar.append(dailyBtn);
+    const monthlyBtn = el('button', { class: 'btn btn--sm', title: 'オープン中のチケットがある事業会社へ、月次メールの下書きをまとめて作ります（送信はしません）' }, ['月次メール下書き']);
+    // 押した時点の一覧を使う（ツールバーは一覧の読み込み前に組み立てるため）。
+    monthlyBtn.addEventListener('click', () => {
+      void repo.readRasTickets().then((all) => createCompanyMails(openTickets(all), 'monthly'))
+        .catch((e) => toast('チケットを読めませんでした: ' + (e as Error).message, 'error'));
+    });
+    toolbar.append(dailyBtn, monthlyBtn);
   }
   // 保管先の SharePoint リストを直接開けるようにする（権限の確認や手作業での修正用）。
   // URL は SharePoint に聞く（組み立てるとリスト名を変えたときに 404 になる）。
@@ -1056,7 +1067,11 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
         b.addEventListener('click', () => { void refreshReports(keys); });
         const sync = el('button', { class: 'btn btn--sm', title: '選んだチケットだけを SharePoint のリストへ同期します' }, ['選択分をSPOに同期']);
         sync.addEventListener('click', () => { void syncSelected('tickets', keys); });
-        return [b, sync];
+        const mail = el('button', { class: 'btn btn--sm', title: '選んだ脆弱性について、管理する事業会社宛のメール下書きを作ります（1社1通・送信はしません）' }, ['メール下書き']);
+        mail.addEventListener('click', () => {
+          void createCompanyMails(tickets.filter((t) => keys.includes(t.number)), 'adhoc');
+        });
+        return [b, sync, mail];
       },
     }));
     addExportButtons(toolbar, '独自RASチケット一覧', exportRef, columnRef);
@@ -1181,6 +1196,7 @@ async function openRasCsvImport(): Promise<void> {
 function openDailyUpdate(): void {
   const cbQualys = el('input', { type: 'checkbox' }) as HTMLInputElement; cbQualys.checked = true;
   const cbSpo = el('input', { type: 'checkbox' }) as HTMLInputElement; cbSpo.checked = true;
+  const cbMail = el('input', { type: 'checkbox' }) as HTMLInputElement; cbMail.checked = true;
   const cbSearch = el('input', { type: 'checkbox' }) as HTMLInputElement; cbSearch.checked = true;
   // 作り直しは既定 OFF。ONだと割り当てが崩れて全リストが更新され得る。
   // ★押せないチェックボックスは作らない（なぜ押せないのかが画面から分からない）。
@@ -1199,6 +1215,7 @@ function openDailyUpdate(): void {
       el('div', { class: 'qam-chip-row' }, [
         el('label', { class: 'qam-pick' }, [cbQualys, 'Qualys情報を更新する']),
         el('label', { class: 'qam-pick' }, [cbSpo, 'SPOリストを更新する']),
+        el('label', { class: 'qam-pick' }, [cbMail, '新規チケット検知時にメール下書きを作成する']),
         el('label', { class: 'qam-pick' }, [cbSearch, 'Search Listを更新する']),
         el('label', { class: 'qam-pick' }, [cbRebuild, 'Search List を作り直す']),
       ]),
@@ -1213,7 +1230,7 @@ function openDailyUpdate(): void {
     title: '日次更新', body, primaryLabel: 'OK', wide: true, dismissBackdrop: false,
     onPrimary: async () => {
       if (!cbQualys.checked && !cbSearch.checked) { toast('実行する内容を選んでください', 'error'); return false; }
-      const r = await runDailyUpdate(cbQualys.checked, cbSpo.checked, cbSearch.checked, cbRebuild.checked, setProg);
+      const r = await runDailyUpdate(cbQualys.checked, cbSpo.checked, cbMail.checked, cbSearch.checked, cbRebuild.checked, setProg);
       if (r) { showDailyResult(r); return true; }
       return false;
     },
@@ -1222,7 +1239,7 @@ function openDailyUpdate(): void {
 
 // 日次更新の本体。失敗しても途中まで残す（全部やり直しにしない）。
 async function runDailyUpdate(
-  doQualys: boolean, doSpo: boolean, doSearch: boolean, rebuild: boolean,
+  doQualys: boolean, doSpo: boolean, doMail: boolean, doSearch: boolean, rebuild: boolean,
   setProg: (msg: string, busy: boolean) => void,
 ): Promise<DailyRunSummary | null> {
   const cfg = await getConfig();
@@ -1278,6 +1295,13 @@ async function runDailyUpdate(
       const miss = missingReportSettings(cfg);
       if (miss.all) summary.notes.push('レポートのテンプレートIDが未設定のため、レポートは作りませんでした');
       else await buildScanReports(creds, cfg, reportTargets(changes), summary, setProg);
+
+      // 新しく開いた脆弱性について、事業会社ごとのメール下書きを作る（送信はしない）。
+      if (doMail) {
+        const fresh = changes.filter((c) => c.change === 'new' || c.change === 'reopened').map((c) => c.ticket);
+        if (fresh.length) { setProg('メール下書きを作成中…', true); await createCompanyMails(fresh, 'adhoc'); }
+        else summary.notes.push('新規に開いた脆弱性が無かったため、メール下書きは作りませんでした');
+      }
     }
 
     if (doSearch) {
@@ -1625,6 +1649,87 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
   } finally { setBusy(''); }
 }
 
+// 体制表（社内イントラ）から連絡先を取る。中継サーバがログインからダウンロードまでを行う。
+async function loadContacts(cfg: RelayConfig): Promise<Map<string, Contact[]>> {
+  const uid = localStorage.getItem(LS.intraUser) || '';
+  const secret = localStorage.getItem(LS.intraSecret) || '';
+  if (!cfg.intraLoginUrl || !cfg.intraPageUrl) throw new Error('体制表の取得元が未設定です（設定 → 共通設定 → メール → 連絡先（体制表）の取得元）');
+  if (!uid || !secret) throw new Error('社内イントラのアカウントが未設定です（設定 → 個人設定 → 接続）');
+  const r = await fetchIntraFile(RELAY, {
+    loginUrl: cfg.intraLoginUrl, pageUrl: cfg.intraPageUrl, uid, secret,
+    pattern: cfg.intraFilePattern || undefined,
+  });
+  if (!r.ok || !r.base64) throw new Error(r.error || '体制表を取得できませんでした');
+  const buf = base64ToBytes(r.base64).buffer as ArrayBuffer;
+  const sheet = await readXlsxSheetLike(buf, '体制含む');
+  const parsed = parseContacts(sheet.rows);
+  return contactsByScope(parsed.contacts);
+}
+
+/**
+ * 事業会社ごとにメールの下書きを開く。★1 事業会社 1 通。送信はしない。
+ * 下書きは Outlook が 1 通ずつ開くので、件数が多いときは確認してから進める。
+ */
+async function createCompanyMails(tickets: RasTicket[], kind: 'adhoc' | 'monthly'): Promise<void> {
+  const label = kind === 'adhoc' ? '都度メール' : '月次メール';
+  try {
+    setBusy(`${label}の宛先を準備中…`);
+    const cfg = await getConfig();
+    const tpl = normalizeTemplates(await repo.readSharedJson(RAS_MAIL_KEY, null))[kind];
+    if (!tpl.subject.trim() || !tpl.body.trim()) {
+      toast(`${label}のテンプレートが未設定です（設定 → 共通設定 → メール）`, 'error'); return;
+    }
+    const noCompany = ticketsWithoutCompany(tickets);
+    const perms = await loadRasPerms();
+    const contacts = await loadContacts(cfg);
+    const mails = buildCompanyMails({ tickets, perms, contacts, template: tpl, listUrl: rasTicketListUrl(cfg) });
+    const ok = mails.filter((m) => m.draft);
+    const ng = mails.filter((m) => m.error);
+    if (!ok.length) {
+      toast(`宛先を決められませんでした（${ng[0]?.error ?? '対象がありません'}）`, 'error');
+      return;
+    }
+    // ★何通開くのかを先に見せる。Outlook のウィンドウが一斉に開くので、
+    //   件数を知らずに押すと画面が埋まる。
+    const warn = [
+      `${ok.length} 社ぶんの下書きを開きます（1社1通）。`,
+      ...(ng.length ? [`宛先を決められない会社: ${ng.length} 社`] : []),
+      ...(noCompany.length ? [`事業会社が未設定のチケット: ${noCompany.length} 件（メールに含まれません）`] : []),
+      '',
+      '※ 下書きを開くだけで、送信は行いません。',
+    ].join('\n');
+    if (!(await confirmModal(`${label}の下書き作成`, warn, '作成'))) return;
+
+    const author = localStorage.getItem(LS.author) || '';
+    let done = 0;
+    for (const m of ok) {
+      setBusy(`${label}の下書きを作成中… ${++done} / ${ok.length}`);
+      const r = await openMailDraft(RELAY, { ...m.draft!, author });
+      if (!r.ok) { toast(`${m.company} の下書きを開けませんでした: ${r.error ?? ''}`, 'error'); break; }
+    }
+    recordOp(`${label}の下書き作成`, `${done} 社（対象 ${tickets.length} 件）`);
+    toast(`${done} 社ぶんの下書きを開きました。内容を確認して送信してください`, 'ok');
+    if (ng.length) showMailIssues(ng);
+  } catch (e) {
+    toast(`${label}の作成に失敗: ` + (e as Error).message, 'error');
+  } finally { setBusy(''); }
+}
+
+/** 宛先を決められなかった会社を並べる（黙って落とさない）。 */
+function showMailIssues(list: { company: string; error?: string }[]): void {
+  openModal({
+    title: '下書きを作れなかった会社', wide: true,
+    body: el('div', {}, [
+      callout('体制表に連絡先が無いか、マスター管理の「体制表での表記」が実際の管轄範囲と合っていません。'),
+      ...list.map((m) => el('div', { style: 'margin-top:var(--s-2)' }, [`${m.company}: ${m.error ?? ''}`])),
+    ]),
+  });
+}
+
+/** SharePoint のチケット一覧の URL（本文に入れる）。 */
+const rasTicketListUrl = (cfg: RelayConfig): string =>
+  `${(cfg.spSiteUrl || '').replace(/\/+$/, '')}/Lists/QamRasTickets`;
+
 // マスター管理ビュー: 事業会社の登録と、独自RASの2リストに対するアクセス権の割当。
 //   管理者グループ   … 全アイテムにフルコントロール（更新できる人。共通・必須）
 //   事業会社グループ … その事業会社のアイテムに読み取り（参照だけ）
@@ -1717,7 +1822,8 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
 
     // 3) 事業会社ごとの参照グループ
     const mapBox = el('div', { class: 'qam-card' });
-    mapBox.append(el('div', { class: 'qam-card-title' }, ['事業会社ごとの参照グループ']));
+    mapBox.append(el('div', { class: 'qam-card-title' }, ['事業会社ごとの参照グループ・宛先']));
+    mapBox.append(el('div', { class: 'qam-hint' }, ['左から: 参照グループ / 管理CSV の略称 / 体制表（宛先Excel）での表記 / メールの宛名。体制表での表記が実際の「管轄範囲」と一致していないと、メールの宛先を引けません。']));
     const noGroup = companiesWithoutGroups(perms);
     if (noGroup.length) mapBox.append(el('div', { class: 'qam-hint' }, [`割当が無い事業会社: ${noGroup.join(' / ')}（管理者しか見られません）`]));
     const table = el('div', { style: 'display:flex;flex-direction:column;gap:var(--s-2);margin-top:var(--s-3)' });
@@ -1729,14 +1835,34 @@ async function renderMaster(count: HTMLElement, host: HTMLElement): Promise<void
       row.append(el('span', { style: 'min-width:180px;font-weight:600' }, [c]));
       row.append(el('span', { class: ids.length ? '' : 'qam-hint', style: 'flex:1' }, [ids.length ? ids.map(groupTitle).join(' / ') : '未割当']));
       // 管理CSV は略称で書かれているので、会社ごとに略称を登録しておく。
-      const al = el('input', { type: 'text', class: 'in', style: 'width:220px', placeholder: '略称（, 区切り）', value: aliasesFor(c, perms).join(', ') }) as HTMLInputElement;
+      const al = el('input', { type: 'text', class: 'in', style: 'width:180px', placeholder: '略称（, 区切り）', value: aliasesFor(c, perms).join(', ') }) as HTMLInputElement;
       al.addEventListener('change', () => {
         const list = parseAliases(al.value);
         const next = { ...perms.aliasesByCompany };
         if (list.length) next[c] = list; else delete next[c];
         void save({ ...perms, aliasesByCompany: next });
       });
-      row.append(al);
+      // 体制表（宛先Excel）での会社名。1:1 で対応するが表記が違うので、ここで結び付ける。
+      const cn = el('input', {
+        type: 'text', class: 'in', style: 'width:200px', placeholder: '体制表での表記（既定: 同じ）',
+        value: perms.contactNameByCompany[c] ?? '',
+      }) as HTMLInputElement;
+      cn.addEventListener('change', () => {
+        const next = { ...perms.contactNameByCompany };
+        if (cn.value.trim()) next[c] = cn.value.trim(); else delete next[c];
+        void save({ ...perms, contactNameByCompany: next });
+      });
+      // メール本文の宛名。既定は「〈事業会社名〉事業場ITセキュリティ責任者 〈氏名〉様」。
+      const gr = el('input', {
+        type: 'text', class: 'in', style: 'width:220px', placeholder: '宛名（既定: {{company}} 事業場ITセキュリティ責任者 {{name}} 様）',
+        value: perms.greetingByCompany[c] ?? '',
+      }) as HTMLInputElement;
+      gr.addEventListener('change', () => {
+        const next = { ...perms.greetingByCompany };
+        if (gr.value.trim()) next[c] = gr.value.trim(); else delete next[c];
+        void save({ ...perms, greetingByCompany: next });
+      });
+      row.append(al, cn, gr);
       const b = el('button', { class: 'btn btn--sm' }, ['グループを選ぶ']);
       b.addEventListener('click', async () => {
         const picked = await pickGroups(`${c} の参照グループ`, `${c} の資産・チケットに読み取りを付けるグループ`, ids);
@@ -2850,6 +2976,38 @@ async function openSettings(): Promise<void> {
   const tplEn = el('input', { class: 'in', value: cfg.reportTemplateEn || '', placeholder: '例: 1234568' }) as HTMLInputElement;
   const tplTicketJa = el('input', { class: 'in', value: cfg.ticketTemplateJa || '', placeholder: '例: 2234567' }) as HTMLInputElement;
   const tplTicketEn = el('input', { class: 'in', value: cfg.ticketTemplateEn || '', placeholder: '例: 2234568' }) as HTMLInputElement;
+  const intraLogin = el('input', { class: 'in', value: cfg.intraLoginUrl || '', placeholder: 'https://intra.example.local/login' }) as HTMLInputElement;
+  const intraPage = el('input', { class: 'in', value: cfg.intraPageUrl || '', placeholder: 'https://intra.example.local/security/docs' }) as HTMLInputElement;
+  const intraPat = el('input', { class: 'in', value: cfg.intraFilePattern || '', placeholder: '^ITSecurity.*\\.xlsx?$' }) as HTMLInputElement;
+  const intraUser = el('input', { class: 'in', value: localStorage.getItem(LS.intraUser) || '', placeholder: 'Global ID' }) as HTMLInputElement;
+  const hasIntraSecret = !!localStorage.getItem(LS.intraSecret);
+  const intraPass = el('input', { class: 'in', type: 'password', placeholder: hasIntraSecret ? '保存済み（変更するときだけ入力）' : '' }) as HTMLInputElement;
+  const mailAdhocSubj = el('input', { class: 'in' }) as HTMLInputElement;
+  const mailAdhocBody = el('textarea', { class: 'in', rows: '10', style: 'width:100%' }) as HTMLTextAreaElement;
+  const mailAdhocCc = el('input', { class: 'in', placeholder: 'a@example.com; b@example.com' }) as HTMLInputElement;
+  const mailAdhocRt = el('input', { class: 'in', placeholder: 'reply-to@example.com' }) as HTMLInputElement;
+  const mailMonSubj = el('input', { class: 'in' }) as HTMLInputElement;
+  const mailMonBody = el('textarea', { class: 'in', rows: '10', style: 'width:100%' }) as HTMLTextAreaElement;
+  const mailMonCc = el('input', { class: 'in' }) as HTMLInputElement;
+  const mailMonRt = el('input', { class: 'in' }) as HTMLInputElement;
+  // テンプレートは共有設定（SharePoint）に置く。読み込みは非同期なので後から流し込む。
+  let mailTpl = EMPTY_TEMPLATES;
+  void repo.readSharedJson(RAS_MAIL_KEY, null).then((v) => {
+    mailTpl = normalizeTemplates(v);
+    mailAdhocSubj.value = mailTpl.adhoc.subject; mailAdhocBody.value = mailTpl.adhoc.body;
+    mailAdhocCc.value = mailTpl.adhoc.cc ?? ''; mailAdhocRt.value = mailTpl.adhoc.replyTo ?? '';
+    mailMonSubj.value = mailTpl.monthly.subject; mailMonBody.value = mailTpl.monthly.body;
+    mailMonCc.value = mailTpl.monthly.cc ?? ''; mailMonRt.value = mailTpl.monthly.replyTo ?? '';
+  }).catch(() => undefined);
+  const saveMail = async (): Promise<boolean> => {
+    const next = normalizeTemplates({
+      adhoc: { subject: mailAdhocSubj.value, body: mailAdhocBody.value, cc: mailAdhocCc.value, replyTo: mailAdhocRt.value },
+      monthly: { subject: mailMonSubj.value, body: mailMonBody.value, cc: mailMonCc.value, replyTo: mailMonRt.value },
+    });
+    try { await repo.writeSharedJson(RAS_MAIL_KEY, next); mailTpl = next; toast('設定を保存しました', 'ok'); return true; }
+    catch (e) { toast('保存に失敗しました: ' + (e as Error).message, 'error'); return false; }
+  };
+  const TPL_HELP = '差し込み: {{company}} 事業会社名 / {{name}} 氏名 / {{dept}} 所属 / {{greeting}} 宛名 / {{count}} 件数 / {{tickets}} 脆弱性の一覧 / {{listLink}} SharePointの一覧へのリンク。差し込めなかったものは {{...}} のまま残ります。';
   const userEn = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUserEn) || '' }) as HTMLInputElement;
   const hasSecretEn = !!localStorage.getItem(LS.qualysSecretEn);
   const passEn = el('input', {
@@ -2966,6 +3124,19 @@ async function openSettings(): Promise<void> {
             },
             inputs: [userEn, passEn],
           }) },
+          { key: 'intraAccount', label: '社内イントラのアカウント', render: () => ({
+            body: el('div', {}, [
+              setHead('社内イントラのアカウント', '体制表を置いているイントラの Global ID とパスワードです。このブラウザにだけ保存し、パスワードは中継サーバで暗号化して持ちます（平文では持ちません）。'),
+              field('Global ID', intraUser),
+              field('パスワード', intraPass, '空のまま保存すると変更しません。'),
+            ]),
+            save: async () => {
+              if (intraUser.value.trim()) localStorage.setItem(LS.intraUser, intraUser.value.trim()); else localStorage.removeItem(LS.intraUser);
+              if (passwordInputAction(intraPass.value) === 'save') { if (!(await storeSecret(LS.intraSecret, intraPass.value))) return false; }
+              toast('設定を保存しました', 'ok'); return true;
+            },
+            inputs: [intraUser, intraPass],
+          }) },
           { key: 'qualysAccount', label: 'Qualys アカウント', render: () => ({
           body: el('div', {}, [
             setHead('Qualys アカウント', 'Qualys API の認証情報です。共有の env ではなくこのブラウザにだけ保存します（パスワードは中継サーバで暗号化して保持し、平文では持ちません）。'),
@@ -3035,6 +3206,36 @@ async function openSettings(): Promise<void> {
               ticketTemplateJa: tplTicketJa.value.trim(), ticketTemplateEn: tplTicketEn.value.trim(),
             }),
             inputs: [tplJa, tplEn, tplTicketJa, tplTicketEn],
+          }) },
+        ] },
+        { title: 'メール', items: [
+          { key: 'intra', label: '連絡先（体制表）の取得元', render: () => ({
+            body: el('div', {}, [
+              setHead('連絡先（体制表）の取得元', '社内イントラに置かれている体制表から、事業会社ごとの連絡先を取ります。シート名に「体制含む」を含むシートの3行目を見出しとし、B列が「正」の行だけを使います。'),
+              field('ログインURL', intraLogin),
+              field('ページURL', intraPage, '体制表へのリンクがあるページ。'),
+              field('ファイル名のパターン', intraPat, '正規表現。空なら ^ITSecurity.*\\.xlsx?$ を使います。'),
+            ]),
+            save: () => saveConfig({ intraLoginUrl: intraLogin.value.trim(), intraPageUrl: intraPage.value.trim(), intraFilePattern: intraPat.value.trim() }),
+            inputs: [intraLogin, intraPage, intraPat],
+          }) },
+          { key: 'mailAdhoc', label: '都度メール（脆弱性の検知）', render: () => ({
+            body: el('div', {}, [
+              setHead('都度メール（脆弱性の検知）', '新しく脆弱性が見つかったときに、その資産を管理する事業会社へ送る下書きの内容です。複数の脆弱性があっても1事業会社1通にまとめます。'),
+              field('件名', mailAdhocSubj), field('本文', mailAdhocBody, TPL_HELP),
+              field('CC', mailAdhocCc), field('Reply-To', mailAdhocRt),
+            ]),
+            save: saveMail,
+            inputs: [mailAdhocSubj, mailAdhocBody, mailAdhocCc, mailAdhocRt],
+          }) },
+          { key: 'mailMonthly', label: '月次メール', render: () => ({
+            body: el('div', {}, [
+              setHead('月次メール', 'オープン中のチケットがある事業会社へ、月次で送る下書きの内容です。'),
+              field('件名', mailMonSubj), field('本文', mailMonBody, TPL_HELP),
+              field('CC', mailMonCc), field('Reply-To', mailMonRt),
+            ]),
+            save: saveMail,
+            inputs: [mailMonSubj, mailMonBody, mailMonCc, mailMonRt],
           }) },
         ] },
         { title: 'ライセンス', items: [{ key: 'license', label: 'ライセンス上限', render: () => ({

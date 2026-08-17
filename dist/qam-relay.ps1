@@ -84,7 +84,7 @@ $script:QamStop = $false
 # 中継サーバとアプリ本体の取り決めの版。★受け付ける設定キーや API を増やしたら上げる。
 # アプリ本体は右上の更新ボタンで新しくなるが、この中継サーバは起動し直すまで古いまま。
 # 番号が食い違うと、アプリが送った設定を古い中継サーバが黙って捨てる（実際に踏んだ）。
-$QAM_RELAY_CONTRACT = 3
+$QAM_RELAY_CONTRACT = 4
 
 # ─── HTTP ヘルパ ─────────────────────────────────────────────────────────────
 # 許可オリジン。既定は SharePoint サイト（QAM_SP_SITE_URL）のオリジンに限定する。
@@ -757,6 +757,9 @@ function Invoke-Route { param($Ctx)
                 if ($b.PSObject.Properties.Name -contains 'reportTemplateEn') { Set-QamEnvValue $EnvFile 'QAM_REPORT_TEMPLATE_EN' $b.reportTemplateEn }
                 if ($b.PSObject.Properties.Name -contains 'ticketTemplateJa') { Set-QamEnvValue $EnvFile 'QAM_TICKET_TEMPLATE_JA' $b.ticketTemplateJa }
                 if ($b.PSObject.Properties.Name -contains 'ticketTemplateEn') { Set-QamEnvValue $EnvFile 'QAM_TICKET_TEMPLATE_EN' $b.ticketTemplateEn }
+                if ($b.PSObject.Properties.Name -contains 'intraLoginUrl') { Set-QamEnvValue $EnvFile 'QAM_INTRA_LOGIN_URL' $b.intraLoginUrl }
+                if ($b.PSObject.Properties.Name -contains 'intraPageUrl') { Set-QamEnvValue $EnvFile 'QAM_INTRA_PAGE_URL' $b.intraPageUrl }
+                if ($b.PSObject.Properties.Name -contains 'intraFilePattern') { Set-QamEnvValue $EnvFile 'QAM_INTRA_FILE_PATTERN' $b.intraFilePattern }
                 if ($b.PSObject.Properties.Name -contains 'proxy') { Set-QamEnvValue $EnvFile 'QAM_PROXY_URL' $b.proxy }
                 if ($b.PSObject.Properties.Name -contains 'qualysBase') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_API_BASE' $b.qualysBase }
                 if ($b.PSObject.Properties.Name -contains 'qualysUser') { Set-QamEnvValue $EnvFile 'QAM_QUALYS_USER' $b.qualysUser }
@@ -787,6 +790,9 @@ function Invoke-Route { param($Ctx)
                 reportTemplateEn = $env:QAM_REPORT_TEMPLATE_EN
                 ticketTemplateJa = $env:QAM_TICKET_TEMPLATE_JA
                 ticketTemplateEn = $env:QAM_TICKET_TEMPLATE_EN
+                intraLoginUrl = $env:QAM_INTRA_LOGIN_URL
+                intraPageUrl = $env:QAM_INTRA_PAGE_URL
+                intraFilePattern = $env:QAM_INTRA_FILE_PATTERN
                 # ★以下は qam.env でのみ設定する（画面には出すが編集させない）。
                 #   二重管理を避けるため、POST では受け付けない。
                 bundleSource = if ($env:QAM_BUNDLE_SOURCE) { ([string]$env:QAM_BUNDLE_SOURCE).ToLower() } else { 'sp' }
