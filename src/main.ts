@@ -1009,6 +1009,13 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       }
       const targets = [...byHost.values()];
       if (!targets.length) { toast('IP が分かるチケットを選んでください', 'error'); return; }
+      // ★設定が足りないまま走らせると、何も出来ていないのに「終わった」ように見える。
+      //   何が作られないのかを先に見せて、続けるかを選ばせる。
+      const cfg0 = await getConfig();
+      const missing = missingReportSettings(cfg0);
+      if (missing.all) { toast('レポートのテンプレートIDが未設定です（設定 → 共通設定 → 日次更新 → レポートのテンプレート）', 'error'); return; }
+      if (missing.notes.length
+        && !(await confirmModal('作られないレポートがあります', `${missing.notes.join('\n')}\n\nこのまま実行しますか？`, '実行'))) return;
       await ensureAuthor();
       const creds = await resolveQualysCreds();
       if (!creds) return;
@@ -1254,7 +1261,9 @@ async function runDailyUpdate(
         else if (c.change === 'reopened') summary.ticketsReopened++;
       }
       // 新しく開いた脆弱性のホストは、レポートを作って SharePoint に置く。
-      await buildScanReports(creds, cfg, reportTargets(changes), summary, setProg);
+      const miss = missingReportSettings(cfg);
+      if (miss.all) summary.notes.push('レポートのテンプレートIDが未設定のため、レポートは作りませんでした');
+      else await buildScanReports(creds, cfg, reportTargets(changes), summary, setProg);
     }
 
     if (doSearch) {
@@ -1479,6 +1488,30 @@ function bytesToBase64(b: Uint8Array): string {
   // 一度に渡すと引数が多すぎて落ちるので刻む。
   for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
   return btoa(s);
+}
+
+/**
+ * レポート作成に足りない設定を洗い出す。
+ * all=true は「1本も作れない」＝実行しても意味がない状態。
+ */
+function missingReportSettings(cfg: RelayConfig): { all: boolean; notes: string[] } {
+  const hasEn = !!(localStorage.getItem(LS.qualysUserEn) && localStorage.getItem(LS.qualysSecretEn));
+  const tpl = {
+    scanJa: (cfg.reportTemplateJa || '').trim(), scanEn: (cfg.reportTemplateEn || '').trim(),
+    ticketJa: (cfg.ticketTemplateJa || '').trim(), ticketEn: (cfg.ticketTemplateEn || '').trim(),
+  };
+  const notes: string[] = [];
+  if (!tpl.scanJa) notes.push('・SCANレポート（日本語）: テンプレートIDが未設定');
+  if (!tpl.ticketJa) notes.push('・Ticketレポート（日本語）: テンプレートIDが未設定');
+  if (!hasEn) {
+    notes.push('・英語レポート: Qualys の英語アカウントが未設定（設定 → 個人設定 → 接続）');
+  } else {
+    if (!tpl.scanEn) notes.push('・SCANレポート（英語）: テンプレートIDが未設定');
+    if (!tpl.ticketEn) notes.push('・Ticketレポート（英語）: テンプレートIDが未設定');
+  }
+  const canJa = !!(tpl.scanJa || tpl.ticketJa);
+  const canEn = hasEn && !!(tpl.scanEn || tpl.ticketEn);
+  return { all: !canJa && !canEn, notes };
 }
 
 /** 種別＋言語 → チケット行の項目名。 */
@@ -2756,7 +2789,16 @@ function openIngest(): void {
 // 設定ハブ: 大分類（個人/共通/その他）→ 小分類 → 項目 の左ナビ＋右詳細。
 // ★保存は「いま開いている項目だけ」。全項目を一括で送ると、開いていないペインの
 //   古い値まで書き戻してしまう（別の人が直した共通設定を巻き戻す事故になる）。
-interface SettingPanel { body: HTMLElement; save?: () => Promise<boolean> }
+interface SettingPanel {
+  body: HTMLElement;
+  save?: () => Promise<boolean>;
+  /** この画面が持つ入力欄。保存漏れの判定に使う（下のコメント参照）。 */
+  inputs?: HTMLElement[];
+}
+
+/** 入力欄の現在値（未保存かどうかの比較に使う）。 */
+const inputValue = (e: HTMLElement): string =>
+  ((e as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value ?? '');
 interface SettingItem { key: string; label: string; danger?: boolean; render: () => SettingPanel }
 interface SettingSubGroup { title: string; items: SettingItem[] }
 interface SettingMajor { key: string; title: string; subtitle: string; accent: string; groups: SettingSubGroup[] }
@@ -2871,6 +2913,7 @@ async function openSettings(): Promise<void> {
             localStorage.setItem(LS.fontsize, fontsize.value); themeHost.dataset.fontsize = fontsize.value;
             toast('設定を保存しました', 'ok'); return true;
           },
+          inputs: [theme, fontsize],
         }) }] },
         { title: '記録', items: [{ key: 'author', label: '記入者名', render: () => ({
           body: el('div', {}, [setHead('記入者名', 'メモ・操作履歴に残る作成者の名前です。更新作業の前に未設定なら入力を求めます。'), field('記入者名', author)]),
@@ -2878,6 +2921,7 @@ async function openSettings(): Promise<void> {
             if (author.value.trim()) localStorage.setItem(LS.author, author.value.trim()); else localStorage.removeItem(LS.author);
             toast('設定を保存しました', 'ok'); return true;
           },
+          inputs: [author],
         }) }] },
         { title: '接続', items: [
           { key: 'qualysAccountEn', label: 'Qualys アカウント（英語レポート用）', render: () => ({
@@ -2893,6 +2937,7 @@ async function openSettings(): Promise<void> {
               }
               toast('設定を保存しました', 'ok'); return true;
             },
+            inputs: [userEn, passEn],
           }) },
           { key: 'qualysAccount', label: 'Qualys アカウント', render: () => ({
           body: el('div', {}, [
@@ -2907,6 +2952,7 @@ async function openSettings(): Promise<void> {
             if (passwordInputAction(pass.value) === 'save') { if (!(await storeQualysPassword(pass.value))) return false; }
             toast('設定を保存しました', 'ok'); return true;
           },
+          inputs: [user, pass],
         }) },
         ] },
       ],
@@ -2921,6 +2967,7 @@ async function openSettings(): Promise<void> {
             field('ドキュメントライブラリ名', spLib, '管理データを置くライブラリ。既定 QamData。'),
           ]),
           save: () => saveConfig({ spSiteUrl: spSite.value.trim(), spLibrary: spLib.value.trim() || 'QamData' }),
+          inputs: [spSite, spLib],
         }) }] },
         { title: '取込', items: [
           { key: 'qualys', label: 'Qualys 接続先', render: () => ({
@@ -2929,10 +2976,12 @@ async function openSettings(): Promise<void> {
               field('Qualys 接続先 POD', base), field('プロキシ URL', proxy),
             ]),
             save: () => saveConfig({ qualysBase: base.value.trim(), proxy: proxy.value.trim() }),
+            inputs: [base, proxy],
           }) },
           { key: 'retention', label: '保存期間', render: () => ({
             body: el('div', {}, [setHead('保存期間', '取り込んだ生XMLとスナップショットを何日残すかです。'), field('保存期間（日）', ret)]),
             save: () => saveConfig({ retentionDays: parseInt(ret.value, 10) || 90 }),
+            inputs: [ret],
           }) },
         ] },
         { title: '日次更新', items: [
@@ -2944,6 +2993,7 @@ async function openSettings(): Promise<void> {
                 `別サイトに置いてある場合は https:// から始まる URL を貼ってください（ファイルを右クリック →「パスのコピー」）。保管先（${cfg.spLibrary || 'QamData'}）に置く場合は相対パスでも指定できます。どちらもシート「CVE対応策一覧」の A3 以下を CVE 番号として読みます。`),
             ]),
             save: () => saveConfig({ searchListIds: parseSearchListIds(slIds.value).join(','), cveXlsxPath: cvePath.value.trim() }),
+            inputs: [slIds, cvePath],
           }) },
           { key: 'reportTemplate', label: 'レポートのテンプレート', render: () => ({
             body: el('div', {}, [
@@ -2957,6 +3007,7 @@ async function openSettings(): Promise<void> {
               reportTemplateJa: tplJa.value.trim(), reportTemplateEn: tplEn.value.trim(),
               ticketTemplateJa: tplTicketJa.value.trim(), ticketTemplateEn: tplTicketEn.value.trim(),
             }),
+            inputs: [tplJa, tplEn, tplTicketJa, tplTicketEn],
           }) },
         ] },
         { title: 'ライセンス', items: [{ key: 'license', label: 'ライセンス上限', render: () => ({
@@ -2965,6 +3016,7 @@ async function openSettings(): Promise<void> {
             field('ライセンス上限', licLimit, '0 にすると破線を表示しません。'),
           ]),
           save: () => saveConfig({ licenseLimit: Math.max(0, parseInt(licLimit.value, 10) || 0) }),
+          inputs: [licLimit],
         }) }] },
         { title: 'ユーザ登録', items: [{ key: 'userAdd', label: '既定値', render: () => ({
           body: el('div', {}, [
@@ -2973,6 +3025,7 @@ async function openSettings(): Promise<void> {
             field('国（country）', userCountry, 'Qualys の必須項目。Qualys が受け付ける国名を入力してください（例: Japan）。'),
           ]),
           save: () => saveConfig({ userBusinessUnit: userBu.value.trim() || 'Unassigned', userCountry: userCountry.value.trim() }),
+          inputs: [userBu, userCountry],
         }) }] },
         { title: '四半期検査', items: [
           { key: 'inspection', label: '対象と期間', render: () => ({
@@ -2985,6 +3038,7 @@ async function openSettings(): Promise<void> {
               fiscalStartMonth: Math.min(12, Math.max(1, parseInt(fiscalMonth.value, 10) || 4)),
               inspectionAgPattern: inspPattern.value.trim() || DEFAULT_AG_PATTERN,
             }),
+            inputs: [fiscalMonth, inspPattern],
           }) },
           { key: 'schedule', label: '検査登録の既定値', render: () => ({
             body: el('div', {}, [
@@ -3001,6 +3055,7 @@ async function openSettings(): Promise<void> {
               scheduleTimeZone: schedTz.value.trim().toUpperCase() || 'JP',
               regions: formatRegions(parseRegions(regionsIn.value)),
             }),
+            inputs: [scanOpt, mapOpt, scannerAp, schedTz, regionsIn],
           }) },
         ] },
       ],
@@ -3063,11 +3118,24 @@ async function openSettings(): Promise<void> {
     return undefined;
   };
 
+  // ★開いた画面だけを保存すると、入力したあと別の項目へ移ってから保存を押したときに、
+  //   前の画面の入力が黙って捨てられる（実際に「保存されない」と報告された）。
+  //   画面ごとに開いた時点の値を控えておき、変わっているものは全部保存する。
+  const baseline = new Map<string, string[]>();
+  const snapshotInputs = (key: string, panel: SettingPanel): void => {
+    if (panel.inputs) baseline.set(key, panel.inputs.map(inputValue));
+  };
+  const isDirty = (key: string, panel: SettingPanel): boolean => {
+    const before = baseline.get(key);
+    if (!before || !panel.inputs) return false;
+    return panel.inputs.some((e, i) => inputValue(e) !== before[i]);
+  };
+
   function renderPane(): void {
     const item = findItem(activeKey);
     if (!item) return;
     let panel = cache.get(activeKey);
-    if (!panel) { panel = item.render(); cache.set(activeKey, panel); }
+    if (!panel) { panel = item.render(); cache.set(activeKey, panel); snapshotInputs(activeKey, panel); }
     currentSave = panel.save ?? null;
     // 保存するものが無いペインではボタンを押せなくする（押せるのに何も起きない、を避ける）。
     if (primaryRef.el) {
@@ -3112,7 +3180,21 @@ async function openSettings(): Promise<void> {
     title: '設定', body: el('div', { class: 'qam-set' }, [nav, pane]), xl: true, primaryLabel: '保存',
     primaryRef, dismissBackdrop: false,
     // 保存しても閉じない（設定は続けて他の項目も直すことが多い）。
-    onPrimary: async () => { if (currentSave) await currentSave(); return false; },
+    onPrimary: async () => {
+      // いま開いている画面に加えて、触ったまま離れた画面も保存する。
+      let ok = true;
+      for (const [key, panel] of cache) {
+        if (!panel.save || key === activeKey) continue;
+        if (!isDirty(key, panel)) continue;
+        if (await panel.save()) snapshotInputs(key, panel); else ok = false;
+      }
+      if (currentSave) {
+        if (await currentSave()) { const p = cache.get(activeKey); if (p) snapshotInputs(activeKey, p); }
+        else ok = false;
+      }
+      void ok;
+      return false; // 保存しても閉じない（設定は続けて他の項目も直すことが多い）
+    },
   });
   renderPane();
 }
