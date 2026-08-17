@@ -32,6 +32,7 @@ import {
 } from './searchlist';
 import { classifyTickets, reportTargets, reportPath, reportTitle, TICKET_CHANGE_LABEL, type DailyRunSummary, type ReportTarget } from './daily';
 import { readXlsxSheet, columnUntilBlankRow } from './xlsx-read';
+import { isAbsoluteUrl, parseSpFileUrl, spFileValueUrl } from './sp-url';
 import {
   RAS_PREFIX, normalizeRasPerms, registeredCompanies, groupIdsFor, parseCompanyList, mergeCompanies,
   companiesWithoutGroups, assetsWithoutCompany, canApplyPerms, deriveRasAssets, deriveRasTickets, RAS_NOT_ALIVE, RAS_NOT_SCANNED,
@@ -1176,8 +1177,18 @@ async function runSearchListUpdate(
   if (!path) { summary.notes.push('CVE対応策一覧の Excel パスが未設定です（設定 → 共通設定 → 日次更新 で登録してください）'); return; }
 
   setProg('CVE対応策一覧を読み込み中…', true);
-  if (!backend.readBinary) { summary.notes.push('この保管先では Excel を読めません'); return; }
-  const buf = await backend.readBinary(path);
+  let buf: ArrayBuffer | null;
+  if (isAbsoluteUrl(path)) {
+    // 別サイトに置かれている場合。同じテナントなら同一オリジンなので、サインイン情報で読める。
+    const ref = parseSpFileUrl(path); // 解決できない形（sourcedoc 等）はここで理由付きに失敗する
+    const r = await fetch(spFileValueUrl(ref), { credentials: 'include' });
+    if (r.status === 404) { summary.notes.push(`Excel が見つかりません: ${path}`); return; }
+    if (!r.ok) { summary.notes.push(`Excel を読めません (HTTP ${r.status}): ${path}`); return; }
+    buf = await r.arrayBuffer();
+  } else {
+    if (!backend.readBinary) { summary.notes.push('この保管先では Excel を読めません'); return; }
+    buf = await backend.readBinary(path);
+  }
   if (!buf) { summary.notes.push(`Excel が見つかりません: ${path}`); return; }
   const sheet = await readXlsxSheet(buf, 'CVE対応策一覧');
   const want = parseCveList(columnUntilBlankRow(sheet.rows, 'A', 3).join(','));
@@ -2513,7 +2524,7 @@ async function openSettings(): Promise<void> {
   const spLib = el('input', { class: 'in', value: cfg.spLibrary || 'QamData', placeholder: 'QamData' }) as HTMLInputElement;
   const slIds = el('textarea', { class: 'in', rows: '4', style: 'width:100%;font-family:var(--font-mono)', placeholder: '例)\n381\n6343529' }) as HTMLTextAreaElement;
   slIds.value = parseSearchListIds(cfg.searchListIds || '').join('\n');
-  const cvePath = el('input', { class: 'in', value: cfg.cveXlsxPath || '', placeholder: '例: ras/CVE対応策一覧.xlsx' }) as HTMLInputElement;
+  const cvePath = el('input', { class: 'in', value: cfg.cveXlsxPath || '', placeholder: 'https://YOUR-TENANT.sharepoint.com/sites/YOUR-SITE/Shared Documents/CVE対応策一覧.xlsx' }) as HTMLInputElement;
   const tplJa = el('input', { class: 'in', value: cfg.reportTemplateJa || '', placeholder: '例: 1234567' }) as HTMLInputElement;
   const tplEn = el('input', { class: 'in', value: cfg.reportTemplateEn || '', placeholder: '例: 1234568' }) as HTMLInputElement;
   const userEn = el('input', { class: 'in', value: localStorage.getItem(LS.qualysUserEn) || '' }) as HTMLInputElement;
@@ -2662,7 +2673,8 @@ async function openSettings(): Promise<void> {
             body: el('div', {}, [
               setHead('検索リストと CVE 一覧', 'Excel の CVE 一覧に合わせて Qualys の動的検索リストを更新します。'),
               field('更新する検索リストID', slIds, '1行1件（カンマ区切りも可）。数字だけを受け付けます。Qualys の「検索リスト」画面の ID です。未設定だと日次更新の Search List 更新は実行できません。'),
-              field('CVE対応策一覧の Excel', cvePath, `保管先ライブラリ（${cfg.spLibrary || 'QamData'}）からの相対パス。シート「CVE対応策一覧」の A3 以下を CVE 番号として読みます。`),
+              field('CVE対応策一覧の Excel', cvePath,
+                `別サイトに置いてある場合は https:// から始まる URL を貼ってください（ファイルを右クリック →「パスのコピー」）。保管先（${cfg.spLibrary || 'QamData'}）に置く場合は相対パスでも指定できます。どちらもシート「CVE対応策一覧」の A3 以下を CVE 番号として読みます。`),
             ]),
             save: () => saveConfig({ searchListIds: parseSearchListIds(slIds.value).join(','), cveXlsxPath: cvePath.value.trim() }),
           }) },
@@ -2793,8 +2805,15 @@ async function openSettings(): Promise<void> {
     clear(pane); pane.append(panel.body); pane.scrollTop = 0;
   }
 
-  function renderNav(): void {
-    clear(nav);
+  // ★ナビは一度だけ作る。項目を選ぶたびに作り直すと、そのたびにスクロール位置が
+  //   先頭へ戻り、下の方の項目（共通設定以下）を選ぶと画面が飛ぶ。
+  //   選択の表示は aria-current の付け替えだけで済ませる。
+  const navButtons: HTMLElement[] = [];
+  function markActive(): void {
+    for (const b of navButtons) b.setAttribute('aria-current', String(b.dataset.key === activeKey));
+  }
+  function buildNav(): void {
+    clear(nav); navButtons.length = 0;
     for (const m of majors) {
       const sec = el('div', { class: 'qam-set-major', style: `border-left-color:${m.accent}` });
       sec.append(el('div', { class: 'qam-set-major-title', style: `color:${m.accent}` }, [m.title]));
@@ -2804,17 +2823,19 @@ async function openSettings(): Promise<void> {
         for (const it of g.items) {
           const b = el('button', {
             class: `qam-set-item${it.danger ? ' qam-set-item--danger' : ''}`,
-            'aria-current': String(it.key === activeKey),
+            dataset: { key: it.key },
           }, [it.label]);
-          b.addEventListener('click', () => { activeKey = it.key; renderNav(); renderPane(); });
+          b.addEventListener('click', () => { activeKey = it.key; markActive(); renderPane(); });
+          navButtons.push(b);
           sec.append(b);
         }
       }
       nav.append(sec);
     }
+    markActive();
   }
 
-  renderNav();
+  buildNav();
   openModal({
     title: '設定', body: el('div', { class: 'qam-set' }, [nav, pane]), xl: true, primaryLabel: '保存',
     primaryRef, dismissBackdrop: false,
