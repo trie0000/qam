@@ -2,6 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { resolveBundleLocation, webPathOf, buildIdOf, fetchLatestBuildId, reloadBundleInPlace } from '../src/bundle';
 
 const loc = (pathname: string, origin = 'https://example.sharepoint.com') => ({ origin, pathname });
+// eval される本体なので JS として正しいものを渡す（サイズ下限を超える長さにする）。
+const PAD = `/* ${'pad '.repeat(400)} */`;
+const okBundle = (): typeof fetch => vi.fn(async () => new Response(PAD)) as unknown as typeof fetch;
 const RELAY = 'http://127.0.0.1:18090';
 
 describe('バンドル取得元の解決', () => {
@@ -47,6 +50,23 @@ describe('版の比較', () => {
   it('通信自体が失敗しても例外を投げない', async () => {
     const f = vi.fn(async () => { throw new Error('offline'); }) as unknown as typeof fetch;
     expect(await fetchLatestBuildId('https://x/app', f)).toBeNull();
+  });
+
+  it("credentials は same-origin（include だと中継サーバから読む構成で必ず失敗する）", async () => {
+    // ★中継サーバは Access-Control-Allow-Credentials を返さないので、'include' だと
+    //   ブラウザが応答を捨てて Failed to fetch になる（実測）。
+    const calls: RequestInit[] = [];
+    const f = vi.fn(async (_u: string, init?: RequestInit) => { calls.push(init ?? {}); return new Response('abc\n'); }) as unknown as typeof fetch;
+    await fetchLatestBuildId('https://x/app', f);
+    await reloadBundleInPlace('https://x/app', okBundle());
+    expect(calls[0].credentials).toBe('same-origin');
+  });
+
+  it('本体の取得も same-origin', async () => {
+    const calls: RequestInit[] = [];
+    const f = vi.fn(async (_u: string, init?: RequestInit) => { calls.push(init ?? {}); return new Response(PAD); }) as unknown as typeof fetch;
+    await reloadBundleInPlace('https://x/app', f);
+    expect(calls[0].credentials).toBe('same-origin');
   });
 
   it('キャッシュを無効化して取りに行く（古い版を掴み続けないため）', async () => {

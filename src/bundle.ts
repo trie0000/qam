@@ -37,10 +37,16 @@ export function resolveBundleLocation(cfg: BundleConfig, relayUrl: string, loc: 
  */
 export const buildIdOf = (text: string): string => (text || '').split('\n')[0].trim();
 
+// ★credentials は 'same-origin' にする。'include' にすると、中継サーバから読む構成
+//   （bundleSource=local）で必ず失敗する。中継サーバは Access-Control-Allow-Credentials を
+//   返さないので、ブラウザが応答を捨てて Failed to fetch になる（実測）。
+//   SharePoint から読む構成は同一オリジンなので 'same-origin' でも Cookie は付く。
+const CRED: RequestCredentials = 'same-origin';
+
 /** 配信元の最新版。取れなければ null（＝判定できない）。 */
 export async function fetchLatestBuildId(base: string, fetchImpl: typeof fetch = fetch): Promise<string | null> {
   try {
-    const r = await fetchImpl(`${base}/version.txt?t=${Date.now()}`, { credentials: 'include', cache: 'no-store' });
+    const r = await fetchImpl(`${base}/version.txt?t=${Date.now()}`, { credentials: CRED, cache: 'no-store' });
     if (!r.ok) return null;
     return buildIdOf(await r.text()) || null;
   } catch { return null; }
@@ -48,7 +54,7 @@ export async function fetchLatestBuildId(base: string, fetchImpl: typeof fetch =
 
 /** 新しいバンドルを取得してその場で差し替える。成功すれば新版の起動処理まで走る。 */
 export async function reloadBundleInPlace(base: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const r = await fetchImpl(`${base}/qam.bundle.js?t=${Date.now()}`, { credentials: 'include', cache: 'no-store' });
+  const r = await fetchImpl(`${base}/qam.bundle.js?t=${Date.now()}`, { credentials: CRED, cache: 'no-store' });
   if (!r.ok) throw new Error(`アプリ本体を取得できません: HTTP ${r.status}`);
   const code = await r.text();
   // 壊れたもの・エラーページを eval して画面を壊さないよう、最低限の大きさは見る。

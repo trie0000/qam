@@ -247,8 +247,11 @@ async function doRefresh(): Promise<void> {
       await reloadBundleInPlace(loc.base);
       return; // 以降は新版の起動処理が引き継ぐ
     }
-    // 押したのに何も起きないと壊れて見えるので、最新であることも知らせる。
+    // 押したのに何も起きないと壊れて見えるので、結果は必ず知らせる。
+    // ★版を読めなかったときに黙って再描画だけしていたため、「更新を押しても
+    //   新しいバンドルが読まれない」のに手掛かりが何も出ていなかった。
     if (latest) toast(`最新版です（${BUILD}）`, 'info');
+    else toast(`配信元の版を読めませんでした（${loc.base}/version.txt）。配置済みか確認してください`, 'error');
   } catch (e) {
     // 版の確認や取得に失敗しても、再描画までは行う（更新ボタンが無反応にならないように）。
     toast('新しい版を確認できませんでした: ' + (e as Error).message, 'error');
