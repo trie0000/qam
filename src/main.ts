@@ -8,7 +8,7 @@ import { icon } from './icons';
 import { toast } from './ui/toast';
 import { openModal } from './ui/modal';
 import { renderTable, cellText, type ExportMatrix, type FilterRef, type Column } from './ui/table';
-import { exportCsv, exportXlsx, exportXlsxBook, type Sheet } from './export';
+import { exportCsv, exportXlsx, exportXlsxBook, zipBytes, type Sheet } from './export';
 import { renderCalendar } from './ui/calendar';
 import { assetColumns, historyColumns, editableCell, selectCell, settenId, openEventProps, eventSetten, eventBeforeAfter, histFieldLabel, changeLabelOf, fmtJst, ASSET_DEFAULT_HIDDEN, HISTORY_DEFAULT_HIDDEN, type CommentApi, type AnnotApi } from './ui/columns';
 import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, resolveHosts, protectSecret, type RelayConfig } from './relay';
@@ -203,6 +203,15 @@ async function updateLicenseBadge(): Promise<void> {
     el('span', { class: 'qam-license-num' }, [`${scanned == null ? '—' : scanned.toLocaleString()} / ${ips ? ips.toLocaleString() : '—'}`]),
   );
 }
+// 時間のかかる処理（レポート作成など）の進み具合。モーダルを閉じても見えるよう右上に出す。
+const busyBadge = el('span', { class: 'qam-busy', style: 'display:none' });
+export const setBusy = (msg: string): void => {
+  if (!msg) { busyBadge.style.display = 'none'; clear(busyBadge); return; }
+  clear(busyBadge);
+  busyBadge.append(el('span', { class: 'qam-spin' }), el('span', {}, [msg]));
+  busyBadge.style.display = 'inline-flex';
+};
+
 topbar.append(
   el('div', { class: 'qam-brandwrap' }, [
     el('span', { class: 'qam-badge' }, ['N']),
@@ -210,6 +219,7 @@ topbar.append(
     el('span', { class: 'qam-subtitle' }, ['Qualys Asset Management']),
   ]),
   el('span', { class: 'qam-build', title: BUILDTIME ? `ビルド日時: ${BUILDTIME}` : '' }, [`build ${BUILD}${BUILDTIME ? ` (${BUILDTIME})` : ''}`]),
+  busyBadge,
   licenseBadge,
   ingestBtn,
   exportAllBtn,
@@ -809,21 +819,6 @@ const loadRasPerms = async (): Promise<RasPerms> => normalizeRasPerms(await repo
 
 async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HTMLElement, host: HTMLElement): Promise<void> {
   clear(leftCalHost);
-  // 取込をやり直さなくても、保存済みの取込データから作り直せるようにする
-  // （この機能より前に取り込んだ環境では、これを押すまで一覧が空になる）。
-  const rebuildBtn = el('button', { class: 'btn btn--sm', title: '保存済みの取込データから独自RASの資産・チケットを作り直します（Qualys へは接続しません）' },
-    ['最新の取込から更新']);
-  rebuildBtn.addEventListener('click', async () => {
-    rebuildBtn.setAttribute('disabled', 'true');
-    try {
-      const r = await rebuildRasFromStorage();
-      if (!r.assets) toast('host の取込がないため作成できません。先に取込を実行してください', 'error');
-      else toast(`独自RAS: 資産 ${r.assets} 件 / チケット ${r.tickets} 件を反映しました`, 'ok');
-      refresh();
-    } catch (e) { toast('更新に失敗: ' + (e as Error).message, 'error'); }
-    finally { rebuildBtn.removeAttribute('disabled'); }
-  });
-  toolbar.append(rebuildBtn);
   if (state.rasTab === 'assets') {
     const csvBtn = el('button', { class: 'btn btn--sm', title: '既存の管理CSVから事業会社・管理会社を埋めます' }, ['管理CSV取込']);
     csvBtn.addEventListener('click', () => { void openRasCsvImport(); });
@@ -919,6 +914,11 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
     host.append(renderTable({
       viewId: 'ras.assets', columns: cols, rows, getKey: (a: RasAsset) => a.key,
       selected: state.selected, exportRef, filterRef, columnRef,
+      bulkActions: (keys) => {
+        const b = el('button', { class: 'btn btn--sm', title: '選んだ資産だけを SharePoint のリストへ同期します' }, ['選択分をSPOに同期']);
+        b.addEventListener('click', () => { void syncSelected('assets', keys); });
+        return [b];
+      },
     }));
     addExportButtons(toolbar, '独自RAS資産一覧', exportRef, columnRef);
   } else {
@@ -944,6 +944,13 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
         sortVal: (t: RasTicket) => t.number.padStart(12, '0'),
       },
       { id: 'state', label: 'ステータス', width: 110, render: (t: RasTicket) => esc(t.state) },
+      {
+        id: 'reportZip', label: 'レポート一式', width: 120,
+        render: (t: RasTicket) => (t.reportZip
+          ? `<a href="${esc(t.reportZip)}" target="_blank" rel="noopener noreferrer">ZIP</a>`
+          : '<span class="qam-hint">ZIP</span>'),
+        sortVal: (t: RasTicket) => (t.reportZip ? '1' : '0'),
+      },
       {
         id: 'reportedAt', label: 'レポート更新日', mono: true, width: 160,
         render: (t: RasTicket) => esc(t.reportedAt ?? ''),
@@ -1024,9 +1031,11 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       viewId: 'ras.tickets', columns: cols, rows, getKey: (t: RasTicket) => t.number,
       selected: state.selected, exportRef, filterRef, columnRef,
       bulkActions: (keys) => {
-        const b = el('button', { class: 'btn btn--sm btn--primary', title: '選んだチケットのホストについて、日本語と英語のレポートを作り直します' }, ['レポート更新']);
+        const b = el('button', { class: 'btn btn--sm btn--primary', title: '選んだチケットのホストについて、SCAN と Ticket のレポートを日英で作り直します' }, ['レポート更新']);
         b.addEventListener('click', () => { void refreshReports(keys); });
-        return [b];
+        const sync = el('button', { class: 'btn btn--sm', title: '選んだチケットだけを SharePoint のリストへ同期します' }, ['選択分をSPOに同期']);
+        sync.addEventListener('click', () => { void syncSelected('tickets', keys); });
+        return [b, sync];
       },
     }));
     addExportButtons(toolbar, '独自RASチケット一覧', exportRef, columnRef);
@@ -1067,6 +1076,12 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   const t = await repo.syncRasTickets(rt);
   if (t.added || t.updated) recordOp('RASチケットの同期', `追加 ${t.added} / 更新 ${t.updated}`);
   return { assets: assets.length, tickets: rt.length };
+}
+
+/** 保存済みのチケットスナップショット（最新）。Qualys を取り直さないときに使う。 */
+async function latestStoredTickets(): Promise<QamTicket[] | undefined> {
+  const stamp = resolveAsof(await getTicketStamps(backend));
+  return stamp ? (await readTickets(backend, stamp))?.tickets : undefined;
 }
 
 // 保存済みの取込データから RAS の2リストを作り直す。Qualys は呼ばない。
@@ -1144,6 +1159,7 @@ async function openRasCsvImport(): Promise<void> {
 //   Qualys の動的検索リストを更新する。
 function openDailyUpdate(): void {
   const cbQualys = el('input', { type: 'checkbox' }) as HTMLInputElement; cbQualys.checked = true;
+  const cbSpo = el('input', { type: 'checkbox' }) as HTMLInputElement; cbSpo.checked = true;
   const cbSearch = el('input', { type: 'checkbox' }) as HTMLInputElement; cbSearch.checked = true;
   // 作り直しは既定 OFF。ONだと割り当てが崩れて全リストが更新され得る。
   // ★押せないチェックボックスは作らない（なぜ押せないのかが画面から分からない）。
@@ -1161,6 +1177,7 @@ function openDailyUpdate(): void {
       el('label', {}, ['実行する内容']),
       el('div', { class: 'qam-chip-row' }, [
         el('label', { class: 'qam-pick' }, [cbQualys, 'Qualys情報を更新する']),
+        el('label', { class: 'qam-pick' }, [cbSpo, 'SPOリストを更新する']),
         el('label', { class: 'qam-pick' }, [cbSearch, 'Search Listを更新する']),
         el('label', { class: 'qam-pick' }, [cbRebuild, 'Search List を作り直す']),
       ]),
@@ -1175,7 +1192,7 @@ function openDailyUpdate(): void {
     title: '日次更新', body, primaryLabel: 'OK', wide: true, dismissBackdrop: false,
     onPrimary: async () => {
       if (!cbQualys.checked && !cbSearch.checked) { toast('実行する内容を選んでください', 'error'); return false; }
-      const r = await runDailyUpdate(cbQualys.checked, cbSearch.checked, cbRebuild.checked, setProg);
+      const r = await runDailyUpdate(cbQualys.checked, cbSpo.checked, cbSearch.checked, cbRebuild.checked, setProg);
       if (r) { showDailyResult(r); return true; }
       return false;
     },
@@ -1184,7 +1201,8 @@ function openDailyUpdate(): void {
 
 // 日次更新の本体。失敗しても途中まで残す（全部やり直しにしない）。
 async function runDailyUpdate(
-  doQualys: boolean, doSearch: boolean, rebuild: boolean, setProg: (msg: string, busy: boolean) => void,
+  doQualys: boolean, doSpo: boolean, doSearch: boolean, rebuild: boolean,
+  setProg: (msg: string, busy: boolean) => void,
 ): Promise<DailyRunSummary | null> {
   const cfg = await getConfig();
   const creds = await resolveQualysCreds();
@@ -1196,6 +1214,7 @@ async function runDailyUpdate(
   await ensureAuthor();
   const owner = localStorage.getItem(LS.author) || '';
   let locked = false;
+  let lastTickets: QamTicket[] | undefined;
   setRelayBusy(true);
   try {
     if (doQualys) {
@@ -1216,10 +1235,14 @@ async function runDailyUpdate(
       if (inspection?.raw && (inspection.raw.scans || inspection.raw.maps)) await storeInspection(inspection, q.label);
       for (const f of failures) summary.notes.push(`${f.kind} の取得に失敗: ${f.error}`);
 
-      // 独自RAS の更新と、前回との差分によるラベル付け。
+      lastTickets = tickets?.tickets;
+    }
+
+    // SharePoint のリストは、ここでだけ書き換える。
+    if (doSpo) {
       setProg('独自RASを更新中…', true);
       const prevTickets = await repo.readRasTickets();
-      await syncRasFromLatest(tickets?.tickets);
+      await syncRasFromLatest(lastTickets ?? (await latestStoredTickets()));
       const nextTickets = await repo.readRasTickets();
       const changes = classifyTickets(prevTickets, nextTickets);
       const at = new Date().toISOString();
@@ -1230,7 +1253,7 @@ async function runDailyUpdate(
         else if (c.change === 'closed') summary.ticketsClosed++;
         else if (c.change === 'reopened') summary.ticketsReopened++;
       }
-      // 新しく開いた脆弱性のホストは、SCANレポートを作って SharePoint に置く。
+      // 新しく開いた脆弱性のホストは、レポートを作って SharePoint に置く。
       await buildScanReports(creds, cfg, reportTargets(changes), summary, setProg);
     }
 
@@ -1353,7 +1376,8 @@ async function buildScanReports(
   }
 
   // 1) まず全部の作成を依頼する（Qualys を叩きすぎないよう本数は絞る）。
-  setProg(`レポートの作成を依頼中…（${targets.length} ホスト × ${specs.length} 種）`, true);
+  const prog = (m: string): void => { setProg(m, true); setBusy(m); };
+  prog(`レポートの作成を依頼中…（${targets.length} ホスト × ${specs.length} 種）`);
   const jobs: Job[] = targets.flatMap((t) => specs.map((sp) => ({
     target: t, kind: sp.kind, lang: sp.lang, creds: sp.creds, stamp: stampNow(),
   })));
@@ -1373,6 +1397,8 @@ async function buildScanReports(
   //    状態は 1 本ずつ聞かずアカウントごとに 1 回でまとめて取る
   //    （レポートは作成したアカウントのものしか見えないので、言語ごとに 1 回）。
   const links = new Map<ReportTarget, Record<string, string>>();
+  const pdfs = new Map<ReportTarget, { name: string; data: Uint8Array }[]>();
+  const t0 = Date.now();
   const deadline = Date.now() + 30 * 60_000;
   const LANGS = hasEn ? (['ja', 'en'] as const) : (['ja'] as const);
   for (;;) {
@@ -1382,7 +1408,7 @@ async function buildScanReports(
       for (const j of pending) summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' });
       break;
     }
-    setProg(`レポートの完成待ち…（残り ${pending.length} 本）`, true);
+    prog(`レポートの完成待ち…（残り ${pending.length} 本・${Math.round((Date.now() - t0) / 1000)} 秒経過）`);
     await new Promise((res) => setTimeout(res, 30_000));
 
     for (const lang of LANGS) {
@@ -1405,6 +1431,10 @@ async function buildScanReports(
           const cur = links.get(j.target) ?? {};
           cur[reportField(j.kind, j.lang)] = url;
           links.set(j.target, cur);
+          // ZIP にまとめる分も控えておく（担当者に渡すのは1本のほうが扱いやすい）。
+          const bag = pdfs.get(j.target) ?? [];
+          bag.push({ name: `${j.target.ip}-${j.kind}-${j.lang}.pdf`, data: base64ToBytes(b64) });
+          pdfs.set(j.target, bag);
           summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, path: url });
         } catch (e) {
           summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: (e as Error).message });
@@ -1413,11 +1443,42 @@ async function buildScanReports(
     }
   }
 
-  // いつ時点の内容かが分かるよう、作った日時を残す（4種のうち1本でも出来たら記録する）。
+  // 出来た PDF を 1 本の ZIP にまとめて置く。担当者へ渡すのは 1 リンクのほうが扱いやすい。
+  const zipStamp = stampNow();
+  for (const [t, files] of pdfs) {
+    if (!files.length) continue;
+    try {
+      prog(`${t.ip} のレポートをまとめています…`);
+      const path = `reports/${zipStamp.slice(0, 10)}/${t.ip.replace(/[^\w.-]/g, '_')}-reports-${zipStamp}.zip`;
+      await backend.writeBinary!(path, bytesToBase64(zipBytes(files)));
+      const cur = links.get(t) ?? {};
+      cur.reportZip = spFileUrl(cfg, path);
+      links.set(t, cur);
+    } catch (e) {
+      summary.notes.push(`${t.ip} のレポートをまとめられませんでした: ${(e as Error).message}`);
+    }
+  }
+
+  // いつ時点の内容かが分かるよう、作った日時を残す（1本でも出来たら記録する）。
   const reportedAt = toJst(new Date().toISOString());
   const marks: Record<string, unknown>[] = [];
   for (const [t, link] of links) for (const no of t.tickets) marks.push({ number: no, ...link, reportedAt });
   if (marks.length) await repo.setRasTicketMarks(marks as Parameters<typeof repo.setRasTicketMarks>[0]);
+  setBusy('');
+}
+
+// PDF は base64 で受け取り、ZIP はバイト列で作るので相互に変換する。
+function base64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function bytesToBase64(b: Uint8Array): string {
+  let s = '';
+  // 一度に渡すと引数が多すぎて落ちるので刻む。
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
 }
 
 /** 種別＋言語 → チケット行の項目名。 */
@@ -1475,6 +1536,46 @@ function showDailyResult(s: DailyRunSummary): void {
   if (s.notes.length) body.append(sec('実行しなかったもの', s.notes.map((n) => el('div', { class: 'qam-hint' }, [n]))));
 
   openModal({ title: '日次更新の結果', body, wide: true });
+}
+
+// 選んだ行だけを SharePoint のリストへ同期する。
+// ★全件同期（日次更新）と違い、選ばなかった行には一切触らない。「1件だけ直したいのに
+//   一覧全体が書き換わる」のを避けるための入口。
+async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise<void> {
+  if (!keys.length) return;
+  setBusy(`${keys.length} 件を SharePoint へ同期中…`);
+  try {
+    const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
+    if (!hStamp) { toast('host の取込がありません', 'error'); return; }
+    const hSnap = await readSnapshot(backend, 'host', hStamp);
+    const hosts = Object.values(hSnap?.records ?? {}) as QamRecord[];
+    const gStamp = resolveAsof(await getSnapshotStamps(backend, 'group'));
+    const gSnap = gStamp ? await readSnapshot(backend, 'group', gStamp) : null;
+    const registered = new Map((await repo.readRasAssets()).map((a) => [a.key, a]));
+    const derived = deriveRasAssets(hosts, Object.values(gSnap?.records ?? {}) as QamRecord[],
+      await buildAgSetten('host', ''), registered, dateOfStamp(hStamp));
+
+    if (kind === 'assets') {
+      const picked = derived.assets.filter((a) => keys.includes(a.key));
+      if (!picked.length) { toast('同期できる資産がありません', 'info'); return; }
+      const r = await repo.syncRasAssetsPartial(picked);
+      recordOp('RAS選択同期(資産)', `${picked.length} 件（追加 ${r.added} / 更新 ${r.updated}）`);
+      toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated}）`, 'ok');
+    } else {
+      const tickets = await latestStoredTickets();
+      if (!tickets?.length) { toast('チケットの取込がありません', 'error'); return; }
+      const idByIp: Record<string, string> = {};
+      for (const h of hosts) { const ip = h.scalar.IP; if (ip && !(ip in idByIp)) idByIp[ip] = h.key; }
+      const picked = deriveRasTickets(tickets, derived.assets, idByIp).filter((t) => keys.includes(t.number));
+      if (!picked.length) { toast('同期できるチケットがありません', 'info'); return; }
+      const r = await repo.syncRasTickets(picked);
+      recordOp('RAS選択同期(チケット)', `${picked.length} 件（追加 ${r.added} / 更新 ${r.updated}）`);
+      toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated}）`, 'ok');
+    }
+    refresh();
+  } catch (e) {
+    toast('同期に失敗: ' + (e as Error).message, 'error');
+  } finally { setBusy(''); }
 }
 
 // マスター管理ビュー: 事業会社の登録と、独自RASの2リストに対するアクセス権の割当。
@@ -2532,12 +2633,8 @@ function openIngest(): void {
           setProg(`チケット: 保存中…（${tickets.tickets.length.toLocaleString()} 件）`, true);
           await commitTickets(tickets);
         }
-        // 独自RAS のリストを最新に合わせる（host を取り込んだとき、またはチケットを取ったとき）。
-        if (kinds.includes('host') || tickets) {
-          setProg('独自RASの資産・チケットを更新中…', true);
-          try { await syncRasFromLatest(tickets?.tickets); }
-          catch (e) { recordOp('RAS同期の失敗', (e as Error).message); toast('独自RASの更新に失敗: ' + (e as Error).message, 'error'); }
-        }
+        // ★独自RAS の SharePoint リストはここでは触らない。更新は「独自RAS → 日次更新」
+        //   からだけ行う（取込のたびに書き換わると、担当者が見ている一覧が予告なく動く）。
         if (inspection && inspAfter) {
           const r = inspection.raw;
           if (!r.scans && !r.maps && !r.scanSchedules && !r.mapSchedules) {
@@ -3261,10 +3358,6 @@ async function runAutoIngest(kinds: QamEntity[]): Promise<void> {
       await commitOne(dl.snapshot, dl.raw, undefined, ipCount, true); // auto=true（非対話）
     }
     if (tickets) await commitTickets(tickets);
-    if (pending.includes('host') || tickets) {
-      try { await syncRasFromLatest(tickets?.tickets); }
-      catch (e) { recordOp('RAS同期の失敗', (e as Error).message); }
-    }
     for (const f of failures) recordOp('自動取込失敗', `${f.kind}: ${f.error}`);
     recordOp('自動取込完了', pending.join(','));
   } catch (e) { recordOp('自動取込エラー', (e as Error).message); }

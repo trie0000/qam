@@ -63,6 +63,8 @@ export interface RecordRepo {
   readRasAssets(): Promise<RasAsset[]>;
   /** 取込で作った資産一覧を反映する（登録済みの会社は呼び出し側が引き継いで渡す）。 */
   syncRasAssets(assets: RasAsset[]): Promise<{ added: number; updated: number; removed: number }>;
+  /** 渡した資産だけを反映する（載っていない行は消さない）。選択同期で使う。 */
+  syncRasAssetsPartial(assets: RasAsset[]): Promise<{ added: number; updated: number }>;
   /** key は RasAsset.key（ホストID、または host list に無い資産の 'ip:<IP>'）。 */
   setRasCompany(key: string, businessCompany: string, managementCompany: string): Promise<void>;
   /** CSV取込用の一括更新。1件ずつ setRasCompany を呼ぶと毎回全件読み直しになるため分ける。 */
@@ -73,7 +75,7 @@ export interface RecordRepo {
   readRasTickets(): Promise<RasTicket[]>;
   syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
   /** 日次更新の結果（変化ラベル・レポートリンク）を書き戻す。 */
-  setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string; ticketReportJa?: string; ticketReportEn?: string; reportedAt?: string; note?: string }[]): Promise<number>;
+  setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string; ticketReportJa?: string; ticketReportEn?: string; reportZip?: string; reportedAt?: string; note?: string }[]): Promise<number>;
 
   /** 独自RASの2リストを SharePoint で開くURL。取れなければ空文字。 */
   rasListUrls(): Promise<{ assets: string; tickets: string }>;
@@ -91,7 +93,7 @@ let impl: RecordRepo = {
   readComments: notReady, addComment: notReady, editComment: notReady,
   readAnnotations: notReady, setAnnotation: notReady, setAnnotationsBulk: notReady,
   readSharedJson: notReady, writeSharedJson: notReady,
-  readRasAssets: notReady, syncRasAssets: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady, setRasAssetNote: notReady,
+  readRasAssets: notReady, syncRasAssets: notReady, syncRasAssetsPartial: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady, setRasAssetNote: notReady,
   readRasTickets: notReady, syncRasTickets: notReady, setRasTicketMarks: notReady,
   rasListUrls: notReady, listSiteGroups: notReady, applyRasPerms: notReady,
   readOps: notReady, logOp: notReady,
@@ -109,6 +111,7 @@ export const repo: RecordRepo = {
   writeSharedJson: (k, v) => impl.writeSharedJson(k, v),
   readRasAssets: () => impl.readRasAssets(),
   syncRasAssets: (a) => impl.syncRasAssets(a),
+  syncRasAssetsPartial: (a) => impl.syncRasAssetsPartial(a),
   setRasCompany: (k, b, m) => impl.setRasCompany(k, b, m),
   setRasCompaniesBulk: (u) => impl.setRasCompaniesBulk(u),
   setRasAssetNote: (k, n) => impl.setRasAssetNote(k, n),

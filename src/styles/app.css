@@ -79,6 +79,10 @@ body {
 .qam-pick:hover { background: var(--paper-2); }
 .qam-pick input { cursor: pointer; margin: 0; }
 .qam-pick--all { font-weight: 600; }
+/* 時間のかかる処理の進み具合。モーダルを閉じても見えるよう上部に常時出す。 */
+.qam-busy { display: inline-flex; align-items: center; gap: var(--s-2); padding: 0 var(--s-4);
+  height: 28px; border-radius: var(--r-2); background: var(--accent-soft); color: var(--accent-strong);
+  font-size: var(--fs-sm); white-space: nowrap; }
 .qam-pick input:disabled { cursor: default; }
 .qam-pick:has(input:disabled) { opacity: .5; cursor: default; }
 /* 設定系ビューの区切りカード（マスター管理など、縦に積む画面用）。 */

@@ -121,6 +121,7 @@ export interface RasTicket {
   reportEn?: string;
   ticketReportJa?: string; // Ticket(Remediation)レポート(日本語)
   ticketReportEn?: string;
+  reportZip?: string;      // 4種をまとめた ZIP の URL（担当者へはこれ1本）
   reportedAt?: string;     // レポートを作った日時（JST 表記）。いつ時点の内容かを示す
 }
 

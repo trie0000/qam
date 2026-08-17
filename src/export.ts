@@ -143,6 +143,12 @@ interface ZEntry { name: string; data: Uint8Array; crc: number; offset: number }
 
 function zip(files: { name: string; content: string }[]): Uint8Array {
   const enc = new TextEncoder();
+  return zipBytes(files.map((f) => ({ name: f.name, data: enc.encode(f.content) })));
+}
+
+/** バイナリをそのまま詰める ZIP（無圧縮 store）。PDF をまとめるのに使う。 */
+export function zipBytes(files: { name: string; data: Uint8Array }[]): Uint8Array {
+  const enc = new TextEncoder();
   const parts: Uint8Array[] = [];
   const entries: ZEntry[] = [];
   let offset = 0;
@@ -151,7 +157,7 @@ function zip(files: { name: string; content: string }[]): Uint8Array {
   const push = (b: Uint8Array) => { parts.push(b); offset += b.length; };
 
   for (const f of files) {
-    const data = enc.encode(f.content);
+    const data = f.data;
     const nameB = enc.encode(f.name);
     const crc = crc32(data);
     entries.push({ name: f.name, data, crc, offset });

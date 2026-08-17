@@ -64,8 +64,26 @@ describe('レポート対象の抽出', () => {
     expect(targets[0].tickets).toEqual(['1', '9']); // 同じホストの複数チケットは1件にまとめる
   });
 
+  it('同じホストのチケットが複数あってもレポートは1回だけ（作ったものを使い回す）', () => {
+    // ★ホスト単位でまとめないと、同じホストのチケットの数だけ同じレポートを作ることになる。
+    //   まとめた結果、そのホストの全チケットが同じリンクを指す。
+    const results = classifyTickets([t('99', 'CLOSED', '10.9.9.9', 'h9')], [
+      t('1', 'OPEN', '10.0.0.1', 'h1'), t('2', 'OPEN', '10.0.0.1', 'h1'), t('3', 'OPEN', '10.0.0.1', 'h1'),
+    ]);
+    const targets = reportTargets(results);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].tickets).toEqual(['1', '2', '3']);
+  });
+
+  it('ホストIDが無くても IP が同じなら1本にまとめる', () => {
+    const results = classifyTickets([t('99', 'CLOSED', '10.9.9.9', 'h9')], [
+      { ...t('1', 'OPEN', '10.0.0.1'), hostId: '' }, { ...t('2', 'OPEN', '10.0.0.1'), hostId: '' },
+    ]);
+    expect(reportTargets(results)).toHaveLength(1);
+  });
+
   it('IP が無いものは落とす（Qualys に対象を渡せない）', () => {
-    const results = classifyTickets([], [{ ...t('1', 'OPEN'), ip: '' }]);
+    const results = classifyTickets([t('99', 'CLOSED', '10.9.9.9', 'h9')], [{ ...t('1', 'OPEN'), ip: '' }]);
     expect(reportTargets(results)).toEqual([]);
   });
 });

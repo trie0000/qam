@@ -89,7 +89,7 @@ function link(label: string, field: string): Node {
 const reportCard = (): Node => ({
   elmType: 'div',
   style: {
-    display: "=if([$ReportJa] == '' && [$ReportEn] == '' && [$TicketReportJa] == '' && [$TicketReportEn] == '', 'none', 'flex')",
+    display: "=if([$ReportZip] == '' && [$ReportJa] == '' && [$ReportEn] == '' && [$TicketReportJa] == '' && [$TicketReportEn] == '', 'none', 'flex')",
     'flex-direction': 'column', 'align-items': 'stretch', 'text-align': 'left',
     width: '100%', 'box-sizing': 'border-box', padding: '14px 18px', 'margin-bottom': '10px',
     'border-radius': '8px', border: '1px solid #edebe9', 'background-color': '#faf9f8',
@@ -102,6 +102,8 @@ const reportCard = (): Node => ({
         'padding-bottom': '8px', 'margin-bottom': '12px', 'border-bottom': '1px solid #edebe9',
       },
     },
+    // まとめた ZIP を先に出す。個別の PDF も残すが、渡すのは通常 ZIP 1本。
+    link('レポート一式（SCAN/Ticket × 日英）', 'ReportZip'),
     twoColumns(
       [link('SCAN / JP（日本語）', 'ReportJa'), link('SCAN / EN（英語）', 'ReportEn')],
       [link('Ticket / JP（日本語）', 'TicketReportJa'), link('Ticket / EN（英語）', 'TicketReportEn')],
