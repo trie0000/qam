@@ -1528,6 +1528,14 @@ async function buildScanReports(
   }
 
   const prog = (m: string): void => { setProg(m, true); setBusy(m); };
+  // ★残り本数は「いま依頼している波」ではなく **全体** から数える。波の中だけを見ると
+  //   30 本残っていても「残り 2 本」と出る。やり直し分も同じジョブを使い回すので、
+  //   done が立っていないものを数えれば二重に数えることもない。
+  const allJobs: Job[] = targets.flatMap((t) => specs.map((sp) => ({
+    target: t, kind: sp.kind, lang: sp.lang, creds: sp.creds, stamp: stampNow(),
+  })));
+  const total = allJobs.length;
+  const leftCount = (): number => allJobs.filter((j) => !j.done).length;
   const links = new Map<ReportTarget, Record<string, string>>();
   const pdfs = new Map<ReportTarget, { name: string; data: Uint8Array }[]>();
   const t0 = Date.now();
@@ -1543,7 +1551,8 @@ async function buildScanReports(
         for (const j of pending) { j.done = true; summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' }); }
         return;
       }
-      prog(`レポートの完成待ち…（残り ${pending.length} 本・${Math.round((Date.now() - t0) / 1000)} 秒経過）`);
+      prog(`レポートの完成待ち…（残り ${leftCount()} / 全 ${total} 本・いま ${pending.length} 本を作成中・`
+        + `${Math.round((Date.now() - t0) / 1000)} 秒経過）`);
       await new Promise((res) => setTimeout(res, 30_000));
 
       for (const lang of LANGS) {
@@ -1583,18 +1592,14 @@ async function buildScanReports(
   //   （Max number of allowed reports already running. Please try again later.）。
   //   全部まとめて依頼すると上限を超えた分がその場で失敗する。実際に大量に落ちた。
   //   依頼 → 完成待ち → 取得 をひと組にして、REPORT_MAX_RUNNING 本ずつ流す。
-  const queue: Job[] = targets.flatMap((t) => specs.map((sp) => ({
-    target: t, kind: sp.kind, lang: sp.lang, creds: sp.creds, stamp: stampNow(),
-  })));
-  const total = queue.length;
-  let doneCount = 0;
+  const queue: Job[] = [...allJobs];
   while (queue.length) {
     if (Date.now() > deadline) {
-      for (const j of queue) summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' });
+      for (const j of queue) { j.done = true; summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' }); }
       break;
     }
     const wave = queue.splice(0, REPORT_MAX_RUNNING);
-    prog(`レポートの作成を依頼中…（${doneCount + 1}〜${doneCount + wave.length} / ${total} 本）`);
+    prog(`レポートの作成を依頼中…（残り ${leftCount()} / 全 ${total} 本・${wave.length} 本を依頼）`);
     for (const j of wave) {
       const sp = specs.find((x) => x.kind === j.kind && x.lang === j.lang)!;
       j.stamp = stampNow();
@@ -1614,7 +1619,6 @@ async function buildScanReports(
       }
     }
     await drain(wave);
-    doneCount += wave.filter((j) => j.done).length;
   }
 
   // 出来た PDF を 1 本の ZIP にまとめて置く。担当者へ渡すのは 1 リンクのほうが扱いやすい。
