@@ -21,7 +21,7 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 10: Ticket(Remediation)レポートのリンク列を追加
 // 11: レポート更新日(ReportUpdatedAt)を追加
 // 12: 4種をまとめた ZIP(ReportZip)を追加し、SPO の一覧はそれ1本にする
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -116,6 +116,7 @@ export const rasTicketFields: FieldSpec[] = [
   { name: 'HostId', type: 'Text', indexed: true },
   { name: 'Ip', type: 'Text' },
   { name: 'Fqdn', type: 'Text' },
+  { name: 'Port', type: 'Text' },       // 脆弱性が見つかったポート
   { name: 'SettenId', type: 'Text' },
   { name: 'BusinessCompany', type: 'Text', indexed: true },
   { name: 'ManagementCompany', type: 'Text' },
@@ -160,7 +161,7 @@ export const ALL_LISTS: {
     title: LIST_RAS_TICKETS, fields: rasTicketFields, uniqueTitle: true, formFormatter: rasTicketFormFormatter,
     dropFields: ['TicketNumber', 'DedupKey', 'OpenedAt'],
     titleLabel: 'Ticket No',
-    viewFields: ['Title', 'State', 'VulnKind', 'CveIds', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'FirstFound', 'LastFound', 'ReportZip', 'ReportUpdatedAt'],
+    viewFields: ['Title', 'State', 'VulnKind', 'CveIds', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'Port', 'FirstFound', 'LastFound', 'ReportZip', 'ReportUpdatedAt'],
     fieldFormatters: {
       ReportZip: reportLinkColumnFormat('ReportZip', 'レポート一式(ZIP)'),
     },
@@ -243,7 +244,7 @@ export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
 
 // チケット番号は Title。一意制約も Title に張る（uniqueTitle）。
 export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
-  ({ Title: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn,
+  ({ Title: t.number, State: t.state, HostId: t.hostId, Ip: t.ip, Fqdn: t.fqdn, Port: t.port,
      SettenId: t.settenId, BusinessCompany: t.businessCompany, ManagementCompany: t.managementCompany,
      VulnKind: t.vulnKind, CveIds: t.cveIds,
      FirstFound: t.firstFound, LastFound: t.lastFound,
@@ -251,7 +252,7 @@ export const rasTicketToRow = (t: RasTicket): Record<string, unknown> =>
      TicketReportJa: t.ticketReportJa ?? '', TicketReportEn: t.ticketReportEn ?? '',
      ReportZip: t.reportZip ?? '', ReportUpdatedAt: t.reportedAt ?? '', Note: t.note ?? '' });
 export const rowToRasTicket = (r: Record<string, unknown>): RasTicket =>
-  ({ number: str(r.Title), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn),
+  ({ number: str(r.Title), state: str(r.State), hostId: str(r.HostId), ip: str(r.Ip), fqdn: str(r.Fqdn), port: str(r.Port),
      settenId: str(r.SettenId), businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany),
      vulnKind: str(r.VulnKind), cveIds: str(r.CveIds),
      created: str(r.FirstFound), firstFound: str(r.FirstFound), lastFound: str(r.LastFound),

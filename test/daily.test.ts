@@ -1,12 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyTicketChange, classifyTickets, isOpenState, reportTargets, reportPath, reportTitle,
+  isReportBusy, REPORT_MAX_RUNNING, REPORT_DEADLINE_MIN,
 } from '../src/daily';
 import type { RasTicket } from '../src/ras';
 
 const t = (number: string, state: string, ip = '10.0.0.1', hostId = 'h1'): RasTicket =>
   ({ number, state, hostId, ip, fqdn: 'a.example', settenId: 'R100', businessCompany: 'A社', managementCompany: 'X保守',
-     vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
+     port: '443', vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
      created: '2026-08-01T00:00:00Z', firstFound: '2026-08-01 09:00:00', lastFound: '2026-08-10 09:00:00' });
 
 describe('チケットの状態', () => {
@@ -102,5 +103,30 @@ describe('レポートの保存先と名前', () => {
 
   it('タイトルは 128 文字に収める（Qualys の上限）', () => {
     expect(reportTitle('10.0.0.1', 'x'.repeat(200), '2026-08-17T10-30-00').length).toBe(128);
+  });
+});
+
+describe('レポートの同時実行数', () => {
+  it('★「まだ走っている」失敗は待てば通るものとして扱う', () => {
+    // Qualys は HTTP 200 + SIMPLE_RETURN で返してくるので、状態コードでは判別できない。
+    expect(isReportBusy('レポートIDを取得できませんでした (HTTP 200) — 応答: <SIMPLE_RETURN> '
+      + '<RESPONSE> <TEXT>Max number of allowed reports already running. Please try again later.</TEXT>')).toBe(true);
+    expect(isReportBusy('Please try again later.')).toBe(true);
+  });
+
+  it('設定ミスなど「待っても通らない」失敗は区別する', () => {
+    // ★ここを取り違えると、直らない失敗を上限まで投げ直して時間を捨てる。
+    expect(isReportBusy('Bad template（コード 1905）')).toBe(false);
+    expect(isReportBusy('この保管先には PDF を保存できません')).toBe(false);
+    expect(isReportBusy('')).toBe(false);
+  });
+
+  it('同時に走らせる本数は絞る（全部まとめて依頼すると上限で落ちる）', () => {
+    expect(REPORT_MAX_RUNNING).toBeLessThanOrEqual(3);
+    expect(REPORT_MAX_RUNNING).toBeGreaterThan(0);
+  });
+
+  it('少しずつ流すぶん、打ち切り時間は長めに取る', () => {
+    expect(REPORT_DEADLINE_MIN).toBeGreaterThanOrEqual(60);
   });
 });

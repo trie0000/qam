@@ -35,7 +35,8 @@ import { normalizeTemplates, EMPTY_TEMPLATES, buildCompanyMails, openTickets, ti
 import { parseContacts, contactsByScope, type Contact } from './contacts';
 import { readXlsxSheetLike } from './xlsx-read';
 import { fetchIntraFile, openMailDraft } from './api/intra-mail';
-import { classifyTickets, reportTargets, reportPath, reportTitle, TICKET_CHANGE_LABEL, type DailyRunSummary, type ReportTarget } from './daily';
+import { classifyTickets, reportTargets, reportPath, reportTitle, TICKET_CHANGE_LABEL,
+  REPORT_MAX_RUNNING, REPORT_MAX_RETRY, REPORT_DEADLINE_MIN, isReportBusy, type DailyRunSummary, type ReportTarget } from './daily';
 import { readXlsxSheet, columnUntilBlankRow } from './xlsx-read';
 import { isAbsoluteUrl, parseSpFileUrl, spFileValueUrl } from './sp-url';
 import {
@@ -1035,6 +1036,7 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       { id: 'managementCompany', label: '管理会社', width: 180, render: (t: RasTicket) => esc(t.managementCompany) },
       { id: 'ip', label: 'IP', mono: true, width: 140, render: (t: RasTicket) => esc(t.ip) },
       { id: 'fqdn', label: 'FQDN', render: (t: RasTicket) => esc(t.fqdn) },
+      { id: 'port', label: 'ポート', mono: true, width: 90, render: (t: RasTicket) => esc(t.port ?? '') },
       // 保存時に JST 表記にしてあるので、ここでは変換しない（二重変換になる）。
       { id: 'firstFound', label: '初回検知日', mono: true, width: 160, render: (t: RasTicket) => esc(t.firstFound) },
       { id: 'lastFound', label: '最終検知日', mono: true, width: 160, render: (t: RasTicket) => esc(t.lastFound) },
@@ -1522,75 +1524,97 @@ async function buildScanReports(
 
   interface Job {
     target: ReportTarget; kind: 'scan' | 'ticket'; lang: 'ja' | 'en'; creds: QualysCreds; stamp: string;
-    id?: string; done?: boolean;
+    id?: string; done?: boolean; tries?: number;
   }
 
-  // 1) まず全部の作成を依頼する（Qualys を叩きすぎないよう本数は絞る）。
   const prog = (m: string): void => { setProg(m, true); setBusy(m); };
-  prog(`レポートの作成を依頼中…（${targets.length} ホスト × ${specs.length} 種）`);
-  const jobs: Job[] = targets.flatMap((t) => specs.map((sp) => ({
-    target: t, kind: sp.kind, lang: sp.lang, creds: sp.creds, stamp: stampNow(),
-  })));
-  await mapLimit(jobs, 4, async (j) => {
-    const sp = specs.find((x) => x.kind === j.kind && x.lang === j.lang)!;
-    try {
-      j.id = await launchScanReport(j.creds, author, {
-        templateId: sp.template, title: reportTitle(j.target.ip, j.target.fqdn, j.stamp), ip: j.target.ip, kind: j.kind,
-      });
-    } catch (e) {
-      j.done = true;
-      summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: (e as Error).message });
-    }
-  });
-
-  // 2) 完成待ち。★依頼直後は必ず生成中なので 30 秒待ってから、以後 30 秒間隔。
-  //    状態は 1 本ずつ聞かずアカウントごとに 1 回でまとめて取る
-  //    （レポートは作成したアカウントのものしか見えないので、言語ごとに 1 回）。
   const links = new Map<ReportTarget, Record<string, string>>();
   const pdfs = new Map<ReportTarget, { name: string; data: Uint8Array }[]>();
   const t0 = Date.now();
-  const deadline = Date.now() + 30 * 60_000;
+  const deadline = Date.now() + REPORT_DEADLINE_MIN * 60_000;
   const LANGS = hasEn ? (['ja', 'en'] as const) : (['ja'] as const);
-  for (;;) {
-    const pending = jobs.filter((j) => j.id && !j.done);
-    if (!pending.length) break;
-    if (Date.now() > deadline) {
-      for (const j of pending) summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' });
-      break;
-    }
-    prog(`レポートの完成待ち…（残り ${pending.length} 本・${Math.round((Date.now() - t0) / 1000)} 秒経過）`);
-    await new Promise((res) => setTimeout(res, 30_000));
 
-    for (const lang of LANGS) {
-      const mine = pending.filter((j) => j.lang === lang);
-      if (!mine.length) continue;
-      let states: Map<string, string>;
-      try { states = await reportStates(mine[0].creds); }
-      catch { continue; } // 一時的な失敗。次の周回で聞き直す
-      for (const j of mine) {
-        const st = states.get(j.id!) ?? '';
-        if (!st || st === 'Running' || st === 'Submitted') continue;
-        j.done = true;
-        if (st !== 'Finished') { summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: `レポートが完成しませんでした（状態: ${st}）` }); continue; }
-        try {
-          const b64 = await fetchReportPdf(j.creds, j.id!);
-          const path = reportPath(j.stamp, j.target.ip, j.lang, j.kind);
-          if (!backend.writeBinary) throw new Error('この保管先には PDF を保存できません');
-          await backend.writeBinary(path, b64);
-          const url = spFileUrl(cfg, path);
-          const cur = links.get(j.target) ?? {};
-          cur[reportField(j.kind, j.lang)] = url;
-          links.set(j.target, cur);
-          // ZIP にまとめる分も控えておく（担当者に渡すのは1本のほうが扱いやすい）。
-          const bag = pdfs.get(j.target) ?? [];
-          bag.push({ name: `${j.target.ip}-${j.kind}-${j.lang}.pdf`, data: base64ToBytes(b64) });
-          pdfs.set(j.target, bag);
-          summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, path: url });
-        } catch (e) {
-          summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: (e as Error).message });
+  /** 依頼したぶんが片付くまで待って、出来たものを保存する。 */
+  const drain = async (wave: Job[]): Promise<void> => {
+    for (;;) {
+      const pending = wave.filter((j) => j.id && !j.done);
+      if (!pending.length) return;
+      if (Date.now() > deadline) {
+        for (const j of pending) { j.done = true; summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' }); }
+        return;
+      }
+      prog(`レポートの完成待ち…（残り ${pending.length} 本・${Math.round((Date.now() - t0) / 1000)} 秒経過）`);
+      await new Promise((res) => setTimeout(res, 30_000));
+
+      for (const lang of LANGS) {
+        const mine = pending.filter((j) => j.lang === lang);
+        if (!mine.length) continue;
+        let states: Map<string, string>;
+        try { states = await reportStates(mine[0].creds); }
+        catch { continue; } // 一時的な失敗。次の周回で聞き直す
+        for (const j of mine) {
+          const st = states.get(j.id!) ?? '';
+          if (!st || st === 'Running' || st === 'Submitted') continue;
+          j.done = true;
+          if (st !== 'Finished') { summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: `レポートが完成しませんでした（状態: ${st}）` }); continue; }
+          try {
+            const b64 = await fetchReportPdf(j.creds, j.id!);
+            const path = reportPath(j.stamp, j.target.ip, j.lang, j.kind);
+            if (!backend.writeBinary) throw new Error('この保管先には PDF を保存できません');
+            await backend.writeBinary(path, b64);
+            const url = spFileUrl(cfg, path);
+            const cur = links.get(j.target) ?? {};
+            cur[reportField(j.kind, j.lang)] = url;
+            links.set(j.target, cur);
+            // ZIP にまとめる分も控えておく（担当者に渡すのは1本のほうが扱いやすい）。
+            const bag = pdfs.get(j.target) ?? [];
+            bag.push({ name: `${j.target.ip}-${j.kind}-${j.lang}.pdf`, data: base64ToBytes(b64) });
+            pdfs.set(j.target, bag);
+            summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, path: url });
+          } catch (e) {
+            summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: (e as Error).message });
+          }
         }
       }
     }
+  };
+
+  // ★Qualys は「同時に走らせられるレポート数」に上限がある
+  //   （Max number of allowed reports already running. Please try again later.）。
+  //   全部まとめて依頼すると上限を超えた分がその場で失敗する。実際に大量に落ちた。
+  //   依頼 → 完成待ち → 取得 をひと組にして、REPORT_MAX_RUNNING 本ずつ流す。
+  const queue: Job[] = targets.flatMap((t) => specs.map((sp) => ({
+    target: t, kind: sp.kind, lang: sp.lang, creds: sp.creds, stamp: stampNow(),
+  })));
+  const total = queue.length;
+  let doneCount = 0;
+  while (queue.length) {
+    if (Date.now() > deadline) {
+      for (const j of queue) summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: 'レポートが時間内に完成しませんでした' });
+      break;
+    }
+    const wave = queue.splice(0, REPORT_MAX_RUNNING);
+    prog(`レポートの作成を依頼中…（${doneCount + 1}〜${doneCount + wave.length} / ${total} 本）`);
+    for (const j of wave) {
+      const sp = specs.find((x) => x.kind === j.kind && x.lang === j.lang)!;
+      j.stamp = stampNow();
+      try {
+        j.id = await launchScanReport(j.creds, author, {
+          templateId: sp.template, title: reportTitle(j.target.ip, j.target.fqdn, j.stamp), ip: j.target.ip, kind: j.kind,
+        });
+      } catch (e) {
+        const msg = (e as Error).message;
+        // ★他の実行分がまだ走っていて上限に当たっただけなら、後ろに回してもう一度試す。
+        //   ここで諦めると、たまたま順番が後ろだったホストだけレポートが作られない。
+        if (isReportBusy(msg) && (j.tries ?? 0) < REPORT_MAX_RETRY) {
+          j.tries = (j.tries ?? 0) + 1; j.id = undefined; queue.push(j); continue;
+        }
+        j.done = true;
+        summary.reports.push({ ip: j.target.ip, lang: j.lang, kind: j.kind, error: msg });
+      }
+    }
+    await drain(wave);
+    doneCount += wave.filter((j) => j.done).length;
   }
 
   // 出来た PDF を 1 本の ZIP にまとめて置く。担当者へ渡すのは 1 リンクのほうが扱いやすい。

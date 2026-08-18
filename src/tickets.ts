@@ -64,6 +64,7 @@ export function parseTicketXml(xml: string): QamTicket[] {
       hostId: text(det, 'HOST_ID'),
       ip: text(det, 'IP'),
       fqdn: text(det, 'FQDN') || text(det, 'DNSNAME'),
+      port: text(det, 'PORT'),
       created: text(t, 'CREATION_DATETIME'),
       firstFound: text(stats, 'FIRST_FOUND_DATETIME'),
       lastFound: text(stats, 'LAST_FOUND_DATETIME'),

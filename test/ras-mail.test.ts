@@ -7,7 +7,7 @@ import type { Contact } from '../src/contacts';
 const t = (n: string, company: string, state = 'OPEN', ip = '10.0.0.1'): RasTicket =>
   ({ number: n, state, hostId: 'h1', ip, fqdn: 'a.example', settenId: 'R100',
      businessCompany: company, managementCompany: '', created: '', firstFound: '', lastFound: '',
-     vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '' });
+     port: '', vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '' });
 
 const perms = normalizeRasPerms({
   byBusinessCompany: { 'A事業会社': [7], 'B事業会社': [] },

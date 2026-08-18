@@ -324,7 +324,7 @@ describe('独自RAS のリスト同期', () => {
     const repo = repoOf(lists);
     const t = (n: string, state = 'OPEN') =>
       ({ number: n, state, hostId: '1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100', businessCompany: 'A社', managementCompany: '',
-        vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
+        port: '443', vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
          created: '', firstFound: '2026-08-01 00:00:00', lastFound: '' });
     await repo.syncRasTickets([t('11'), t('12')]);
     const r = await repo.syncRasTickets([t('11', 'CLOSED')]);
@@ -385,7 +385,7 @@ describe('資産で設定した会社をチケットへ写す', () => {
        trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: '', managementCompany: '' });
   const ticket = (n: string, hostId: string, ip: string) =>
     ({ number: n, state: 'OPEN', hostId, ip, fqdn: 'a', settenId: 'R100', businessCompany: '', managementCompany: '',
-       vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
+       port: '', vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
        created: '', firstFound: '2026-08-01 00:00:00', lastFound: '' });
 
   it('資産の会社を変えると、同じホストのチケットにも反映される', async () => {
@@ -439,7 +439,7 @@ describe('保管先の委譲', () => {
 describe('列を足したときの取りこぼし', () => {
   const t = (n: string, over: Partial<RasTicket> = {}): RasTicket =>
     ({ number: n, state: 'OPEN', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
-       businessCompany: 'A社', managementCompany: '', vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
+       businessCompany: 'A社', managementCompany: '', port: '443', vulnKind: 'OS・ミドルウェア検査牽制分', cveIds: '',
        created: '', firstFound: '', lastFound: '', ...over });
 
   it('★書き込む列は全部読み出す（読み忘れた列は永久に空のままになる）', () => {

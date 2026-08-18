@@ -139,6 +139,7 @@ export interface RasTicket {
   lastFound: string;   // 最終検知日（同上）
   note?: string;       // メモ（複数行・ツール側だけで表示）
   // 日次更新で付ける情報。取得しただけの同期では触らない。
+  port: string;       // 脆弱性が見つかったポート（DETECTION/PORT。無い検知は空）
   vulnKind: string;   // CSIRT牽制分 / OS・ミドルウェア検査牽制分
   cveIds: string;     // 該当した CVE 番号（CSIRT牽制分のときだけ入る）
   change?: string;    // '' | new | closed | reopened
@@ -295,7 +296,7 @@ export function deriveRasTickets(
     const { kind, cveIds } = classifyVuln(t.cves ?? [], sheetCves);
     out.push({
       number: t.number, state: t.state, hostId,
-      ip: t.ip || a.ip, fqdn: t.fqdn || a.fqdn, settenId: a.settenId,
+      ip: t.ip || a.ip, fqdn: t.fqdn || a.fqdn, port: t.port ?? '', settenId: a.settenId,
       businessCompany: a.businessCompany, managementCompany: a.managementCompany,
       created: t.created,
       // 初回検知日が無い契約もあるので、その時は起票日時で代替する（空欄にしない）。

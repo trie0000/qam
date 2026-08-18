@@ -29,8 +29,18 @@ describe('チケット応答の解析', () => {
     const t = parseTicketXml(page(ticket('101', 'OPEN', '10.0.0.1', '9001', 'host1.example')))[0];
     expect(t).toEqual({
       number: '101', state: 'OPEN', hostId: '9001', ip: '10.0.0.1',
-      fqdn: 'host1.example', created: '2026-08-01T09:30:00Z', firstFound: '', lastFound: '', cves: [],
+      fqdn: 'host1.example', port: '', created: '2026-08-01T09:30:00Z', firstFound: '', lastFound: '', cves: [],
     });
+  });
+
+  it('検知したポートを取り出す（DETECTION/PORT）', () => {
+    const xml = page('<TICKET><NUMBER>301</NUMBER><CURRENT_STATE>OPEN</CURRENT_STATE>'
+      + '<DETECTION><IP>10.0.0.9</IP><PORT>443</PORT><SERVICE>https</SERVICE></DETECTION></TICKET>');
+    expect(parseTicketXml(xml)[0].port).toBe('443');
+  });
+
+  it('ポートの無い検知は空にする（OS 全体の脆弱性など）', () => {
+    expect(parseTicketXml(page(ticket('302', 'OPEN', '10.0.0.4')))[0].port).toBe('');
   });
 
   it('FQDN が無い応答では DNSNAME で代替する', () => {

@@ -79,3 +79,20 @@ export interface DailyRunSummary {
   notes: string[];
   cveList?: string[]; // その実行で読んだ CVE対応策一覧（2度読みしないため）           // 実行しなかった理由など（黙って飛ばさない）
 }
+
+/**
+ * 同時に走らせるレポートの本数。
+ * ★Qualys は「同時に走らせられるレポート数」に上限があり、超えると launch が
+ *   その場で失敗する（Max number of allowed reports already running）。
+ *   上限は契約で違うので、確実に通る本数まで絞ってから少しずつ流す。
+ */
+export const REPORT_MAX_RUNNING = 2;
+/** 上限に当たった分をやり直す回数（他の実行分が走り終わるのを待つため）。 */
+export const REPORT_MAX_RETRY = 5;
+/** レポート全体の打ち切り時間（分）。少しずつ流すぶん、一括より時間がかかる。 */
+export const REPORT_DEADLINE_MIN = 60;
+
+/** 「同時実行数の上限に当たった」＝待てば通る失敗か。 */
+export function isReportBusy(message: string): boolean {
+  return /already running|try again later/i.test(message ?? '');
+}

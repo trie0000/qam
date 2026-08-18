@@ -142,7 +142,8 @@ export const rasTicketFormFormatter = (): string => JSON.stringify({
   headerJSONFormatter: root([card('Ticket No ',
     [item('ステータス', 'State'), item('脆弱性種別', 'VulnKind'), item('CVE ID', 'CveIds'),
      item('事業会社', 'BusinessCompany'), item('管理会社', 'ManagementCompany')],
-    [item('IP', 'Ip'), item('FQDN', 'Fqdn'), item('初回検知日', 'FirstFound'), item('最終検知日', 'LastFound')],
+    [item('IP', 'Ip'), item('FQDN', 'Fqdn'), item('ポート', 'Port'),
+     item('初回検知日', 'FirstFound'), item('最終検知日', 'LastFound')],
   ), reportCard()]),
   ...READONLY_BODY,
 });
