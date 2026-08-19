@@ -56,7 +56,7 @@ import {
 } from './store';
 // メモ・注釈・操作履歴・管理表・ライセンス推移は「複数人が同時に足す」記録なので repo 経由。
 // 保管先（ファイル / SharePoint リスト）は起動時に決まる。
-import { repo, setRepo } from './api/repo';
+import { repo, setRepo, type RasPermTargets } from './api/repo';
 import { prepareLicenseSeries, licenseChartSvg, type LicenseSample } from './ui/license-chart';
 import type { QamComment, QamEntity, QamEvent, QamInspectionRaw, QamRecord, QamRecords, QamTicket } from './types';
 
@@ -1114,8 +1114,10 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
 // 独自RAS の2リストを最新の取込内容に合わせる。
 // 資産は host スナップショット由来（接続点IDが R 始まりのもの）。事業会社/管理会社の入力は
 // hostId で引き継ぐ（取込のたびに消えないように）。チケットは RAS 資産の分だけを載せる。
-// ★権限は自動では反映しない。会社の割当が変わっていない限り再適用は不要で、
-//   全アイテムに1件ずつ SharePoint を呼ぶので取込のたびに走らせると重い。
+// ★アクセス権は **増えた行と事業会社が変わった行にだけ** 付け直す。全アイテムに
+//   1件ずつ SharePoint を呼ぶので、取込のたびに全件へ走らせると重い。かといって
+//   何もしないと、増えた行が継承のまま（担当外にも見える）になる。割当そのものを
+//   変えたときは、マスター管理の「権限を反映」で全件に掛け直すこと。
 async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: number; tickets: number }> {
   const hStamp = resolveAsof(await getSnapshotStamps(backend, 'host'));
   if (!hStamp) return { assets: 0, tickets: 0 }; // host 未取込なら何もしない
@@ -1135,6 +1137,7 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   if (derived.pendingSetten.length) recordOp('RAS資産の同期', `${RAS_NOT_SCANNED} として登録（AssetGroupの最終更新が基準日）: ${derived.pendingSetten.join(' / ')}`);
   const a = await repo.syncRasAssets(assets);
   if (a.added || a.updated || a.removed) recordOp('RAS資産の同期', `追加 ${a.added} / 更新 ${a.updated} / 削除 ${a.removed}`);
+  await applyPermsForChanged({ assets: a.permTargets }, (m) => recordOp('RASアクセス権', m));
 
   if (!tickets?.length) return { assets: assets.length, tickets: 0 };
   const idByIp: Record<string, string> = {};
@@ -1142,6 +1145,7 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   const rt = deriveRasTickets(tickets, assets, idByIp, await loadCveSet());
   const t = await repo.syncRasTickets(rt);
   if (t.added || t.updated) recordOp('RASチケットの同期', `追加 ${t.added} / 更新 ${t.updated}`);
+  await applyPermsForChanged({ tickets: t.permTargets }, (m) => recordOp('RASアクセス権', m));
   return { assets: assets.length, tickets: rt.length };
 }
 
@@ -1740,6 +1744,31 @@ function showDailyResult(s: DailyRunSummary): void {
   openModal({ title: '日次更新の結果', body, wide: true });
 }
 
+/**
+ * 同期で増えた／事業会社が変わった行にだけアクセス権を付け直す。
+ * ★ここを呼ばないと、**増えた行はアイテム単位権限を持たないまま**になる。
+ *   リストの継承をそのまま受けるので、担当外の事業会社にも見えてしまう。
+ *   全件反映（マスター管理）は重いので、変わった行だけを対象にする。
+ * 権限を付けられない事情（管理者グループ未設定など）で同期そのものを失敗させない。
+ * 黙って飛ばすと気付けないので、理由は必ず残す。
+ */
+async function applyPermsForChanged(targets: RasPermTargets, note: (m: string) => void): Promise<void> {
+  const n = (targets.assets?.length ?? 0) + (targets.tickets?.length ?? 0);
+  if (!n) return;
+  const perms = await loadRasPerms();
+  if (!canApplyPerms(perms)) {
+    note(`アクセス権は付けていません（管理者グループが未設定）。対象 ${n} 件は継承のままです`);
+    return;
+  }
+  try {
+    setBusy(`アクセス権を反映中…（${n} 件）`);
+    const r = await repo.applyRasPermsFor(perms, targets, (done, total) => setBusy(`アクセス権を反映中…（${done} / ${total} 件）`));
+    if (r.items) recordOp('RASアクセス権の反映', `同期分 ${r.items} 件に適用`);
+  } catch (e) {
+    note(`アクセス権の反映に失敗しました: ${(e as Error).message}（対象 ${n} 件）`);
+  } finally { setBusy(''); }
+}
+
 // 選んだ行だけを SharePoint のリストへ同期する。
 // ★全件同期（日次更新）と違い、選ばなかった行には一切触らない。「1件だけ直したいのに
 //   一覧全体が書き換わる」のを避けるための入口。
@@ -1762,6 +1791,7 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
       if (!picked.length) { toast('同期できる資産がありません', 'info'); return; }
       const r = await repo.syncRasAssetsPartial(picked);
       recordOp('RAS選択同期(資産)', `${picked.length} 件（追加 ${r.added} / 更新 ${r.updated}）`);
+      await applyPermsForChanged({ assets: r.permTargets }, (m) => toast(m, 'error'));
       toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated}）`, 'ok');
     } else {
       const tickets = await latestStoredTickets();
@@ -1772,6 +1802,7 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
       if (!picked.length) { toast('同期できるチケットがありません', 'info'); return; }
       const r = await repo.syncRasTickets(picked);
       recordOp('RAS選択同期(チケット)', `${picked.length} 件（追加 ${r.added} / 更新 ${r.updated}）`);
+      await applyPermsForChanged({ tickets: r.permTargets }, (m) => toast(m, 'error'));
       toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated}）`, 'ok');
     }
     refresh();

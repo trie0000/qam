@@ -14,7 +14,7 @@ import {
 } from './sp/schema';
 import { createSpPermsClient, type SiteGroup, type SpPermsClient } from './sp/perms';
 import { buildItemPermPlan, canApplyPerms, pickRoles, type RasAsset, type RasPerms, type RasTicket } from '../ras';
-import type { AnnotationUpdate, IngestLock, RecordRepo } from './repo';
+import type { AnnotationUpdate, IngestLock, PermTarget, RasPermTargets, RecordRepo } from './repo';
 import type { QamComment, QamEntity } from '../types';
 import type { QamLicenseSample, QamManualInspection, QamOp } from '../store';
 
@@ -110,6 +110,35 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     throw new Error(`注釈の保存に失敗しました（競合が続いています）: ${u.id} / ${u.field}`);
   }
 
+  /** 指定したアイテムにだけアクセス権を付け直す。全件反映と同じ手順（順序も同じ）。 */
+  async function applyRasPermsFor(
+    perms: RasPerms, targets: RasPermTargets, onProgress?: (done: number, total: number) => void,
+  ): Promise<{ items: number }> {
+    const work: { list: string; items: PermTarget[] }[] = [
+      { list: LIST_RAS_ASSETS, items: targets.assets ?? [] },
+      { list: LIST_RAS_TICKETS, items: targets.tickets ?? [] },
+    ].filter((t) => t.items.length);
+    const total = work.reduce((n, t) => n + t.items.length, 0);
+    if (!total) return { items: 0 };
+    // 管理者グループ未設定のまま継承を解除すると、誰も更新できないアイテムができる。
+    if (!canApplyPerms(perms)) throw new Error('管理者グループが未設定です。先に管理者グループを割り当ててください');
+    const api = permsApi();
+    const roles = pickRoles(await api.roleDefinitions());
+    // 実行者がどの管理者グループにも属していなければ、自分の権限だけは残す（ロックアウト防止）。
+    const myGroups = new Set(await api.currentUserGroupIds());
+    const inAdmin = perms.adminGroupIds.some((g) => myGroups.has(g));
+    const keep = inAdmin ? null : await api.currentUserId();
+
+    let done = 0;
+    for (const t of work) {
+      for (const plan of buildItemPermPlan(t.items, perms)) {
+        await api.applyItemPerms(t.list, plan, roles, keep);
+        onProgress?.(++done, total);
+      }
+    }
+    return { items: total };
+  }
+
   return {
     async ensureLists() {
       for (const l of ALL_LISTS) await lists.ensureList(l.title, l.fields, {
@@ -122,7 +151,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const rows = await lists.all(LIST_COMMENTS, ['Entity', 'TargetId', 'Ts', 'RecordedBy', 'Body']);
       return rows.map(rowToComment).filter((c) => (!e || c.entity === e) && (!id || c.id === id));
     },
-    addComment: (c: QamComment) => lists.add(LIST_COMMENTS, commentToRow(c)),
+    addComment: async (c: QamComment) => { await lists.add(LIST_COMMENTS, commentToRow(c)); },
     async editComment(e, id, ts, text) {
       // ファイル実装は全文書き戻しだったが、リストでは該当行だけを更新する（他の行に触らない）。
       for (let i = 0; i <= MAX_RETRY; i++) {
@@ -156,7 +185,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
     async readOps(): Promise<QamOp[]> {
       return (await lists.all(LIST_OPS, ['Ts', 'RecordedBy', 'Action', 'Entity', 'Detail'])).map(rowToOp);
     },
-    logOp: (op) => lists.add(LIST_OPS, opToRow(op)),
+    logOp: async (op) => { await lists.add(LIST_OPS, opToRow(op)); },
 
     async readManualInspections(): Promise<QamManualInspection[]> {
       const rows = await lists.all(LIST_INSPECTIONS, [
@@ -165,7 +194,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       ]);
       return rows.map(rowToInspection);
     },
-    appendManualInspection: (m) => lists.add(LIST_INSPECTIONS, inspectionToRow(m)),
+    appendManualInspection: async (m) => { await lists.add(LIST_INSPECTIONS, inspectionToRow(m)); },
 
     async readLicenses(): Promise<QamLicenseSample[]> {
       const rows = (await lists.all(LIST_LICENSES, ['Ts', 'Ips', 'Scanned'])).map(rowToLicense);
@@ -177,7 +206,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       }
       return [...map.values()];
     },
-    recordLicense: (ts, ips, scanned) => lists.add(LIST_LICENSES, licenseToRow({ ts, ips, scanned })),
+    recordLicense: async (ts, ips, scanned) => { await lists.add(LIST_LICENSES, licenseToRow({ ts, ips, scanned })); },
 
     async acquireIngestLock(owner, ttlMin) {
       const cur = await lockRow();
@@ -241,19 +270,30 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const rows = await lists.all(LIST_RAS_ASSETS, ASSET_FIELDS);
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
+      const permTargets: PermTarget[] = [];
       for (const a of assets) {
         const cur = byKey.get(a.key);
-        if (!cur) { await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a)); added++; continue; }
+        if (!cur) {
+          const id = await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a));
+          added++;
+          // ★増えた行はまだアイテム単位権限を持っていない。付ける相手として控える。
+          if (id) permTargets.push({ id, businessCompany: a.businessCompany });
+          continue;
+        }
         byKey.delete(a.key);
         // 変化が無いなら書かない（毎回の取込で全行を更新すると SP の版数が無駄に増える）。
         // ★チケット側と同じ理由で、比較する列は手で選ばない。
         const same = rowToRasAsset(cur);
         if (sameRow(rasAssetToRow(same), rasAssetToRow(a))) continue;
-        if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) updated++;
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) {
+          updated++;
+          // 事業会社が変わったら、見える相手も変わる。付け直す。
+          if (same.businessCompany !== a.businessCompany) permTargets.push({ id: cur.Id, businessCompany: a.businessCompany });
+        }
       }
       // Qualys から消えた資産は行も消す（一覧に幽霊が残らないように）。
       for (const left of byKey.values()) { await lists.remove(LIST_RAS_ASSETS, left.Id); removed++; }
-      return { added, updated, removed };
+      return { added, updated, removed, permTargets };
     },
 
     async syncRasAssetsPartial(assets) {
@@ -261,12 +301,22 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const rows = await lists.all(LIST_RAS_ASSETS, ASSET_FIELDS);
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0;
+      const permTargets: PermTarget[] = [];
       for (const a of assets) {
         const cur = byKey.get(a.key);
-        if (!cur) { await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a)); added++; continue; }
-        if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) updated++;
+        if (!cur) {
+          const id = await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a));
+          added++;
+          if (id) permTargets.push({ id, businessCompany: a.businessCompany });
+          continue;
+        }
+        const before = rowToRasAsset(cur).businessCompany;
+        if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) {
+          updated++;
+          if (before !== a.businessCompany) permTargets.push({ id: cur.Id, businessCompany: a.businessCompany });
+        }
       }
-      return { added, updated };
+      return { added, updated, removed: 0, permTargets };
     },
 
     async setRasCompany(key, businessCompany, managementCompany) {
@@ -322,10 +372,17 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const rows = await lists.all(LIST_RAS_TICKETS, TICKET_FIELDS);
       // チケット番号は Title（このリストの一意キー）。
       const byKey = new Map(rows.map((r) => [String(r.Title ?? ''), r]));
-      let added = 0; let updated = 0; let removed = 0;
+      let added = 0; let updated = 0; const removed = 0;
+      const permTargets: PermTarget[] = [];
       for (const t of tickets) {
         const cur = byKey.get(t.number);
-        if (!cur) { await lists.add(LIST_RAS_TICKETS, rasTicketToRow(t)); added++; continue; }
+        if (!cur) {
+          const id = await lists.add(LIST_RAS_TICKETS, rasTicketToRow(t));
+          added++;
+          // ★増えた行はまだアイテム単位権限を持っていない。付ける相手として控える。
+          if (id) permTargets.push({ id, businessCompany: t.businessCompany });
+          continue;
+        }
         byKey.delete(t.number);
         const same = rowToRasTicket(cur);
         // ★変化ラベルとレポートリンクは日次更新でしか付けない。同期で毎回上書きすると、
@@ -342,11 +399,15 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
         //   変わった行が「変化なし」と判定されて永久に更新されなかった。
         //   実際に書き込む内容どうしを比べる。
         if (sameRow(rasTicketToRow(same), rasTicketToRow(merged))) continue;
-        if (await lists.update(LIST_RAS_TICKETS, cur.Id, rasTicketToRow(merged), cur.__etag)) updated++;
+        if (await lists.update(LIST_RAS_TICKETS, cur.Id, rasTicketToRow(merged), cur.__etag)) {
+          updated++;
+          // 事業会社が変わったら、見える相手も変わる。付け直す。
+          if (same.businessCompany !== merged.businessCompany) permTargets.push({ id: cur.Id, businessCompany: merged.businessCompany });
+        }
       }
       // ★取得は「直近1ヶ月の変化分」のことがあるので、載っていないチケットは消さない。
       //   消すと、動きが無かっただけのオープン中チケットが毎回消えてしまう。
-      return { added, updated, removed };
+      return { added, updated, removed, permTargets };
     },
 
     async rasListUrls() {
@@ -384,29 +445,13 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
 
     listSiteGroups(): Promise<SiteGroup[]> { return permsApi().listSiteGroups(); },
 
-    async applyRasPerms(perms: RasPerms, onProgress) {
-      // 管理者グループ未設定のまま継承を解除すると、誰も更新できないアイテムができる。
-      if (!canApplyPerms(perms)) throw new Error('管理者グループが未設定です。先に管理者グループを割り当ててください');
-      const api = permsApi();
-      const roles = pickRoles(await api.roleDefinitions());
-      // 実行者がどの管理者グループにも属していなければ、自分の権限だけは残す（ロックアウト防止）。
-      const myGroups = new Set(await api.currentUserGroupIds());
-      const inAdmin = perms.adminGroupIds.some((g) => myGroups.has(g));
-      const keep = inAdmin ? null : await api.currentUserId();
+    applyRasPermsFor,
 
-      const targets: { list: string; items: { id: number; businessCompany: string }[] }[] = [
-        { list: LIST_RAS_ASSETS, items: (await lists.all(LIST_RAS_ASSETS, ['BusinessCompany'])).map((r) => ({ id: r.Id, businessCompany: String(r.BusinessCompany ?? '') })) },
-        { list: LIST_RAS_TICKETS, items: (await lists.all(LIST_RAS_TICKETS, ['BusinessCompany'])).map((r) => ({ id: r.Id, businessCompany: String(r.BusinessCompany ?? '') })) },
-      ];
-      const total = targets.reduce((n, t) => n + t.items.length, 0);
-      let done = 0;
-      for (const t of targets) {
-        for (const plan of buildItemPermPlan(t.items, perms)) {
-          await api.applyItemPerms(t.list, plan, roles, keep);
-          onProgress?.(++done, total);
-        }
-      }
-      return { items: total };
+    async applyRasPerms(perms: RasPerms, onProgress) {
+      // 全件。中身は applyRasPermsFor と同じなので、対象を全行にして委ねる。
+      const pick = async (list: string): Promise<PermTarget[]> =>
+        (await lists.all(list, ['BusinessCompany'])).map((r) => ({ id: r.Id, businessCompany: String(r.BusinessCompany ?? '') }));
+      return applyRasPermsFor(perms, { assets: await pick(LIST_RAS_ASSETS), tickets: await pick(LIST_RAS_TICKETS) }, onProgress);
     },
   };
 }

@@ -19,7 +19,9 @@ function fakeLists(seed: Record<string, SpItem[]> = {}): SpListClient & { rows: 
       // 一意制約の再現: DedupKey が重なったら弾く（SP の EnforceUniqueValues 相当）。
       // 一意制約の再現: DedupKey（資産等）と Title（チケット）の重複を弾く。
       if (row.DedupKey && list.some((r) => r.DedupKey === row.DedupKey)) throw new Error('duplicate');
-      list.push({ ...row, Id: nextId++, __etag: '"1"' });
+      const id = nextId++;
+      list.push({ ...row, Id: id, __etag: '"1"' });
+      return id; // ★アイテム単位権限を付ける相手を知るために Id を返す
     },
     update: async (t, id, row, etag) => {
       const hit = (rows[t] ?? []).find((r) => r.Id === id);
@@ -291,7 +293,7 @@ describe('独自RAS のリスト同期', () => {
     expect(lists.rows[LIST_RAS_ASSETS]).toHaveLength(2);
     // 1 は IP 変更 / 2 は Qualys から消えた / 3 は新規
     const r = await repo.syncRasAssets([asset('1', '10.0.0.9'), asset('3', '10.0.0.3')]);
-    expect(r).toEqual({ added: 1, updated: 1, removed: 1 });
+    expect(r).toMatchObject({ added: 1, updated: 1, removed: 1 });
     expect((lists.rows[LIST_RAS_ASSETS] ?? []).map((x) => x.HostId).sort()).toEqual(['1', '3']);
   });
 
@@ -301,7 +303,7 @@ describe('独自RAS のリスト同期', () => {
     await repo.syncRasAssets([asset('1', '10.0.0.1')]);
     const before = lists.rows[LIST_RAS_ASSETS][0].__etag;
     const r = await repo.syncRasAssets([asset('1', '10.0.0.1')]);
-    expect(r).toEqual({ added: 0, updated: 0, removed: 0 });
+    expect(r).toMatchObject({ added: 0, updated: 0, removed: 0 });
     expect(lists.rows[LIST_RAS_ASSETS][0].__etag).toBe(before);
   });
 
@@ -328,7 +330,7 @@ describe('独自RAS のリスト同期', () => {
          created: '', firstFound: '2026-08-01 00:00:00', lastFound: '' });
     await repo.syncRasTickets([t('11'), t('12')]);
     const r = await repo.syncRasTickets([t('11', 'CLOSED')]);
-    expect(r).toEqual({ added: 0, updated: 1, removed: 0 });
+    expect(r).toMatchObject({ added: 0, updated: 1, removed: 0 });
     // チケット番号は Title に入る（TicketNumber 列は持たない）。
     expect((lists.rows[LIST_RAS_TICKETS] ?? []).map((x) => x.Title).sort()).toEqual(['11', '12']);
     expect(lists.rows[LIST_RAS_TICKETS].find((x) => x.Title === '11')!.State).toBe('CLOSED');
@@ -482,5 +484,70 @@ describe('列を足したときの取りこぼし', () => {
     const repo = repoOf(lists);
     await repo.syncRasTickets([t('13')]);
     expect((await repo.syncRasTickets([t('13')])).updated).toBe(0);
+  });
+});
+
+describe('同期で増えた行のアクセス権', () => {
+  const asset = (host: string, ip: string, company: string): RasAsset =>
+    ({ key: `R100:${ip}`, hostId: host, ip, fqdn: 'a', settenId: 'R100', businessCompany: company,
+       managementCompany: '', status: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' });
+  const tkt = (n: string, company: string): RasTicket =>
+    ({ number: n, state: 'OPEN', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
+       businessCompany: company, managementCompany: '', port: '', vulnKind: 'OS・ミドルウェア検査牽制分',
+       cveIds: '', created: '', firstFound: '', lastFound: '' });
+
+  it('★増えた行は権限を付ける相手として返る（返らないと継承のままで担当外にも見える）', async () => {
+    const repo = repoOf(fakeLists());
+    const r = await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社')]);
+    expect(r.added).toBe(1);
+    expect(r.permTargets).toEqual([{ id: expect.any(Number), businessCompany: 'A事業会社' }]);
+    expect(r.permTargets[0].id).toBeGreaterThan(0);
+  });
+
+  it('★事業会社が変わった行も返る（見える相手が変わるため）', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社')]);
+    const r = await repo.syncRasAssets([asset('h1', '10.0.0.1', 'B事業会社')]);
+    expect(r.updated).toBe(1);
+    expect(r.permTargets.map((t) => t.businessCompany)).toEqual(['B事業会社']);
+  });
+
+  it('会社が変わらない更新では付け直さない（全件に掛けると重い）', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社')]);
+    const r = await repo.syncRasAssets([{ ...asset('h1', '10.0.0.1', 'A事業会社'), lastScan: '2026-08-19' }]);
+    expect(r.updated).toBe(1);
+    expect(r.permTargets).toEqual([]);
+  });
+
+  it('変化が無ければ何も返らない', async () => {
+    const lists = fakeLists();
+    const repo = repoOf(lists);
+    await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社')]);
+    expect((await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社')])).permTargets).toEqual([]);
+  });
+
+  it('★選択同期（SPO再同期）でも増えた行が返る', async () => {
+    // ここが返っていなかったので、選択同期で足した行に権限が付かなかった。
+    const repo = repoOf(fakeLists());
+    const r = await repo.syncRasAssetsPartial([asset('h9', '10.9.9.9', 'C事業会社')]);
+    expect(r.added).toBe(1);
+    expect(r.permTargets.map((t) => t.businessCompany)).toEqual(['C事業会社']);
+  });
+
+  it('チケット側も同じ', async () => {
+    const repo = repoOf(fakeLists());
+    const r = await repo.syncRasTickets([tkt('11', 'A事業会社')]);
+    expect(r.permTargets.map((t) => t.businessCompany)).toEqual(['A事業会社']);
+    const r2 = await repo.syncRasTickets([tkt('11', 'B事業会社')]);
+    expect(r2.permTargets.map((t) => t.businessCompany)).toEqual(['B事業会社']);
+  });
+
+  it('対象が無ければ SharePoint を呼ばない', async () => {
+    // 呼ぶと権限 API のロール定義取得だけで往復が増える。
+    const repo = repoOf(fakeLists());
+    expect(await repo.applyRasPermsFor({ adminGroupIds: [], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {} }, {})).toEqual({ items: 0 });
   });
 });

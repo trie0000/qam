@@ -26,6 +26,19 @@ export interface AnnotationUpdate { id: string; field: string; value: string }
 /** 取込の排他クレーム。保持者と、いつから・いつまでを持つ。 */
 export interface IngestLock { owner: string; since: string; expiresAt: string }
 
+/** アイテム単位権限を付け直す相手。 */
+export interface PermTarget { id: number; businessCompany: string }
+export interface RasPermTargets { assets?: PermTarget[]; tickets?: PermTarget[] }
+/**
+ * 同期の結果。
+ * ★permTargets = **新しく作った行**と**事業会社が変わった行**。
+ *   ここにアクセス権を付け直さないと、増えた行が誰にも（あるいは誰にでも）見える。
+ */
+export interface RasSyncResult {
+  added: number; updated: number; removed: number;
+  permTargets: PermTarget[];
+}
+
 export interface RecordRepo {
   readComments(e?: QamEntity, id?: string): Promise<QamComment[]>;
   addComment(c: QamComment): Promise<void>;
@@ -62,9 +75,9 @@ export interface RecordRepo {
 
   readRasAssets(): Promise<RasAsset[]>;
   /** 取込で作った資産一覧を反映する（登録済みの会社は呼び出し側が引き継いで渡す）。 */
-  syncRasAssets(assets: RasAsset[]): Promise<{ added: number; updated: number; removed: number }>;
+  syncRasAssets(assets: RasAsset[]): Promise<RasSyncResult>;
   /** 渡した資産だけを反映する（載っていない行は消さない）。選択同期で使う。 */
-  syncRasAssetsPartial(assets: RasAsset[]): Promise<{ added: number; updated: number }>;
+  syncRasAssetsPartial(assets: RasAsset[]): Promise<RasSyncResult>;
   /** key は RasAsset.key（ホストID、または host list に無い資産の 'ip:<IP>'）。 */
   setRasCompany(key: string, businessCompany: string, managementCompany: string): Promise<void>;
   /** CSV取込用の一括更新。1件ずつ setRasCompany を呼ぶと毎回全件読み直しになるため分ける。 */
@@ -73,7 +86,7 @@ export interface RecordRepo {
   setRasAssetNote(key: string, note: string): Promise<void>;
 
   readRasTickets(): Promise<RasTicket[]>;
-  syncRasTickets(tickets: RasTicket[]): Promise<{ added: number; updated: number; removed: number }>;
+  syncRasTickets(tickets: RasTicket[]): Promise<RasSyncResult>;
   /** 日次更新の結果（変化ラベル・レポートリンク）を書き戻す。 */
   setRasTicketMarks(marks: { number: string; change?: string; changedAt?: string; reportJa?: string; reportEn?: string; ticketReportJa?: string; ticketReportEn?: string; reportZip?: string; reportedAt?: string; note?: string }[]): Promise<number>;
 
@@ -83,6 +96,8 @@ export interface RecordRepo {
   listSiteGroups(): Promise<SiteGroup[]>;
   /** 2リストの全アイテムへアクセス権を適用する。進捗は onProgress に返す。 */
   applyRasPerms(perms: RasPerms, onProgress?: (done: number, total: number) => void): Promise<{ items: number }>;
+  /** 指定したアイテムにだけアクセス権を付け直す（同期で増えた/会社が変わった行のため）。 */
+  applyRasPermsFor(perms: RasPerms, targets: RasPermTargets, onProgress?: (done: number, total: number) => void): Promise<{ items: number }>;
 }
 
 // 実体は起動時に決まる（SharePoint リスト）。呼び出し側は `repo` を使い続けられるよう委譲にする。
@@ -95,7 +110,7 @@ let impl: RecordRepo = {
   readSharedJson: notReady, writeSharedJson: notReady,
   readRasAssets: notReady, syncRasAssets: notReady, syncRasAssetsPartial: notReady, setRasCompany: notReady, setRasCompaniesBulk: notReady, setRasAssetNote: notReady,
   readRasTickets: notReady, syncRasTickets: notReady, setRasTicketMarks: notReady,
-  rasListUrls: notReady, listSiteGroups: notReady, applyRasPerms: notReady,
+  rasListUrls: notReady, listSiteGroups: notReady, applyRasPerms: notReady, applyRasPermsFor: notReady,
   readOps: notReady, logOp: notReady,
   readManualInspections: notReady, appendManualInspection: notReady,
   readLicenses: notReady, recordLicense: notReady,
@@ -121,6 +136,7 @@ export const repo: RecordRepo = {
   rasListUrls: () => impl.rasListUrls(),
   listSiteGroups: () => impl.listSiteGroups(),
   applyRasPerms: (p, cb) => impl.applyRasPerms(p, cb),
+  applyRasPermsFor: (p, t, cb) => impl.applyRasPermsFor(p, t, cb),
   setAnnotation: (e, id, f, v) => impl.setAnnotation(e, id, f, v),
   setAnnotationsBulk: (e, u) => impl.setAnnotationsBulk(e, u),
   readOps: () => impl.readOps(),

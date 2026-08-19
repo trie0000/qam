@@ -40,7 +40,8 @@ export interface EnsureListOptions {
 export interface SpListClient {
   ensureList(title: string, fields: FieldSpec[], opts?: EnsureListOptions): Promise<void>;
   all(title: string, select?: string[]): Promise<SpItem[]>;
-  add(title: string, row: Record<string, unknown>): Promise<void>;
+  /** 追加して、作られたアイテムの Id を返す（アイテム単位権限を付けるのに要る）。 */
+  add(title: string, row: Record<string, unknown>): Promise<number>;
   /** 更新できたら true、他の人が先に書いていたら false（412）。 */
   update(title: string, id: number, row: Record<string, unknown>, etag: string): Promise<boolean>;
   remove(title: string, id: number): Promise<void>;
@@ -245,6 +246,10 @@ export function createSpListClient(o: SpHttpOptions | { http: SpHttp }): SpListC
         body: body(await itemType(title), row),
       });
       if (!r.ok) throw new Error(`追加に失敗 (${title}): HTTP ${r.status}${await errText(r)}`);
+      // 応答に作られたアイテムが入る。権限を付ける相手を知るために Id を返す。
+      const created = await http.json(r).catch(() => ({})) as Record<string, unknown>;
+      const id = Number(created?.Id ?? 0);
+      return Number.isInteger(id) && id > 0 ? id : 0;
     },
 
     async update(title, id, row, etag) {
