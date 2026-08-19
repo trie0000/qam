@@ -940,17 +940,21 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       {
         id: 'businessCompany', label: '事業会社', width: 180,
         render: (a: RasAsset) => selectCell(a.businessCompany, companies, async (v) => {
-          await repo.setRasCompany(a.key, v, a.managementCompany);
+          // ★事業会社が変わると見える相手も変わる。資産とそのチケットの権限を付け直す。
+          const t = await repo.setRasCompany(a.key, v, a.managementCompany);
           a.businessCompany = v;
           recordOp('RAS事業会社の変更', `${a.settenId} ${a.ip}: ${v || '(未設定)'}`);
+          await applyPermsForChanged(t, (m) => toast(m, 'error'));
         }),
         sortVal: (a: RasAsset) => a.businessCompany,
       },
       {
         id: 'managementCompany', label: '管理会社', width: 180,
         render: (a: RasAsset) => editableCell(a.managementCompany, '（クリックで入力）', async (v) => {
-          await repo.setRasCompany(a.key, a.businessCompany, v);
+          // 管理会社はアクセス権に関係しないが、経路は同じなので返ってきた分だけ付け直す。
+          const t = await repo.setRasCompany(a.key, a.businessCompany, v);
           a.managementCompany = v;
+          await applyPermsForChanged(t, (m) => toast(m, 'error'));
         }),
         sortVal: (a: RasAsset) => a.managementCompany,
       },
@@ -1212,9 +1216,11 @@ async function openRasCsvImport(): Promise<void> {
       if (!plan.updates.length) { toast('更新する内容がありません', 'info'); return false; }
       await ensureAuthor();
       try {
-        const n = await repo.setRasCompaniesBulk(plan.updates);
-        recordOp('RAS管理CSV取込', `${n.toLocaleString()} 件更新${plan.unresolvedAliases.length ? `（未解決の略称 ${plan.unresolvedAliases.length} 件）` : ''}`);
-        toast(`${n.toLocaleString()} 件に事業会社・管理会社を反映しました。権限は「マスター管理 → 権限を反映」で適用してください`, 'ok');
+        const r = await repo.setRasCompaniesBulk(plan.updates);
+        recordOp('RAS管理CSV取込', `${r.updated.toLocaleString()} 件更新${plan.unresolvedAliases.length ? `（未解決の略称 ${plan.unresolvedAliases.length} 件）` : ''}`);
+        // ★会社が変わった資産とそのチケットは、権限も付け直す（手作業に頼らない）。
+        await applyPermsForChanged(r, (m) => toast(m, 'error'));
+        toast(`${r.updated.toLocaleString()} 件に事業会社・管理会社を反映しました`, 'ok');
         refresh();
         return true;
       } catch (e) { toast('取込に失敗: ' + (e as Error).message, 'error'); return false; }

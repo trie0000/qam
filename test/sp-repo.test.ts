@@ -551,3 +551,49 @@ describe('同期で増えた行のアクセス権', () => {
     expect(await repo.applyRasPermsFor({ adminGroupIds: [], byBusinessCompany: {}, aliasesByCompany: {}, contactNameByCompany: {} }, {})).toEqual({ items: 0 });
   });
 });
+
+describe('事業会社を変えたときのアクセス権', () => {
+  const asset = (host: string, ip: string, company: string): RasAsset =>
+    ({ key: `R100:${ip}`, hostId: host, ip, fqdn: 'a', settenId: 'R100', businessCompany: company,
+       managementCompany: '', status: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' });
+  const tkt = (n: string, host: string, ip: string, company: string): RasTicket =>
+    ({ number: n, state: 'OPEN', hostId: host, ip, fqdn: 'a', settenId: 'R100',
+       businessCompany: company, managementCompany: '', port: '', vulnKind: 'OS・ミドルウェア検査牽制分',
+       cveIds: '', created: '', firstFound: '', lastFound: '' });
+
+  const seeded = async () => {
+    const repo = repoOf(fakeLists());
+    await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社')]);
+    await repo.syncRasTickets([tkt('11', 'h1', '10.0.0.1', 'A事業会社'), tkt('12', 'h9', '10.9.9.9', 'Z社')]);
+    return repo;
+  };
+
+  it('★資産で会社を変えたら、資産とそのチケットの両方が付け直し対象になる', async () => {
+    // 付け直さないと **前の会社のグループが見え続ける**（コメントにある通りアクセス権がずれる）。
+    const repo = await seeded();
+    const t = await repo.setRasCompany('R100:10.0.0.1', 'B事業会社', '');
+    expect(t.assets?.map((x) => x.businessCompany)).toEqual(['B事業会社']);
+    expect(t.tickets?.map((x) => x.businessCompany)).toEqual(['B事業会社']);
+  });
+
+  it('関係のないホストのチケットは対象にしない', async () => {
+    const repo = await seeded();
+    const t = await repo.setRasCompany('R100:10.0.0.1', 'B事業会社', '');
+    expect(t.tickets).toHaveLength(1); // '12'（別ホスト）は含まない
+  });
+
+  it('管理会社だけを変えたときは付け直さない（アクセス権に関係しない）', async () => {
+    const repo = await seeded();
+    const t = await repo.setRasCompany('R100:10.0.0.1', 'A事業会社', 'X保守');
+    expect(t.assets).toEqual([]);
+    expect(t.tickets).toEqual([]);
+  });
+
+  it('★管理CSVの一括取込でも対象が返る', async () => {
+    const repo = await seeded();
+    const r = await repo.setRasCompaniesBulk([{ key: 'R100:10.0.0.1', businessCompany: 'C事業会社', managementCompany: '' }]);
+    expect(r.updated).toBe(1);
+    expect(r.assets?.map((x) => x.businessCompany)).toEqual(['C事業会社']);
+    expect(r.tickets?.map((x) => x.businessCompany)).toEqual(['C事業会社']);
+  });
+});

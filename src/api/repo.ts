@@ -79,9 +79,10 @@ export interface RecordRepo {
   /** 渡した資産だけを反映する（載っていない行は消さない）。選択同期で使う。 */
   syncRasAssetsPartial(assets: RasAsset[]): Promise<RasSyncResult>;
   /** key は RasAsset.key（ホストID、または host list に無い資産の 'ip:<IP>'）。 */
-  setRasCompany(key: string, businessCompany: string, managementCompany: string): Promise<void>;
+  /** 事業会社が変わった行（資産・チケット）を返す。★アクセス権を付け直す相手。 */
+  setRasCompany(key: string, businessCompany: string, managementCompany: string): Promise<RasPermTargets>;
   /** CSV取込用の一括更新。1件ずつ setRasCompany を呼ぶと毎回全件読み直しになるため分ける。 */
-  setRasCompaniesBulk(updates: { key: string; businessCompany: string; managementCompany: string }[]): Promise<number>;
+  setRasCompaniesBulk(updates: { key: string; businessCompany: string; managementCompany: string }[]): Promise<RasPermTargets & { updated: number }>;
   /** RAS資産のメモ（複数行）。 */
   setRasAssetNote(key: string, note: string): Promise<void>;
 
