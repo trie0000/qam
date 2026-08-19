@@ -36,7 +36,14 @@ export interface RasPermTargets { assets?: PermTarget[]; tickets?: PermTarget[] 
  */
 export interface RasSyncResult {
   added: number; updated: number; removed: number;
+  /** 増えた行・事業会社が変わった行。取込のたびに走る同期では、ここだけ付け直す。 */
   permTargets: PermTarget[];
+  /**
+   * 同期で触れた行**全部**（変化が無かった行も含む）。
+   * ★利用者が行を選んで「SPO更新」を押したときは、変わっていなくても付け直したい。
+   *   明示的に押したのに何も起きないのは、権限が壊れている行を直す手段が無いのと同じ。
+   */
+  allTargets: PermTarget[];
 }
 
 export interface RecordRepo {

@@ -597,3 +597,45 @@ describe('事業会社を変えたときのアクセス権', () => {
     expect(r.tickets?.map((x) => x.businessCompany)).toEqual(['C事業会社']);
   });
 });
+
+describe('選択して押した「SPO更新」の権限', () => {
+  const asset = (host: string, ip: string, company: string): RasAsset =>
+    ({ key: `R100:${ip}`, hostId: host, ip, fqdn: 'a', settenId: 'R100', businessCompany: company,
+       managementCompany: '', status: '', aliveAt: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' });
+  const tkt = (n: string, company: string): RasTicket =>
+    ({ number: n, state: 'OPEN', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
+       businessCompany: company, managementCompany: '', port: '', vulnKind: 'OS・ミドルウェア検査牽制分',
+       cveIds: '', created: '', firstFound: '', lastFound: '' });
+
+  it('★変化が無い行を選び直しても対象になる（押しても何も起きない、を防ぐ）', async () => {
+    // permTargets（変わった分だけ）を使っていたため、既存行を選んでも空だった。
+    const repo = repoOf(fakeLists());
+    await repo.syncRasAssetsPartial([asset('h1', '10.0.0.1', 'A事業会社')]);
+    const r = await repo.syncRasAssetsPartial([asset('h1', '10.0.0.1', 'A事業会社')]);
+    expect(r.permTargets).toEqual([]);                                   // 変化は無い
+    expect(r.allTargets.map((t) => t.businessCompany)).toEqual(['A事業会社']); // でも対象にはなる
+  });
+
+  it('チケット側も同じ', async () => {
+    const repo = repoOf(fakeLists());
+    await repo.syncRasTickets([tkt('11', 'A事業会社')]);
+    const r = await repo.syncRasTickets([tkt('11', 'A事業会社')]);
+    expect(r.permTargets).toEqual([]);
+    expect(r.allTargets.map((t) => t.businessCompany)).toEqual(['A事業会社']);
+  });
+
+  it('増えた行は両方に入る', async () => {
+    const repo = repoOf(fakeLists());
+    const r = await repo.syncRasAssetsPartial([asset('h9', '10.9.9.9', 'C事業会社')]);
+    expect(r.permTargets).toHaveLength(1);
+    expect(r.allTargets).toHaveLength(1);
+  });
+
+  it('全件同期の allTargets には消える行を含めない（消した行に権限は付けられない）', async () => {
+    const repo = repoOf(fakeLists());
+    await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社'), asset('h2', '10.0.0.2', 'A事業会社')]);
+    const r = await repo.syncRasAssets([asset('h1', '10.0.0.1', 'A事業会社')]);
+    expect(r.removed).toBe(1);
+    expect(r.allTargets).toHaveLength(1);
+  });
+});

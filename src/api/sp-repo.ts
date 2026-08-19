@@ -276,15 +276,17 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0; let removed = 0;
       const permTargets: PermTarget[] = [];
+      const allTargets: PermTarget[] = [];
       for (const a of assets) {
         const cur = byKey.get(a.key);
         if (!cur) {
           const id = await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a));
           added++;
           // ★増えた行はまだアイテム単位権限を持っていない。付ける相手として控える。
-          if (id) permTargets.push({ id, businessCompany: a.businessCompany });
+          if (id) { permTargets.push({ id, businessCompany: a.businessCompany }); allTargets.push({ id, businessCompany: a.businessCompany }); }
           continue;
         }
+        allTargets.push({ id: cur.Id, businessCompany: a.businessCompany });
         byKey.delete(a.key);
         // 変化が無いなら書かない（毎回の取込で全行を更新すると SP の版数が無駄に増える）。
         // ★チケット側と同じ理由で、比較する列は手で選ばない。
@@ -298,7 +300,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       }
       // Qualys から消えた資産は行も消す（一覧に幽霊が残らないように）。
       for (const left of byKey.values()) { await lists.remove(LIST_RAS_ASSETS, left.Id); removed++; }
-      return { added, updated, removed, permTargets };
+      return { added, updated, removed, permTargets, allTargets };
     },
 
     async syncRasAssetsPartial(assets) {
@@ -307,21 +309,23 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const byKey = new Map(rows.map((r) => [String(r.DedupKey ?? ''), r]));
       let added = 0; let updated = 0;
       const permTargets: PermTarget[] = [];
+      const allTargets: PermTarget[] = [];
       for (const a of assets) {
         const cur = byKey.get(a.key);
         if (!cur) {
           const id = await lists.add(LIST_RAS_ASSETS, rasAssetToRow(a));
           added++;
-          if (id) permTargets.push({ id, businessCompany: a.businessCompany });
+          if (id) { permTargets.push({ id, businessCompany: a.businessCompany }); allTargets.push({ id, businessCompany: a.businessCompany }); }
           continue;
         }
+        allTargets.push({ id: cur.Id, businessCompany: a.businessCompany });
         const before = rowToRasAsset(cur).businessCompany;
         if (await lists.update(LIST_RAS_ASSETS, cur.Id, rasAssetToRow(a), cur.__etag)) {
           updated++;
           if (before !== a.businessCompany) permTargets.push({ id: cur.Id, businessCompany: a.businessCompany });
         }
       }
-      return { added, updated, removed: 0, permTargets };
+      return { added, updated, removed: 0, permTargets, allTargets };
     },
 
     async setRasCompany(key, businessCompany, managementCompany) {
@@ -386,16 +390,18 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       const byKey = new Map(rows.map((r) => [String(r.Title ?? ''), r]));
       let added = 0; let updated = 0; const removed = 0;
       const permTargets: PermTarget[] = [];
+      const allTargets: PermTarget[] = [];
       for (const t of tickets) {
         const cur = byKey.get(t.number);
         if (!cur) {
           const id = await lists.add(LIST_RAS_TICKETS, rasTicketToRow(t));
           added++;
           // ★増えた行はまだアイテム単位権限を持っていない。付ける相手として控える。
-          if (id) permTargets.push({ id, businessCompany: t.businessCompany });
+          if (id) { permTargets.push({ id, businessCompany: t.businessCompany }); allTargets.push({ id, businessCompany: t.businessCompany }); }
           continue;
         }
         byKey.delete(t.number);
+        allTargets.push({ id: cur.Id, businessCompany: t.businessCompany });
         const same = rowToRasTicket(cur);
         // ★変化ラベルとレポートリンクは日次更新でしか付けない。同期で毎回上書きすると、
         //   取込のたびにラベルとリンクが消える。渡されていなければ既存値を引き継ぐ。
@@ -419,7 +425,7 @@ export function createSpRepo(o: SpRepoOptions): RecordRepo & { ensureLists(): Pr
       }
       // ★取得は「直近1ヶ月の変化分」のことがあるので、載っていないチケットは消さない。
       //   消すと、動きが無かっただけのオープン中チケットが毎回消えてしまう。
-      return { added, updated, removed, permTargets };
+      return { added, updated, removed, permTargets, allTargets };
     },
 
     async rasListUrls() {

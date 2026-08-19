@@ -948,7 +948,7 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
           const t = await repo.setRasCompany(a.key, v, a.managementCompany);
           a.businessCompany = v;
           recordOp('RAS事業会社の変更', `${a.settenId} ${a.ip}: ${v || '(未設定)'}`);
-          await applyPermsForChanged(t, (m) => toast(m, 'error'));
+          await applyPermsTo(t, (m) => toast(m, 'error'));
         }),
         sortVal: (a: RasAsset) => a.businessCompany,
       },
@@ -958,7 +958,7 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
           // 管理会社はアクセス権に関係しないが、経路は同じなので返ってきた分だけ付け直す。
           const t = await repo.setRasCompany(a.key, a.businessCompany, v);
           a.managementCompany = v;
-          await applyPermsForChanged(t, (m) => toast(m, 'error'));
+          await applyPermsTo(t, (m) => toast(m, 'error'));
         }),
         sortVal: (a: RasAsset) => a.managementCompany,
       },
@@ -1148,7 +1148,7 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   if (derived.pendingSetten.length) recordOp('RAS資産の同期', `${RAS_NOT_SCANNED} として登録（AssetGroupの最終更新が基準日）: ${derived.pendingSetten.join(' / ')}`);
   const a = await repo.syncRasAssets(assets);
   if (a.added || a.updated || a.removed) recordOp('RAS資産の同期', `追加 ${a.added} / 更新 ${a.updated} / 削除 ${a.removed}`);
-  await applyPermsForChanged({ assets: a.permTargets }, (m) => recordOp('RASアクセス権', m));
+  await applyPermsTo({ assets: a.permTargets }, (m) => recordOp('RASアクセス権', m));
 
   if (!tickets?.length) return { assets: assets.length, tickets: 0 };
   const idByIp: Record<string, string> = {};
@@ -1156,7 +1156,7 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   const rt = deriveRasTickets(tickets, assets, idByIp, await loadCveSet());
   const t = await repo.syncRasTickets(rt);
   if (t.added || t.updated) recordOp('RASチケットの同期', `追加 ${t.added} / 更新 ${t.updated}`);
-  await applyPermsForChanged({ tickets: t.permTargets }, (m) => recordOp('RASアクセス権', m));
+  await applyPermsTo({ tickets: t.permTargets }, (m) => recordOp('RASアクセス権', m));
   return { assets: assets.length, tickets: rt.length };
 }
 
@@ -1226,7 +1226,7 @@ async function openRasCsvImport(): Promise<void> {
         const r = await repo.setRasCompaniesBulk(plan.updates);
         recordOp('RAS管理CSV取込', `${r.updated.toLocaleString()} 件更新${plan.unresolvedAliases.length ? `（未解決の略称 ${plan.unresolvedAliases.length} 件）` : ''}`);
         // ★会社が変わった資産とそのチケットは、権限も付け直す（手作業に頼らない）。
-        await applyPermsForChanged(r, (m) => toast(m, 'error'));
+        await applyPermsTo(r, (m) => toast(m, 'error'));
         toast(`${r.updated.toLocaleString()} 件に事業会社・管理会社を反映しました`, 'ok');
         refresh();
         return true;
@@ -1784,27 +1784,31 @@ function showDailyResult(s: DailyRunSummary): void {
 }
 
 /**
- * 同期で増えた／事業会社が変わった行にだけアクセス権を付け直す。
+ * 渡した行にアクセス権を付け直す。
+ * 取込のたびに走る同期では「増えた行・会社が変わった行」だけを渡す（全件は重い）。
+ * 利用者が行を選んで押したときは、変わっていない行も含めて渡す。
  * ★ここを呼ばないと、**増えた行はアイテム単位権限を持たないまま**になる。
  *   リストの継承をそのまま受けるので、担当外の事業会社にも見えてしまう。
  *   全件反映（マスター管理）は重いので、変わった行だけを対象にする。
  * 権限を付けられない事情（管理者グループ未設定など）で同期そのものを失敗させない。
  * 黙って飛ばすと気付けないので、理由は必ず残す。
  */
-async function applyPermsForChanged(targets: RasPermTargets, note: (m: string) => void): Promise<void> {
+async function applyPermsTo(targets: RasPermTargets, note: (m: string) => void): Promise<number> {
   const n = (targets.assets?.length ?? 0) + (targets.tickets?.length ?? 0);
-  if (!n) return;
+  if (!n) return 0;
   const perms = await loadRasPerms();
   if (!canApplyPerms(perms)) {
     note(`アクセス権は付けていません（管理者グループが未設定）。対象 ${n} 件は継承のままです`);
-    return;
+    return 0;
   }
   try {
     setBusy(`アクセス権を反映中…（${n} 件）`);
     const r = await repo.applyRasPermsFor(perms, targets, (done, total) => setBusy(`アクセス権を反映中…（${done} / ${total} 件）`));
-    if (r.items) recordOp('RASアクセス権の反映', `同期分 ${r.items} 件に適用`);
+    if (r.items) recordOp('RASアクセス権の反映', `${r.items} 件に適用`);
+    return r.items;
   } catch (e) {
     note(`アクセス権の反映に失敗しました: ${(e as Error).message}（対象 ${n} 件）`);
+    return 0;
   } finally { setBusy(''); }
 }
 
@@ -1830,8 +1834,10 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
       if (!picked.length) { toast('同期できる資産がありません', 'info'); return; }
       const r = await repo.syncRasAssetsPartial(picked);
       recordOp('RAS選択同期(資産)', `${picked.length} 件（追加 ${r.added} / 更新 ${r.updated}）`);
-      await applyPermsForChanged({ assets: r.permTargets }, (m) => toast(m, 'error'));
-      toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated}）`, 'ok');
+      // ★選んで押した以上、変わっていない行も付け直す。変化した行だけを対象にすると
+      //   「押しても何も起きない」になり、権限が崩れた行を直す手段が無くなる。
+      const pn = await applyPermsTo({ assets: r.allTargets }, (m) => toast(m, 'error'));
+      toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated} / アクセス権 ${pn} 件）`, 'ok');
     } else {
       const tickets = await latestStoredTickets();
       if (!tickets?.length) { toast('チケットの取込がありません', 'error'); return; }
@@ -1841,8 +1847,9 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
       if (!picked.length) { toast('同期できるチケットがありません', 'info'); return; }
       const r = await repo.syncRasTickets(picked);
       recordOp('RAS選択同期(チケット)', `${picked.length} 件（追加 ${r.added} / 更新 ${r.updated}）`);
-      await applyPermsForChanged({ tickets: r.permTargets }, (m) => toast(m, 'error'));
-      toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated}）`, 'ok');
+      // 資産側と同じ理由で、選んだ行は全部付け直す。
+      const pn = await applyPermsTo({ tickets: r.allTargets }, (m) => toast(m, 'error'));
+      toast(`${picked.length} 件を同期しました（追加 ${r.added} / 更新 ${r.updated} / アクセス権 ${pn} 件）`, 'ok');
     }
     refresh();
   } catch (e) {
