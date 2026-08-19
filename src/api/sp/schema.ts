@@ -21,7 +21,7 @@ import type { QamLicenseSample, QamManualInspection, QamOp } from '../../store';
 // 10: Ticket(Remediation)レポートのリンク列を追加
 // 11: レポート更新日(ReportUpdatedAt)を追加
 // 12: 4種をまとめた ZIP(ReportZip)を追加し、SPO の一覧はそれ1本にする
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 export const LIST_COMMENTS = 'QamComments';
 export const LIST_ANNOTATIONS = 'QamAnnotations';
@@ -98,7 +98,8 @@ export const rasAssetFields: FieldSpec[] = [
   { name: 'Ip', type: 'Text' },
   { name: 'Fqdn', type: 'Text' },
   // 'Status' は他のリストテンプレート由来の同名列と紛らわしいので避ける（Created で一度踏んだ）。
-  { name: 'AliveStatus', type: 'Text' }, // '' | 'host not alive'
+  { name: 'AliveStatus', type: 'Text' },
+  { name: 'AliveAt', type: 'Text' },    // 生死をいつ時点のスキャンで判定したか
   { name: 'TrackingMethod', type: 'Text' }, // IP / DNS / NETBIOS 等
   { name: 'RegisteredAt', type: 'Text' }, // 登録日（JST 表記）
   { name: 'LastScan', type: 'Text' },     // 最終検査日（JST 表記）
@@ -154,7 +155,7 @@ export const ALL_LISTS: {
   {
     title: LIST_RAS_ASSETS, fields: rasAssetFields, formFormatter: rasAssetFormFormatter,
     titleLabel: 'Host ID',
-    viewFields: ['Title', 'AliveStatus', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'RegisteredAt', 'LastScan'],
+    viewFields: ['Title', 'AliveStatus', 'AliveAt', 'BusinessCompany', 'ManagementCompany', 'Ip', 'Fqdn', 'RegisteredAt', 'LastScan'],
   },
   // TicketNumber は Title と同じ値、DedupKey は Title で代替。旧環境から消す。
   {
@@ -233,12 +234,12 @@ export const rowToLicense = (r: Record<string, unknown>): QamLicenseSample =>
 // ホストIDだけにすると、host list に居ない資産（host not alive）が一意に持てない。
 // Title は Host ID（一覧の見出し列）。host list に居ない資産はホストIDが無いので IP/FQDN で代用する。
 export const rasAssetToRow = (a: RasAsset): Record<string, unknown> =>
-  ({ Title: a.hostId || a.ip || a.fqdn, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn, AliveStatus: a.status,
+  ({ Title: a.hostId || a.ip || a.fqdn, HostId: a.hostId, SettenId: a.settenId, Ip: a.ip, Fqdn: a.fqdn, AliveStatus: a.status, AliveAt: a.aliveAt,
      RegisteredAt: a.registeredAt, LastScan: a.lastScan, TrackingMethod: a.trackingMethod, Note: a.note,
      BusinessCompany: a.businessCompany, ManagementCompany: a.managementCompany, DedupKey: a.key });
 export const rowToRasAsset = (r: Record<string, unknown>): RasAsset =>
   ({ key: str(r.DedupKey) || str(r.HostId), hostId: str(r.HostId), settenId: str(r.SettenId),
-     ip: str(r.Ip), fqdn: str(r.Fqdn), status: str(r.AliveStatus),
+     ip: str(r.Ip), fqdn: str(r.Fqdn), status: str(r.AliveStatus), aliveAt: str(r.AliveAt),
      registeredAt: str(r.RegisteredAt), lastScan: str(r.LastScan), trackingMethod: str(r.TrackingMethod), note: str(r.Note),
      businessCompany: str(r.BusinessCompany), managementCompany: str(r.ManagementCompany) });
 

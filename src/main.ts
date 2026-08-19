@@ -15,7 +15,7 @@ import { backend, setBackend, getConfig, setConfig, shutdownRelay, checkRelay, r
 import { createSpBackend, ensureLibrary } from './api/sp-file';
 import { createSpHttp } from './api/sp/http';
 import { createSpRepo } from './api/sp-repo';
-import { downloadEntitiesParallel, type TicketResult, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole, type QualysCreds, type InspectionDownload, qualysDateTimeUtc,
+import { fetchScanSummary, downloadEntitiesParallel, type TicketResult, downloadInspection, createSchedule, createAssetGroup, editAssetGroup, findAssetGroup, findDomain, writeDomain, addQualysUser, analyzeSubscriptionIps, diagnoseSubscriptionIps, type ScanType, type UserRole, type QualysCreds, type InspectionDownload, qualysDateTimeUtc,
   fetchSearchLists, updateSearchList, launchScanReport, reportStates, fetchReportPdf } from './qualys';
 import { computeInspection, quarterOf, DEFAULT_AG_PATTERN } from './inspection';
 import { renderInspectionView, inspectionEmpty } from './ui/views/inspection';
@@ -26,6 +26,7 @@ import { parseRegions, formatRegions, planProvision, buildAssetGroupParams, buil
 import { buildRegistry, issueLines, TRACKING_CONFIRM_NOTE, type AssetCheck, type AssetRegistry, type RegistrySource } from './precheck';
 import { parseQualysXml } from './ingest/parse';
 import { ticketQuery, resolveTicketMode, mergeTicketSets } from './tickets';
+import { parseScanSummaryXml, judgeAlive, SCAN_SUMMARY_DAYS, type ScanSummary } from './scan-summary';
 import { resolveBundleLocation, fetchLatestBuildId, reloadBundleInPlace } from './bundle';
 import {
   parseSearchListIds, parseCveList, parseDynamicLists, diffCves, cveUpdateFields, searchListSummary,
@@ -930,12 +931,15 @@ async function renderRas(count: HTMLElement, toolbar: HTMLElement, filterBar: HT
       // host list に居ない＝スキャンで応答が無い資産を見分けられるようにする。
       {
         id: 'status', label: 'ステータス', width: 130,
+        // ★いつ時点の判定かを添える。スキャンが飛んだ日は前回を据え置くので、これが
+        //   無いと「1日前の判定」と「2週間前の判定」が見分けられない。
         render: (a: RasAsset) => (a.status
-          ? `<span class="qam-tag qam-tag--${a.status === RAS_NOT_ALIVE ? 'deleted' : 'modified'}">${esc(a.status)}</span>`
+          ? `<span class="qam-tag qam-tag--${a.status === RAS_NOT_ALIVE ? 'deleted' : 'modified'}" title="${esc(a.aliveAt ? a.aliveAt + ' 時点の検査で判定' : '判定に使った検査がありません')}">${esc(a.status)}</span>`
           : ''),
         sortVal: (a: RasAsset) => a.status,
       },
       { id: 'hostId', label: 'ホストID', mono: true, width: 120, render: (a: RasAsset) => esc(a.hostId) },
+      { id: 'aliveAt', label: '生死の判定時点', mono: true, width: 160, render: (a: RasAsset) => esc(a.aliveAt ?? '') },
       { id: 'trackingMethod', label: 'Tracking Method', width: 130, render: (a: RasAsset) => esc(a.trackingMethod) },
       {
         id: 'businessCompany', label: '事業会社', width: 180,
@@ -1135,7 +1139,10 @@ async function syncRasFromLatest(tickets?: QamTicket[]): Promise<{ assets: numbe
   const registered = new Map((await repo.readRasAssets()).map((a) => [a.key, a]));
   // 基準日は host を取り込んだ日。AssetGroup の最終更新がこの日なら、IP を足した直後で
   // まだスキャンされていない可能性があるので not alive とは判定しない。
-  const derived = deriveRasAssets(hosts, groups, agSetten, registered, dateOfStamp(hStamp));
+  // ★生死はスキャン結果で決める（host list に載っている＝生きている、は成り立たない）。
+  const judged = judgeAlive(await loadScanSummaries());
+  const derived = deriveRasAssets(hosts, groups, agSetten, registered, dateOfStamp(hStamp), undefined, judged.byIp);
+  for (const sk of judged.skipped) recordOp('RAS生死の判定', `${sk.at || sk.ref}: 判定に使いませんでした（${sk.reason}）`);
   const assets = derived.assets;
   if (derived.droppedIps) recordOp('RAS資産の同期', `IPレンジが大きいため ${derived.droppedIps.toLocaleString()} 件の展開を打ち切りました`);
   if (derived.pendingSetten.length) recordOp('RAS資産の同期', `${RAS_NOT_SCANNED} として登録（AssetGroupの最終更新が基準日）: ${derived.pendingSetten.join(' / ')}`);
@@ -1362,6 +1369,24 @@ async function runDailyUpdate(
       }
       if (merged) await commitTickets(merged);
 
+      // ★スキャンごとの応答結果を取る。host list には「その回で応答したか」が無く、
+      //   一度でも検査できた資産は載り続けるので、これが無いと生死を判定できない。
+      //   取れなくても取込は続ける（前回の判定が据え置かれる）。
+      setProg('スキャン結果を取得中…', true);
+      try {
+        const since = qualysDateTimeUtc(new Date(Date.now() - SCAN_SUMMARY_DAYS * 86_400_000));
+        const sums = parseScanSummaryXml(await fetchScanSummary(creds, since));
+        if (sums.length) {
+          await repo.writeSharedJson(RAS_ALIVE_KEY, sums);
+          const bad = sums.filter((x) => x.unusable).length;
+          summary.notes.push(`スキャン結果 ${sums.length} 件を取得しました${bad ? `（うち ${bad} 件は判定に使いません）` : ''}`);
+        } else {
+          summary.notes.push(`直近 ${SCAN_SUMMARY_DAYS} 日のスキャンがありません。生死の判定は前回のままです`);
+        }
+      } catch (e) {
+        summary.notes.push(`スキャン結果を取得できませんでした: ${(e as Error).message}（生死の判定は前回のままです）`);
+      }
+
       lastTickets = merged?.tickets;
     }
 
@@ -1423,6 +1448,14 @@ const dailyOpDetail = (s: DailyRunSummary): string =>
 // CVE対応策一覧（Excel）に載っている CVE 番号。脆弱性種別の判定にも使うので、
 // 読んだ結果は保管先に置いて、Qualys を取り直さないときにも参照できるようにする。
 const RAS_CVE_KEY = 'ras:cve-list';
+// スキャンごとの応答結果（生死の判定に使う）。取り直さない回でも同じ判定が出るよう残す。
+const RAS_ALIVE_KEY = 'ras:scan-summary';
+
+/** 保存済みのスキャン結果。日次更新を回していなければ空になる。 */
+async function loadScanSummaries(): Promise<ScanSummary[]> {
+  const v = await repo.readSharedJson<ScanSummary[] | null>(RAS_ALIVE_KEY, null);
+  return Array.isArray(v) ? v : [];
+}
 
 /** 保存済みの CVE 一覧。日次更新を回していなければ空になる。 */
 async function loadCveSet(): Promise<Set<string>> {
@@ -1790,7 +1823,7 @@ async function syncSelected(kind: 'assets' | 'tickets', keys: string[]): Promise
     const gSnap = gStamp ? await readSnapshot(backend, 'group', gStamp) : null;
     const registered = new Map((await repo.readRasAssets()).map((a) => [a.key, a]));
     const derived = deriveRasAssets(hosts, Object.values(gSnap?.records ?? {}) as QamRecord[],
-      await buildAgSetten('host', ''), registered, dateOfStamp(hStamp));
+      await buildAgSetten('host', ''), registered, dateOfStamp(hStamp), undefined, judgeAlive(await loadScanSummaries()).byIp);
 
     if (kind === 'assets') {
       const picked = derived.assets.filter((a) => keys.includes(a.key));

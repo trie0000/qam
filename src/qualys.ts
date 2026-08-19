@@ -469,6 +469,21 @@ export async function updateSearchList(creds: QualysCreds, author: string, field
 // ──────────────────────────────────────────────────────────────────────────
 const REPORT_PATH = '/api/3.0/fo/report/';
 
+/**
+ * VM Scan Summary（スキャンごとの応答した/しなかったホスト）。
+ * ★host list では「その回のスキャンで応答したか」が分からないので、これを別に取る。
+ */
+export async function fetchScanSummary(creds: QualysCreds, since: string): Promise<string> {
+  const res = await fetchQualysBatch({
+    kinds: ['scansummary'], base: creds.base, user: creds.user, pass: creds.pass, secret: creds.secret,
+    proxy: creds.proxy, since: '', states: '', after: since,
+  });
+  if (!res.ok) throw new Error(res.error || 'スキャン結果の取得に失敗しました');
+  const item = res.items?.find((i) => i.kind === 'scansummary');
+  if (!item?.ok) throw new Error(item?.error || 'スキャン結果の取得に失敗しました');
+  return fetchBatchResult('scansummary');
+}
+
 export type ReportKind = 'scan' | 'ticket';
 
 /**

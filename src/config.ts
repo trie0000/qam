@@ -17,7 +17,7 @@ export const RELAY = relayOverride() || 'http://127.0.0.1:18090';
 // このアプリ本体が必要とする中継サーバの版。中継サーバ側の $QAM_RELAY_CONTRACT と揃える。
 // ★アプリ本体は更新ボタンで新しくなるが、中継サーバは起動し直すまで古いまま。
 //   古い中継サーバは新しい設定キーを知らないので、保存したつもりが黙って捨てられる。
-export const RELAY_CONTRACT_REQUIRED = 4;
+export const RELAY_CONTRACT_REQUIRED = 5;
 
 export const LS = {
   theme: 'qam.theme',

@@ -61,7 +61,8 @@ export interface RasAsset {
   settenId: string;
   ip: string;
   fqdn: string;
-  status: string;            // '' | RAS_NOT_ALIVE
+  status: string;            // '' | RAS_NOT_ALIVE | RAS_NOT_SCANNED
+  aliveAt: string;           // 生死をいつ時点のスキャンで判定したか（JST 表記）
   trackingMethod: string;    // IP / DNS / NETBIOS 等（Qualys の追跡方式）
   registeredAt: string;      // 登録日（host の FIRST_FOUND_DATE・JST 表記）
   lastScan: string;          // 最終検査日（LAST_VULN_SCAN_DATETIME・JST 表記）
@@ -178,6 +179,29 @@ export interface DeriveRasResult {
 // 際限なく増える（/16 で 65,536 件）ので歯止めを置く。
 export const AG_IP_EXPAND_LIMIT = 1024;
 
+/**
+ * スキャン結果から得た生死。IP → 判定。
+ * ★host list に居る＝生きている、は成り立たない（一度でも検査できれば載り続ける）。
+ *   その回のスキャンで応答したかはスキャン結果側にしか無い。
+ */
+export interface AliveByIp { get(ip: string): { verdict: 'alive' | 'dead' | 'unknown'; at: string } | undefined }
+
+/**
+ * スキャン結果と前回の状態から、この資産の状態を決める。
+ * ★unknown（材料が足りない・応答なしが規定回数に届かない）のときは **前回を据え置く**。
+ *   ここで空にすると、スキャンが1回こけただけで一覧の状態が一斉に変わる。
+ */
+function aliveStatus(
+  ip: string, alive: AliveByIp | undefined, prev: RasAsset | undefined, fallback: string,
+): { status: string; aliveAt: string } {
+  const v = ip ? alive?.get(ip) : undefined;
+  if (!v || v.verdict === 'unknown') {
+    // 判定できる材料が無い。前回の判定を保つ（初回だけは呼び出し側の既定に従う）。
+    return prev ? { status: prev.status, aliveAt: prev.aliveAt ?? '' } : { status: fallback, aliveAt: '' };
+  }
+  return { status: v.verdict === 'dead' ? RAS_NOT_ALIVE : '', aliveAt: toJst(v.at) };
+}
+
 export function deriveRasAssets(
   hosts: QamRecord[],
   groups: QamRecord[],
@@ -185,6 +209,7 @@ export function deriveRasAssets(
   registered: Map<string, RasAsset>,
   baseDate: string,
   limit = AG_IP_EXPAND_LIMIT,
+  alive?: AliveByIp,
 ): DeriveRasResult {
   const out: RasAsset[] = [];
   const seenIp = new Set<string>();
@@ -198,13 +223,17 @@ export function deriveRasAssets(
     if (ip) seenIp.add(ip);
     // AssetGroup 側は DNS 名で登録されていることがあるので、host list の名前も控える。
     for (const n of [h.scalar.FQDN, h.scalar.DNS]) if (n) seenFqdn.add(n.trim().toLowerCase());
+    // ★host list に居ることは生死の根拠にならない。スキャン結果が無いときだけ、
+    //   「載っている＝直近で検査できた」を既定として使う。
+    const av = aliveStatus(ip, alive, prev, '');
     out.push({
       key: h.key,
       hostId: h.key,
       settenId: setten.join(','),
       ip,
       fqdn: h.scalar.FQDN || h.scalar.DNS || '',
-      status: '', // host list に居る＝生きている
+      status: av.status,
+      aliveAt: av.aliveAt,
       trackingMethod: h.scalar.TRACKING_METHOD ?? '',
       registeredAt: toJst(h.info.FIRST_FOUND_DATE ?? ''),
       lastScan: toJst(h.info.LAST_VULN_SCAN_DATETIME ?? ''),
@@ -238,8 +267,9 @@ export function deriveRasAssets(
         continue;
       }
       const prev = registered.get(key);
+      const av = aliveStatus(ip, alive, prev, notScanned ? RAS_NOT_SCANNED : RAS_NOT_ALIVE);
       const row: RasAsset = {
-        key, hostId: '', settenId: sid, ip, fqdn: '', status: notScanned ? RAS_NOT_SCANNED : RAS_NOT_ALIVE,
+        key, hostId: '', settenId: sid, ip, fqdn: '', status: av.status, aliveAt: av.aliveAt,
         trackingMethod: '', registeredAt: '', lastScan: '', // host list に居ないので取れない
         businessCompany: prev?.businessCompany ?? '',
         managementCompany: prev?.managementCompany ?? '',
@@ -261,8 +291,10 @@ export function deriveRasAssets(
       }
       const key = rasKeyForDns(lower);
       const prev = registered.get(key);
+      // DNS 名だけの資産は IP が分からず、スキャン結果と突き合わせられない。
+      const av = aliveStatus('', alive, prev, notScanned ? RAS_NOT_SCANNED : RAS_NOT_ALIVE);
       const row: RasAsset = {
-        key, hostId: '', settenId: sid, ip: '', fqdn, status: notScanned ? RAS_NOT_SCANNED : RAS_NOT_ALIVE,
+        key, hostId: '', settenId: sid, ip: '', fqdn, status: av.status, aliveAt: av.aliveAt,
         trackingMethod: '', registeredAt: '', lastScan: '',
         businessCompany: prev?.businessCompany ?? '',
         managementCompany: prev?.managementCompany ?? '',

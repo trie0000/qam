@@ -284,7 +284,7 @@ describe('取込ロック（重複取込の抑止）', () => {
 
 describe('独自RAS のリスト同期', () => {
   const asset = (hostId: string, ip: string, company = '') =>
-    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: company, managementCompany: '' });
+    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '', aliveAt: '', trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: company, managementCompany: '' });
 
   it('資産は追加・更新・削除される', async () => {
     const lists = fakeLists();
@@ -383,7 +383,7 @@ describe('列名の安全性', () => {
 
 describe('資産で設定した会社をチケットへ写す', () => {
   const asset = (hostId: string, ip: string) =>
-    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '',
+    ({ key: hostId, hostId, settenId: 'R100', ip, fqdn: `${hostId}.example`, status: '', aliveAt: '',
        trackingMethod: '', registeredAt: '', lastScan: '', note: '', businessCompany: '', managementCompany: '' });
   const ticket = (n: string, hostId: string, ip: string) =>
     ({ number: n, state: 'OPEN', hostId, ip, fqdn: 'a', settenId: 'R100', businessCompany: '', managementCompany: '',
@@ -453,7 +453,7 @@ describe('列を足したときの取りこぼし', () => {
 
   it('★資産側も同じ', () => {
     const a: RasAsset = { key: 'k', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
-      businessCompany: '', managementCompany: '', status: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' };
+      businessCompany: '', managementCompany: '', status: '', aliveAt: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' };
     expect(Object.keys(rasAssetToRow(a)).filter((k) => !ASSET_FIELDS.includes(k))).toEqual([]);
   });
 
@@ -490,7 +490,7 @@ describe('列を足したときの取りこぼし', () => {
 describe('同期で増えた行のアクセス権', () => {
   const asset = (host: string, ip: string, company: string): RasAsset =>
     ({ key: `R100:${ip}`, hostId: host, ip, fqdn: 'a', settenId: 'R100', businessCompany: company,
-       managementCompany: '', status: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' });
+       managementCompany: '', status: '', aliveAt: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' });
   const tkt = (n: string, company: string): RasTicket =>
     ({ number: n, state: 'OPEN', hostId: 'h1', ip: '10.0.0.1', fqdn: 'a', settenId: 'R100',
        businessCompany: company, managementCompany: '', port: '', vulnKind: 'OS・ミドルウェア検査牽制分',
@@ -555,7 +555,7 @@ describe('同期で増えた行のアクセス権', () => {
 describe('事業会社を変えたときのアクセス権', () => {
   const asset = (host: string, ip: string, company: string): RasAsset =>
     ({ key: `R100:${ip}`, hostId: host, ip, fqdn: 'a', settenId: 'R100', businessCompany: company,
-       managementCompany: '', status: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' });
+       managementCompany: '', status: '', aliveAt: '', note: '', registeredAt: '', lastScan: '', trackingMethod: '' });
   const tkt = (n: string, host: string, ip: string, company: string): RasTicket =>
     ({ number: n, state: 'OPEN', hostId: host, ip, fqdn: 'a', settenId: 'R100',
        businessCompany: company, managementCompany: '', port: '', vulnKind: 'OS・ミドルウェア検査牽制分',

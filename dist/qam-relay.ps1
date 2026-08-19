@@ -84,7 +84,7 @@ $script:QamStop = $false
 # 中継サーバとアプリ本体の取り決めの版。★受け付ける設定キーや API を増やしたら上げる。
 # アプリ本体は右上の更新ボタンで新しくなるが、この中継サーバは起動し直すまで古いまま。
 # 番号が食い違うと、アプリが送った設定を古い中継サーバが黙って捨てる（実際に踏んだ）。
-$QAM_RELAY_CONTRACT = 4
+$QAM_RELAY_CONTRACT = 5
 
 # ─── HTTP ヘルパ ─────────────────────────────────────────────────────────────
 # 許可オリジン。既定は SharePoint サイト（QAM_SP_SITE_URL）のオリジンに限定する。
@@ -190,6 +190,13 @@ function Invoke-QualysFetch { param($Body)
             # 「2.0 → 3.0」ではなく 5.0 まで上げる（v5.0 のみ Active）。応答は SCHEDULE_SCAN_LIST_OUTPUT で同じ。
             'scansched' { $url = "$base/api/5.0/fo/schedule/scan/?action=list" }
             'mapsched'  { $url = "$base/msp/scheduled_scans.php?type=map" }
+            # スキャンごとの「応答した/しなかったホスト」。host list では分からないため。
+            # detections は使わないので落とす（件数集計だけで応答が大きくなる）。
+            # scan_input は対象 AssetGroup の特定に要るので残す。
+            'scansummary' {
+                $url = "$base/api/2.0/fo/scan/vm/summary/?action=list&output_format=xml&include_detections_summary=0"
+                if ($Body.after) { $url += "&scan_datetime_since=$([Uri]::EscapeDataString([string]$Body.after))" }
+            }
             # 動的検索リスト。v2.0 は EOS(2026-08)/EOL(2027-02) なので v3.0 を使う。
             # show_qids=0 … QID は使わないので落とす（数万件返ることがある）。
             'searchlist' {
