@@ -90,7 +90,7 @@ export const REPORT_MAX_RUNNING = 2;
 /** 上限に当たった分をやり直す回数（他の実行分が走り終わるのを待つため）。 */
 export const REPORT_MAX_RETRY = 5;
 /** レポート全体の打ち切り時間（分）。少しずつ流すぶん、一括より時間がかかる。 */
-export const REPORT_DEADLINE_MIN = 60;
+export const REPORT_DEADLINE_MIN = 120;
 
 /** 「同時実行数の上限に当たった」＝待てば通る失敗か。 */
 export function isReportBusy(message: string): boolean {
