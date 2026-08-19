@@ -70,3 +70,33 @@ describe('連携用リストのフォーム書式', () => {
     expect(withFormat).toEqual([LIST_RAS_ASSETS, LIST_RAS_TICKETS].sort());
   });
 });
+
+describe('チケットのレポート表示は ZIP 1本だけ', () => {
+  it('★カードに個別レポート（SCAN/Ticket × 日英）のリンクを出さない', () => {
+    // 4本並べても結局まとめて開くので、選ばせる意味がない。
+    const refs = referencedFields(rasTicketFormFormatter());
+    for (const f of ['ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn']) expect(refs).not.toContain(f);
+  });
+
+  it('ZIP と更新日は残す（どれをいつ配ればよいか分からなくなる）', () => {
+    const refs = referencedFields(rasTicketFormFormatter());
+    expect(refs).toContain('ReportZip');
+    expect(refs).toContain('ReportUpdatedAt');
+  });
+
+  it('ZIP が無い行ではレポート欄ごと出さない', () => {
+    const card = JSON.parse(rasTicketFormFormatter()).headerJSONFormatter.children[1];
+    expect(card.style.display).toBe("=if([$ReportZip] == '', 'none', 'flex')");
+  });
+
+  it('一覧のビューにも個別レポート列は出さない', () => {
+    const view = ALL_LISTS.find((l) => l.title === LIST_RAS_TICKETS)?.viewFields ?? [];
+    for (const f of ['ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn']) expect(view).not.toContain(f);
+    expect(view).toContain('ReportZip');
+  });
+
+  it('列自体は残す（ZIP を作るのに要る／ツール側の一覧から個別に開く）', () => {
+    const names = rasTicketFields.map((f) => f.name);
+    for (const f of ['ReportJa', 'ReportEn', 'TicketReportJa', 'TicketReportEn']) expect(names).toContain(f);
+  });
+});
